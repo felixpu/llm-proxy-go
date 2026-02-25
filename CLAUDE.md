@@ -65,6 +65,10 @@ tests/                          → 集中式测试（e2e/, integration/, testut
 
 所有环境变量以 `LLM_PROXY_` 为前缀（日志级别除外用 `LOG_LEVEL`）。
 
+关键配置链路：
+- **速率限制**：`LLM_PROXY_RATE_LIMIT_*` → `Config.RateLimit` → `middleware.RateLimitConfig` → `RateLimit()` 中间件
+- **日志轮转**：`LLM_PROXY_LOG_*` → `Config.LogRotation` → lumberjack（内置轮转，无需外部 logrotate）
+
 ## Database
 
 SQLite（modernc.org/sqlite 纯 Go 驱动），WAL 模式。迁移文件在 `internal/database/migrations/`，启动时自动执行。

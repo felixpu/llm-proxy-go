@@ -63,20 +63,38 @@ cp .env.example .env
 LLM_PROXY_HOST=0.0.0.0              # 监听地址
 LLM_PROXY_PORT=8000                 # 监听端口
 LLM_PROXY_WORKERS=1                 # Worker 数量
-LLM_PROXY_LOG_LEVEL=INFO            # 日志级别 (DEBUG/INFO/WARN/ERROR)
+LOG_LEVEL=INFO                      # 日志级别 (DEBUG/INFO/WARN/ERROR)
 ```
 
-**数据库配置**：
+**数据库与目录配置**：
 ```bash
-LLM_PROXY_DATABASE_PATH=data/llm-proxy.db  # SQLite 数据库路径
+LLM_PROXY_DB=data/llm-proxy.db     # SQLite 数据库路径
+LLM_PROXY_DATA_DIR=data             # 数据目录
+LLM_PROXY_LOGS_DIR=logs             # 日志目录
 ```
 
 **安全配置**：
 ```bash
 LLM_PROXY_SECRET_KEY=your-secret-key       # Session 密钥
 LLM_PROXY_SESSION_EXPIRE_HOURS=24          # Session 过期时间
+LLM_PROXY_COOKIE_SECURE=false              # Cookie Secure 标志（HTTPS 下设为 true）
 LLM_PROXY_DEFAULT_ADMIN_USERNAME=admin     # 默认管理员用户名
 LLM_PROXY_DEFAULT_ADMIN_PASSWORD=admin123  # 默认管理员密码
+```
+
+**速率限制配置**：
+```bash
+LLM_PROXY_RATE_LIMIT_ENABLED=true          # 启用速率限制
+LLM_PROXY_RATE_LIMIT_MAX_REQUESTS=100      # 每个时间窗口最大请求数
+LLM_PROXY_RATE_LIMIT_WINDOW_SECONDS=60     # 时间窗口（秒）
+```
+
+**日志轮转配置**：
+```bash
+LLM_PROXY_LOG_MAX_SIZE_MB=10               # 单个日志文件最大体积（MB）
+LLM_PROXY_LOG_MAX_BACKUPS=5                # 保留的旧日志文件数量
+LLM_PROXY_LOG_MAX_AGE_DAYS=30              # 旧日志最大保留天数
+LLM_PROXY_LOG_COMPRESS=true                # 是否 gzip 压缩旧日志
 ```
 
 **健康检查配置**：
@@ -472,12 +490,18 @@ rm -f data/llm-proxy.db-shm data/llm-proxy.db-wal
 
 **3. 日志文件过大**
 
-```bash
-# 清理日志
-> logs/llm-proxy.log
-> logs/llm-proxy-error.log
+日志轮转已内置（基于 lumberjack），默认配置：
+- 单文件最大 10MB，超出自动轮转
+- 保留最近 5 个旧日志文件
+- 旧日志保留 30 天
+- 自动 gzip 压缩
 
-# 或使用 logrotate
+可通过环境变量调整：
+```bash
+LLM_PROXY_LOG_MAX_SIZE_MB=10
+LLM_PROXY_LOG_MAX_BACKUPS=5
+LLM_PROXY_LOG_MAX_AGE_DAYS=30
+LLM_PROXY_LOG_COMPRESS=true
 ```
 
 **4. 静态资源 404**
