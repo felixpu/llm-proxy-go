@@ -160,6 +160,8 @@ func (h *ProxyHandler) handleNonStreamRequest(c *gin.Context, req *models.Anthro
 			meta.RoutingDecision = selection.RoutingDecision
 			meta.RuleMatchResult = selection.RuleMatchResult
 			h.attachContent(ctx, meta, req, nil)
+			// Save upstream error response body (always, regardless of LogFullContent)
+			meta.ResponseContent = string(ue.Body)
 			h.proxyService.SaveRequestLog(ctx, meta, user.UserID, user.APIKeyID)
 
 			c.Data(ue.StatusCode, "application/json", ue.Body)
@@ -181,6 +183,8 @@ func (h *ProxyHandler) handleNonStreamRequest(c *gin.Context, req *models.Anthro
 		meta.RoutingDecision = selection.RoutingDecision
 		meta.RuleMatchResult = selection.RuleMatchResult
 		h.attachContent(ctx, meta, req, nil)
+		// Save error message as response content
+		meta.ResponseContent = err.Error()
 		h.proxyService.SaveRequestLog(ctx, meta, user.UserID, user.APIKeyID)
 
 		c.JSON(http.StatusBadGateway, gin.H{
@@ -247,6 +251,8 @@ func (h *ProxyHandler) handleStreamRequest(c *gin.Context, req *models.Anthropic
 			meta.RoutingDecision = selection.RoutingDecision
 			meta.RuleMatchResult = selection.RuleMatchResult
 			h.attachStreamContent(ctx, meta, req)
+			// Save upstream error response body (always, regardless of LogFullContent)
+			meta.ResponseContent = string(ue.Body)
 			h.proxyService.SaveRequestLog(ctx, meta, user.UserID, user.APIKeyID)
 
 			c.Data(ue.StatusCode, "application/json", ue.Body)
@@ -269,6 +275,8 @@ func (h *ProxyHandler) handleStreamRequest(c *gin.Context, req *models.Anthropic
 		meta.RoutingDecision = selection.RoutingDecision
 		meta.RuleMatchResult = selection.RuleMatchResult
 		h.attachStreamContent(ctx, meta, req)
+		// Save error message as response content
+		meta.ResponseContent = err.Error()
 		h.proxyService.SaveRequestLog(ctx, meta, user.UserID, user.APIKeyID)
 
 		c.JSON(http.StatusBadGateway, gin.H{

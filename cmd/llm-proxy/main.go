@@ -88,6 +88,14 @@ func run() error {
 	}
 	defer db.Close()
 
+	// Initialize read-only database pool for query-heavy workloads (log stats, list).
+	// This prevents expensive analytical queries from starving proxy auth/write operations.
+	readDB, err := database.NewReadOnly(cfg.Database.Path)
+	if err != nil {
+		return fmt.Errorf("init read-only database: %w", err)
+	}
+	defer readDB.Close()
+
 	// Run migrations.
 	if err := database.RunMigrations(db); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
@@ -98,7 +106,7 @@ func run() error {
 	providerRepo := repository.NewProviderRepository(db)
 	keyRepo := repository.NewAPIKeyRepository(db)
 	userRepo := repository.NewUserRepository(db)
-	logRepo := repository.NewRequestLogRepositoryImpl(db, logger)
+	logRepo := repository.NewRequestLogRepositoryImpl(db, logger, readDB)
 	embeddingRepo := repository.NewEmbeddingModelRepository(db, logger)
 	routingModelRepo := repository.NewRoutingModelRepository(db, logger)
 	routingConfigRepo := repository.NewRoutingConfigRepository(db, logger)
@@ -186,8 +194,11 @@ func run() error {
 	// Start server in goroutine.
 	addr := fmt.Sprintf("%s:%d", cfg.Proxy.Host, cfg.Proxy.Port)
 	httpServer := &http.Server{
-		Addr:    addr,
-		Handler: server,
+		Addr:         addr,
+		Handler:      server,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 300 * time.Second, // streaming responses need a long write timeout
+		IdleTimeout:  120 * time.Second,
 	}
 
 	go func() {
@@ -241,15 +252,41 @@ func newLogger(level string, logDir string, rotation config.LogRotationConfig) (
 		Compress:   rotation.Compress,
 	}
 
-	encoderCfg := zap.NewProductionEncoderConfig()
-	core := zapcore.NewCore(
-		zapcore.NewJSONEncoder(encoderCfg),
+	// File core: JSON encoder for structured log parsing
+	fileEncoderCfg := zap.NewProductionEncoderConfig()
+	fileEncoderCfg.TimeKey = "ts"
+	fileEncoderCfg.EncodeTime = zapcore.ISO8601TimeEncoder
+	fileCore := zapcore.NewCore(
+		zapcore.NewJSONEncoder(fileEncoderCfg),
 		zapcore.AddSync(lj),
 		zapLevel,
 	)
 
+	// Console core: human-readable output to stdout/stderr
+	consoleEncoderCfg := zap.NewDevelopmentEncoderConfig()
+	consoleEncoderCfg.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	consoleEncoderCfg.EncodeTime = zapcore.TimeEncoderOfLayout("15:04:05")
+	consoleEncoder := zapcore.NewConsoleEncoder(consoleEncoderCfg)
+
+	// stdout for DEBUG/INFO, stderr for WARN/ERROR+
+	stdoutCore := zapcore.NewCore(
+		consoleEncoder,
+		zapcore.Lock(os.Stdout),
+		zap.LevelEnablerFunc(func(l zapcore.Level) bool {
+			return l >= zapLevel && l < zapcore.WarnLevel
+		}),
+	)
+	stderrCore := zapcore.NewCore(
+		consoleEncoder,
+		zapcore.Lock(os.Stderr),
+		zap.LevelEnablerFunc(func(l zapcore.Level) bool {
+			return l >= zapLevel && l >= zapcore.WarnLevel
+		}),
+	)
+
+	core := zapcore.NewTee(fileCore, stdoutCore, stderrCore)
+
 	return zap.New(core,
-		zap.ErrorOutput(zapcore.Lock(os.Stderr)),
 		zap.AddCaller(),
 		zap.AddStacktrace(zap.ErrorLevel),
 	), nil

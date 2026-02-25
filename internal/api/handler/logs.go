@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -9,6 +10,13 @@ import (
 	"github.com/user/llm-proxy-go/internal/api/middleware"
 	"github.com/user/llm-proxy-go/internal/repository"
 	"go.uber.org/zap"
+)
+
+const (
+	// logQueryTimeout caps the maximum execution time for log read queries.
+	logQueryTimeout = 10 * time.Second
+	// maxLogLimit caps the maximum number of log entries per page.
+	maxLogLimit = 500
 )
 
 // LogsHandler handles request log endpoints.
@@ -44,6 +52,9 @@ func (h *LogsHandler) GetRequestLogs(c *gin.Context) {
 	// Parse query parameters
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	if limit > maxLogLimit {
+		limit = maxLogLimit
+	}
 
 	model := optionalStringParam(c, "model")
 	endpoint := optionalStringParam(c, "endpoint")
@@ -66,9 +77,12 @@ func (h *LogsHandler) GetRequestLogs(c *gin.Context) {
 		success = &b
 	}
 
-	// Query logs
+	// Query logs with timeout to prevent slow queries from blocking the connection pool.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), logQueryTimeout)
+	defer cancel()
+
 	logs, total, err := h.logRepo.List(
-		c.Request.Context(),
+		ctx,
 		limit, offset,
 		nil, // userID
 		model, endpoint,
@@ -163,9 +177,12 @@ func (h *LogsHandler) GetLogStats(c *gin.Context) {
 		success = &b
 	}
 
-	// Get statistics
+	// Get statistics with timeout to prevent slow aggregation queries from blocking the pool.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), logQueryTimeout)
+	defer cancel()
+
 	stats, err := h.logRepo.GetStatistics(
-		c.Request.Context(),
+		ctx,
 		startTime, endTime,
 		nil, // userID
 		model, endpoint,

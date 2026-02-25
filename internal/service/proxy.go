@@ -276,7 +276,8 @@ func calculateCostFromTokens(model *models.Model, inputTokens, outputTokens int)
 	return inputCost + outputCost
 }
 
-// SaveRequestLog persists a request log entry to the database.
+// SaveRequestLog persists a request log entry to the database asynchronously.
+// Uses a detached context because the request context may already be cancelled.
 func (s *ProxyService) SaveRequestLog(ctx context.Context, meta *ProxyMetadata, userID int64, apiKeyID *int64) {
 	if s.logRepo == nil || meta == nil {
 		return
@@ -322,11 +323,15 @@ func (s *ProxyService) SaveRequestLog(ctx context.Context, meta *ProxyMetadata, 
 		entry.MessagePreview = truncateStr(meta.RequestContent, 200)
 	}
 
-	if _, err := s.logRepo.Insert(ctx, entry); err != nil {
-		s.logger.Error("failed to save request log",
-			zap.String("request_id", meta.RequestID),
-			zap.Error(err))
-	}
+	go func() {
+		saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := s.logRepo.Insert(saveCtx, entry); err != nil {
+			s.logger.Error("failed to save request log",
+				zap.String("request_id", meta.RequestID),
+				zap.Error(err))
+		}
+	}()
 }
 
 // routingMethodFromDecision derives the routing_method string from a RoutingDecision.

@@ -23,10 +23,15 @@ type LogService struct {
 	flushInterval time.Duration
 }
 
-// NewLogService creates a new LogService
-func NewLogService(db *sql.DB, logger *zap.Logger) *LogService {
+// NewLogService creates a new LogService.
+// If readDB is provided, it is used for read-heavy queries (List, GetStatistics, Count).
+func NewLogService(db *sql.DB, logger *zap.Logger, readDB ...*sql.DB) *LogService {
+	var rdb *sql.DB
+	if len(readDB) > 0 {
+		rdb = readDB[0]
+	}
 	ls := &LogService{
-		repo:          repository.NewRequestLogRepositoryImpl(db, logger),
+		repo:          repository.NewRequestLogRepositoryImpl(db, logger, rdb),
 		logger:        logger,
 		logChan:       make(chan *models.RequestLogEntry, 1000),
 		done:          make(chan struct{}),

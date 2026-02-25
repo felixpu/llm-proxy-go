@@ -23,14 +23,35 @@ func New(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Configure connection pool
-	conn.SetMaxOpenConns(25)
+	// Configure connection pool — leave headroom for the read-only pool.
+	conn.SetMaxOpenConns(15)
 	conn.SetMaxIdleConns(5)
 
 	// Verify connection
 	if err := conn.Ping(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	return conn, nil
+}
+
+// NewReadOnly creates a read-only database connection for query-heavy workloads.
+// Using a separate pool prevents expensive analytical queries from starving
+// latency-sensitive write operations (e.g. proxy auth, log inserts).
+func NewReadOnly(path string) (*sql.DB, error) {
+	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON&mode=ro", path)
+	conn, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open read-only database: %w", err)
+	}
+
+	conn.SetMaxOpenConns(10)
+	conn.SetMaxIdleConns(3)
+
+	if err := conn.Ping(); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to ping read-only database: %w", err)
 	}
 
 	return conn, nil

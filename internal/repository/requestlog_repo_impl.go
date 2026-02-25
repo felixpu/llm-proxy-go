@@ -14,16 +14,23 @@ import (
 
 // RequestLogRepositoryImpl implements request log data access.
 type RequestLogRepositoryImpl struct {
-	db     *sql.DB
+	db     *sql.DB // write operations
+	readDB *sql.DB // read operations (may be a separate read-only pool)
 	logger *zap.Logger
 }
 
 // NewRequestLogRepositoryImpl creates a new RequestLogRepositoryImpl.
-func NewRequestLogRepositoryImpl(db *sql.DB, logger *zap.Logger) *RequestLogRepositoryImpl {
-	return &RequestLogRepositoryImpl{
+// If readDB is nil, db is used for both reads and writes.
+func NewRequestLogRepositoryImpl(db *sql.DB, logger *zap.Logger, readDB ...*sql.DB) *RequestLogRepositoryImpl {
+	r := &RequestLogRepositoryImpl{
 		db:     db,
+		readDB: db,
 		logger: logger,
 	}
+	if len(readDB) > 0 && readDB[0] != nil {
+		r.readDB = readDB[0]
+	}
+	return r
 }
 
 // Insert inserts a new request log entry.
@@ -70,7 +77,7 @@ func (r *RequestLogRepositoryImpl) List(
 	// Count total
 	var total int64
 	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM request_logs WHERE %s`, whereSQL)
-	if err := r.db.QueryRowContext(ctx, countQuery, params...).Scan(&total); err != nil {
+	if err := r.readDB.QueryRowContext(ctx, countQuery, params...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("failed to count logs: %w", err)
 	}
 
@@ -83,7 +90,7 @@ func (r *RequestLogRepositoryImpl) List(
 			request_logs.task_type, request_logs.input_tokens, request_logs.output_tokens,
 			request_logs.latency_ms, request_logs.cost, request_logs.status_code,
 			request_logs.success, request_logs.stream, request_logs.created_at,
-			request_logs.message_preview, request_logs.request_content, request_logs.response_content,
+			'' as message_preview, '' as request_content, '' as response_content,
 			request_logs.routing_method, request_logs.routing_reason,
 			request_logs.matched_rule_id, request_logs.matched_rule_name, request_logs.all_matches,
 			request_logs.is_inaccurate
@@ -95,7 +102,7 @@ func (r *RequestLogRepositoryImpl) List(
 	`, whereSQL)
 
 	params = append(params, limit, offset)
-	rows, err := r.db.QueryContext(ctx, query, params...)
+	rows, err := r.readDB.QueryContext(ctx, query, params...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query logs: %w", err)
 	}
@@ -140,7 +147,7 @@ func (r *RequestLogRepositoryImpl) GetStatistics(
 	`, whereSQL)
 
 	var stats LogStatistics
-	err := r.db.QueryRowContext(ctx, overallQuery, params...).Scan(
+	err := r.readDB.QueryRowContext(ctx, overallQuery, params...).Scan(
 		&stats.TotalRequests, &stats.TotalCost, &stats.AvgLatency,
 		&stats.SuccessRate, &stats.TotalInputTokens, &stats.TotalOutputTokens,
 	)
@@ -168,7 +175,7 @@ func (r *RequestLogRepositoryImpl) GetStatistics(
 		ORDER BY requests DESC
 	`, whereSQL)
 
-	modelRows, err := r.db.QueryContext(ctx, modelQuery, params...)
+	modelRows, err := r.readDB.QueryContext(ctx, modelQuery, params...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get model statistics: %w", err)
 	}
@@ -201,7 +208,7 @@ func (r *RequestLogRepositoryImpl) GetStatistics(
 		ORDER BY requests DESC
 	`, whereSQL)
 
-	endpointRows, err := r.db.QueryContext(ctx, endpointQuery, params...)
+	endpointRows, err := r.readDB.QueryContext(ctx, endpointQuery, params...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get endpoint statistics: %w", err)
 	}
@@ -231,7 +238,7 @@ func (r *RequestLogRepositoryImpl) Count(
 
 	var count int64
 	query := fmt.Sprintf(`SELECT COUNT(*) FROM request_logs WHERE %s`, whereSQL)
-	if err := r.db.QueryRowContext(ctx, query, params...).Scan(&count); err != nil {
+	if err := r.readDB.QueryRowContext(ctx, query, params...).Scan(&count); err != nil {
 		return 0, fmt.Errorf("failed to count logs: %w", err)
 	}
 	return count, nil
@@ -287,11 +294,11 @@ func (r *RequestLogRepositoryImpl) buildWhere(
 		params = append(params, *endpointName)
 	}
 	if startTime != nil {
-		conditions = append(conditions, "datetime(request_logs.created_at) >= datetime(?)")
+		conditions = append(conditions, "request_logs.created_at >= ?")
 		params = append(params, startTime.UTC().Format("2006-01-02 15:04:05"))
 	}
 	if endTime != nil {
-		conditions = append(conditions, "datetime(request_logs.created_at) <= datetime(?)")
+		conditions = append(conditions, "request_logs.created_at <= ?")
 		params = append(params, endTime.UTC().Format("2006-01-02 15:04:05"))
 	}
 	if success != nil {
@@ -345,7 +352,7 @@ func (r *RequestLogRepositoryImpl) scanLog(rows *sql.Rows) (*models.RequestLog, 
 	}
 	log.Success = success == 1
 	log.Stream = stream == 1
-	log.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+	log.CreatedAt = parseFlexibleTime(createdAt)
 
 	// Populate new fields
 	if messagePreview.Valid {
@@ -399,7 +406,7 @@ func (r *RequestLogRepositoryImpl) GetByID(ctx context.Context, id int64) (*mode
 		LEFT JOIN users u ON request_logs.user_id = u.id
 		WHERE request_logs.id = ?
 	`
-	rows, err := r.db.QueryContext(ctx, query, id)
+	rows, err := r.readDB.QueryContext(ctx, query, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query log by id: %w", err)
 	}
@@ -426,6 +433,24 @@ func (r *RequestLogRepositoryImpl) MarkInaccurate(ctx context.Context, id int64,
 	return nil
 }
 
+
+// parseFlexibleTime tries multiple time formats commonly used by SQLite.
+func parseFlexibleTime(s string) time.Time {
+	formats := []string{
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05Z",
+		"2006-01-02T15:04:05",
+		"2006-01-02 15:04:05-07:00",
+		"2006-01-02T15:04:05-07:00",
+		time.RFC3339,
+	}
+	for _, f := range formats {
+		if t, err := time.Parse(f, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
 
 // LogStatistics contains aggregated log statistics.
 type LogStatistics struct {
