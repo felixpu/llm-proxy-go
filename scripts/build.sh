@@ -1,6 +1,5 @@
 #!/bin/bash
 # LLM Proxy Go - 发布包打包脚本（纯打包，不编译）
-# 用法: ./scripts/build.sh --binary <path> --os <os> --arch <arch> [--version VERSION]
 # 注意: 编译由 Makefile 负责，本脚本仅负责打包
 set -e
 
@@ -16,6 +15,39 @@ BINARY_PATH=""
 TARGET_OS=""
 TARGET_ARCH=""
 
+usage() {
+    cat <<EOF
+用法: $0 --binary <path> --os <os> --arch <arch> [选项]
+
+将已编译的二进制文件打包为发布压缩包（tar.gz / zip）。
+本脚本仅负责打包，编译请使用 make 命令。
+
+必需参数:
+  --binary <path>       已编译的二进制文件路径
+  --os <os>             目标操作系统 (linux, darwin, windows)
+  --arch <arch>         目标架构 (amd64, arm64)
+
+可选参数:
+  --version <version>   版本号（默认: git describe 自动生成）
+  --clean               清理 dist/ 目录并退出
+  -h, --help            显示此帮助信息
+
+推荐用法（通过 Makefile 调用）:
+  make release                  当前平台编译+打包
+  make release-linux-amd64      指定平台编译+打包
+  make release-all              所有平台编译+打包
+
+直接调用示例:
+  make build-linux-amd64
+  $0 --binary dist/llm-proxy-linux-amd64 --os linux --arch amd64
+
+打包产物:
+  dist/<app>-<version>-<os>-<arch>/       发布目录
+  dist/<app>-<version>-<os>-<arch>.tar.gz 压缩包 (Linux/macOS)
+  dist/<app>-<version>-<os>-<arch>.zip    压缩包 (Windows)
+EOF
+}
+
 # 解析参数
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -24,7 +56,8 @@ while [[ $# -gt 0 ]]; do
         --os)      TARGET_OS="$2"; shift 2 ;;
         --arch)    TARGET_ARCH="$2"; shift 2 ;;
         --clean)   rm -rf "$DIST_DIR"; echo "已清理 dist/"; exit 0 ;;
-        *)         echo "未知参数: $1"; echo "用法: $0 --binary <path> --os <os> --arch <arch> [--version VERSION]"; exit 1 ;;
+        -h|--help) usage; exit 0 ;;
+        *)         echo "错误: 未知参数: $1"; echo ""; usage; exit 1 ;;
     esac
 done
 
@@ -32,10 +65,7 @@ done
 if [ -z "$BINARY_PATH" ]; then
     echo "错误: 缺少 --binary 参数"
     echo ""
-    echo "本脚本仅负责打包，编译请使用 make 命令："
-    echo "  make release              # 当前平台编译+打包"
-    echo "  make release-linux-amd64  # 指定平台编译+打包"
-    echo "  make release-all          # 所有平台编译+打包"
+    usage
     exit 1
 fi
 
