@@ -66,17 +66,16 @@ detect_mode() {
 # 编译项目
 build() {
     echo -e "${GREEN}正在编译 LLM Proxy...${NC}"
-
-    # 检查 Go 环境
     check_go_env || exit 1
 
-    # 下载依赖
-    echo -e "${YELLOW}下载依赖...${NC}"
-    go mod download
-
-    # 编译
-    echo -e "${YELLOW}编译项目...${NC}"
-    go build -o "$BINARY_NAME" ./cmd/llm-proxy
+    if [ -f "$SCRIPT_DIR/Makefile" ]; then
+        # 开发环境：通过 make 编译，确保 LDFLAGS 一致
+        make -C "$SCRIPT_DIR" build
+    else
+        # 发布包环境：直接编译（无版本信息注入）
+        echo -e "${YELLOW}提示: 未找到 Makefile，版本信息将为默认值${NC}"
+        go build -o "$BINARY_NAME" ./cmd/llm-proxy
+    fi
 
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✓ 编译成功${NC}"
