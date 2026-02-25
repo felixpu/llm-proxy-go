@@ -24,13 +24,40 @@ import (
 )
 
 func main() {
-	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
-		fmt.Println(version.Info())
-		os.Exit(0)
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "--version", "-v":
+			fmt.Println(version.Info())
+			os.Exit(0)
+		case "--init":
+			if err := runInit(); err != nil {
+				log.Fatalf("init: %v", err)
+			}
+			os.Exit(0)
+		case "--help", "-h":
+			printUsage()
+			os.Exit(0)
+		}
 	}
 	if err := run(); err != nil {
 		log.Fatalf("fatal: %v", err)
 	}
+}
+
+func printUsage() {
+	fmt.Printf("LLM Proxy Go - %s\n\n", version.Short())
+	fmt.Println("Usage: llm-proxy [OPTIONS]")
+	fmt.Println()
+	fmt.Println("Options:")
+	fmt.Println("  --init         Generate .env.example configuration template")
+	fmt.Println("  --version, -v  Show version information")
+	fmt.Println("  --help, -h     Show this help message")
+	fmt.Println()
+	fmt.Println("Without options, starts the LLM proxy server.")
+	fmt.Println()
+	fmt.Println("Configuration:")
+	fmt.Println("  Use environment variables or .env file (see .env.example)")
+	fmt.Println("  Run 'llm-proxy --init' to generate configuration template")
 }
 
 func run() error {

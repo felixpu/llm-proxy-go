@@ -3,7 +3,7 @@ logs/
 *.log
 
 # Binary
-llm-proxy
+/llm-proxy
 *.exe
 
 # Build artifacts
