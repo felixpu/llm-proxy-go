@@ -196,9 +196,11 @@ func buildMatchReason(rule *models.RoutingRule, hits []*models.RuleHit) string {
 }
 
 // builtinRules defines the default routing rules.
+// IDs use negative values to avoid collision with DB auto-increment IDs.
 var builtinRules = []models.RoutingRule{
 	// Complex rules
 	{
+		ID:        -1,
 		Name:      "architecture_keywords",
 		Keywords:  []string{"架构", "设计", "重构", "优化", "规划", "创建项目", "微服务"},
 		TaskType:  "complex",
@@ -207,6 +209,7 @@ var builtinRules = []models.RoutingRule{
 		Enabled:   true,
 	},
 	{
+		ID:        -2,
 		Name:      "long_message",
 		Condition: "len(message) > 3000",
 		TaskType:  "complex",
@@ -215,6 +218,7 @@ var builtinRules = []models.RoutingRule{
 		Enabled:   true,
 	},
 	{
+		ID:        -3,
 		Name:      "multi_file_operation",
 		Pattern:   `(?i)(多个文件|批量|所有.*文件|整个.*目录)`,
 		TaskType:  "complex",
@@ -225,6 +229,7 @@ var builtinRules = []models.RoutingRule{
 
 	// Simple rules
 	{
+		ID:        -4,
 		Name:      "simple_operations",
 		Keywords:  []string{"列出", "查看", "翻译", "转换", "格式化", "显示"},
 		Condition: `len(message) < 200 AND NOT contains(message, "分析")`,
@@ -234,6 +239,7 @@ var builtinRules = []models.RoutingRule{
 		Enabled:   true,
 	},
 	{
+		ID:        -5,
 		Name:      "file_listing",
 		Pattern:   `^(ls|列出|显示|查看).*(文件|目录|文件夹)`,
 		TaskType:  "simple",
@@ -244,6 +250,7 @@ var builtinRules = []models.RoutingRule{
 
 	// Default rules
 	{
+		ID:        -6,
 		Name:      "code_with_analysis",
 		Condition: `has_code_block(message) AND (contains(message, "分析") OR contains(message, "解释"))`,
 		TaskType:  "default",
