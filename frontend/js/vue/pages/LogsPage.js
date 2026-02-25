@@ -574,6 +574,11 @@ window.VuePages = window.VuePages || {};
         }
       });
 
+      // Format JSON with syntax highlighting for v-html display
+      function formatJsonHighlight(str) {
+        return VueUtils.highlightJson(VueUtils.formatJsonPretty(str));
+      }
+
       // 返回所有需要暴露的变量和方法
       return {
         // 状态
@@ -624,6 +629,7 @@ window.VuePages = window.VuePages || {};
         showLogDetail: showLogDetailFn,
         toggleInaccurate: toggleInaccurate,
         confirmDeleteLogs: confirmDeleteLogs,
+        formatJsonHighlight: formatJsonHighlight,
       };
 
       // __CONTINUE_TEMPLATE__
@@ -945,12 +951,17 @@ window.VuePages = window.VuePages || {};
                     <!-- 消息预览 -->\
                     <div class="detail-section" v-show="logDetail.message_preview">\
                         <h4>消息预览</h4>\
-                        <pre class="message-preview">{{ logDetail.message_preview }}</pre>\
+                        <pre class="message-preview json-viewer" v-html="formatJsonHighlight(logDetail.message_preview)"></pre>\
                     </div>\
                     <!-- 完整请求内容 -->\
                     <div class="detail-section" v-show="logDetail.request_content">\
                         <h4>完整请求内容</h4>\
-                        <pre class="request-content">{{ logDetail.request_content }}</pre>\
+                        <pre class="request-content json-viewer" v-html="formatJsonHighlight(logDetail.request_content)"></pre>\
+                    </div>\
+                    <!-- 响应内容 / 错误原因 -->\
+                    <div class="detail-section" v-show="logDetail.response_content">\
+                        <h4>{{ logDetail.success ? \'响应内容\' : \'错误原因\' }}</h4>\
+                        <pre class="request-content json-viewer" v-html="formatJsonHighlight(logDetail.response_content)"></pre>\
                     </div>\
                 </div>\
             </div>\

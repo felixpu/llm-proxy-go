@@ -443,6 +443,51 @@
     margin: 0;
 }
 
+/* ========================================
+   JSON Syntax Highlighting (light theme)
+   ======================================== */
+
+.json-viewer .json-key {
+    color: #881391;
+}
+
+.json-viewer .json-string {
+    color: #1a7f37;
+}
+
+.json-viewer .json-number {
+    color: #0550ae;
+}
+
+.json-viewer .json-bool {
+    color: #cf222e;
+}
+
+.json-viewer .json-null {
+    color: #6e7781;
+}
+
+/* JSON Syntax Highlighting (dark theme) */
+[data-theme="dark"] .json-viewer .json-key {
+    color: #d2a8ff;
+}
+
+[data-theme="dark"] .json-viewer .json-string {
+    color: #7ee787;
+}
+
+[data-theme="dark"] .json-viewer .json-number {
+    color: #79c0ff;
+}
+
+[data-theme="dark"] .json-viewer .json-bool {
+    color: #ff7b72;
+}
+
+[data-theme="dark"] .json-viewer .json-null {
+    color: #8b949e;
+}
+
 /* 按钮样式补充 */
 .btn-ghost {
     background: transparent;
