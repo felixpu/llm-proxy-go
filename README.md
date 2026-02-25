@@ -17,37 +17,33 @@
 
 ### 前置要求
 
-- Go 1.21+
-- SQLite 3
+- Go 1.24+
+- Make
 
 ### 安装
 
 ```bash
 # 克隆仓库
 git clone <repository-url>
-cd llm-proxy/go
-
-# 安装依赖
-go mod download
+cd llm-proxy-go
 
 # 编译
-go build -o llm-proxy cmd/llm-proxy/main.go
+make build
 ```
 
 ### 运行
 
 ```bash
-# 使用默认配置运行
-./llm-proxy
+# 初始化配置并启动（推荐）
+./scripts/start.sh
 
-# 或使用 go run
-go run cmd/llm-proxy/main.go
+# 或前台运行
+./scripts/start.sh -f
 
-# 使用 .env 文件配置
-cp ../.env.example ../.env
+# 或直接运行编译后的二进制
+cp .env.example .env
 # 编辑 .env 文件
-source ../.env
-go run cmd/llm-proxy/main.go
+./llm-proxy
 ```
 
 服务将在 `http://localhost:8000` 启动（可通过 `LLM_PROXY_PORT` 环境变量修改）。
@@ -97,60 +93,50 @@ LLM_PROXY_LOAD_BALANCE_STRATEGY=weighted   # 策略：round_robin/weighted/least
 
 ### 配置文件
 
-完整的配置示例请参考 `../.env.example`。
+完整的配置示例请参考 `.env.example`。
 
 ## 项目结构
 
 ```
-go/
-├── cmd/
-│   └── llm-proxy/
-│       └── main.go              # 主入口
+├── cmd/llm-proxy/               # 主入口
 ├── internal/
 │   ├── api/
 │   │   ├── handler/             # HTTP 处理器
-│   │   │   ├── templates/       # Go html/template 模板
-│   │   │   ├── static/          # 静态资源（CSS/JS）
-│   │   │   ├── admin_*.go       # 管理后台 API
-│   │   │   ├── apikey.go        # API Key 管理
-│   │   │   ├── logs.go          # 日志查询
-│   │   │   ├── proxy.go         # 代理处理
-│   │   │   ├── ui.go            # Web UI
-│   │   │   └── user.go          # 用户管理
-│   │   ├── middleware/          # 中间件
-│   │   │   ├── auth.go          # 认证中间件
-│   │   │   ├── csrf.go          # CSRF 保护
-│   │   │   ├── middleware.go    # 日志中间件
-│   │   │   └── rate_limit.go    # 速率限制
-│   │   └── server.go            # HTTP 服务器
+│   │   └── middleware/          # 中间件（认证、CSRF、限流）
 │   ├── config/                  # 配置管理
-│   │   ├── config.go
-│   │   └── loader.go
-│   ├── database/                # 数据库
-│   │   ├── db.go                # 连接管理
-│   │   └── migrations.go        # 迁移管理
+│   ├── database/                # 数据库连接与迁移
+│   │   ├── migrations/          # SQL 迁移文件
+│   │   └── sqlc/                # sqlc 生成代码
 │   ├── models/                  # 数据模型
-│   ├── repository/              # 数据访问层（16 个 Repository）
+│   ├── repository/              # 数据访问层
 │   ├── service/                 # 业务逻辑层
-│   │   ├── auth.go              # 认证服务
-│   │   ├── cache_service.go     # 三层缓存
-│   │   ├── embedding_service.go # 嵌入向量服务
-│   │   ├── health_checker.go    # 健康检查
-│   │   ├── llm_router.go        # 智能路由
-│   │   ├── load_balancer.go     # 负载均衡
-│   │   ├── log_service.go       # 日志服务
-│   │   ├── proxy.go             # 代理服务（含 SSE 流式）
-│   │   └── worker_coordinator.go # Worker 协调
-│   └── pkg/                     # 工具包
-│       ├── contextutil/         # Context 工具
-│       ├── httputil/            # HTTP 工具
-│       └── paths/               # 路径管理
+│   ├── version/                 # 版本信息
+│   ├── pkg/                     # 内部工具包
+│   ├── test/                    # 测试辅助
+│   └── testutil/                # 测试工具
+├── frontend/                    # 前端资源（go:embed 嵌入）
+│   ├── css/                     # 样式文件
+│   ├── js/vue/                  # Vue 组件、页面、Store
+│   └── vendor/                  # 前端第三方库
+├── scripts/
+│   ├── build.sh                 # 发布包打包脚本
+│   ├── start.sh                 # 启动/管理脚本（Linux/macOS）
+│   └── start.bat                # 启动脚本（Windows）
 ├── sql/
-│   └── migrations/
-│       └── 001_initial_schema.sql  # 初始数据库 schema
+│   ├── migrations/              # 数据库 schema 迁移
+│   └── queries/                 # sqlc 查询定义
+├── tests/
+│   ├── e2e/                     # 端到端测试
+│   ├── integration/             # 集成测试
+│   └── testutil/                # 测试工具
+├── configs/                     # 配置文件
+├── bin/                         # 辅助工具
+├── Makefile                     # 构建入口（LDFLAGS 唯一定义处）
+├── Dockerfile                   # Docker 镜像构建
+├── docker-compose.yml           # Docker Compose 编排
+├── .env.example                 # 环境变量模板
 ├── go.mod
-├── go.sum
-└── README.md                    # 本文件
+└── go.sum
 ```
 
 ## 开发工作流
@@ -162,7 +148,7 @@ go/
 go mod download
 
 # 检查 Go 版本
-go version  # 需要 1.21+
+go version  # 需要 1.24+
 ```
 
 ### 2. 开发前检查
@@ -175,21 +161,20 @@ go fmt ./...
 go vet ./...
 
 # 运行测试
-go test ./...
+make test
 
 # 编译检查
-go build ./...
+make build
 ```
 
 ### 3. 运行开发服务器
 
 ```bash
-# 使用 .env 配置
-source ../.env
-go run cmd/llm-proxy/main.go
+# 使用启动脚本（自动初始化 .env）
+./scripts/start.sh -f
 
 # 或使用 DEBUG 日志级别
-LLM_PROXY_LOG_LEVEL=DEBUG go run cmd/llm-proxy/main.go
+LLM_PROXY_LOG_LEVEL=DEBUG ./llm-proxy
 ```
 
 ### 4. 查看日志
@@ -217,17 +202,32 @@ air
 ### 单元测试
 
 ```bash
-# 运行所有测试
-go test ./...
-
-# 运行特定包的测试
-go test ./internal/service/...
+# 运行单元测试
+make test
 
 # 带覆盖率
-go test -cover ./...
+make test-coverage
 
-# 详细输出
-go test -v ./...
+# 运行特定包的测试
+go test -v ./internal/service/...
+```
+
+### 集成测试
+
+```bash
+make test-integration
+```
+
+### E2E 测试
+
+```bash
+make test-e2e
+```
+
+### 全部测试
+
+```bash
+make test-all
 ```
 
 ### 基准测试
@@ -240,59 +240,59 @@ go test -bench=. ./internal/test/
 go test -bench=. -benchmem ./internal/test/
 ```
 
-### E2E 测试
-
-```bash
-# 运行端到端测试
-go test -v ./internal/test/ -run TestE2E
-```
-
 ## 构建
 
 ### 本地构建
 
 ```bash
-# 基本构建
-go build -o llm-proxy cmd/llm-proxy/main.go
+# 当前平台编译
+make build
 
-# 优化构建（减小体积）
-go build -ldflags="-s -w" -o llm-proxy cmd/llm-proxy/main.go
-
-# 静态链接（无外部依赖）
-CGO_ENABLED=0 go build -ldflags="-s -w" -o llm-proxy cmd/llm-proxy/main.go
+# 查看版本信息
+./llm-proxy --version
 ```
 
 ### 多平台构建
 
 ```bash
-# Linux amd64
-GOOS=linux GOARCH=amd64 go build -o llm-proxy-linux-amd64 cmd/llm-proxy/main.go
+# 编译所有平台（linux/darwin/windows × amd64/arm64）
+make build-all
 
-# Linux arm64
-GOOS=linux GOARCH=arm64 go build -o llm-proxy-linux-arm64 cmd/llm-proxy/main.go
-
-# macOS amd64
-GOOS=darwin GOARCH=amd64 go build -o llm-proxy-darwin-amd64 cmd/llm-proxy/main.go
-
-# macOS arm64 (Apple Silicon)
-GOOS=darwin GOARCH=arm64 go build -o llm-proxy-darwin-arm64 cmd/llm-proxy/main.go
-
-# Windows amd64
-GOOS=windows GOARCH=amd64 go build -o llm-proxy-windows-amd64.exe cmd/llm-proxy/main.go
+# 编译指定平台
+make build-linux-amd64
+make build-linux-arm64
+make build-darwin-amd64
+make build-darwin-arm64
+make build-windows-amd64
 ```
 
-### 使用 GoReleaser
+编译产物输出到 `dist/` 目录。
+
+### 发布包
 
 ```bash
-# 安装 goreleaser
-go install github.com/goreleaser/goreleaser@latest
+# 当前平台：编译 + 打包
+make release
 
-# 本地构建（不发布）
-goreleaser build --snapshot --clean
+# 指定平台：编译 + 打包
+make release-linux-amd64
 
-# 发布（需要 Git tag）
-git tag -a v1.0.0 -m "Release v1.0.0"
-goreleaser release --clean
+# 所有平台：编译 + 打包
+make release-all
+
+# 清理构建产物
+make clean
+```
+
+发布包结构：
+```
+llm-proxy-<ver>-<os>-<arch>/
+├── llm-proxy (或 .exe)
+├── start.sh (或 start.bat)
+├── .env.example
+├── README.txt
+├── data/
+└── logs/
 ```
 
 ## 部署
@@ -301,29 +301,31 @@ goreleaser release --clean
 
 ```bash
 # 构建镜像
-docker build -t llm-proxy:latest -f ../Dockerfile .
+make docker
 
 # 运行容器
 docker run -d \
   -p 8000:8000 \
   -v $(pwd)/data:/app/data \
   -v $(pwd)/logs:/app/logs \
-  -e LLM_PROXY_PORT=8000 \
+  -e LLM_PROXY_SECRET_KEY=your-secret-key \
   --name llm-proxy \
   llm-proxy:latest
 ```
 
-### Docker Compose 部署
+### 发布包部署
 
 ```bash
+# 解压发布包
+tar -xzf llm-proxy-<ver>-<os>-<arch>.tar.gz
+cd llm-proxy-<ver>-<os>-<arch>
+
+# 初始化配置
+cp .env.example .env
+# 编辑 .env 文件
+
 # 启动服务
-docker-compose -f ../docker-compose.yml up -d
-
-# 查看日志
-docker-compose -f ../docker-compose.yml logs -f
-
-# 停止服务
-docker-compose -f ../docker-compose.yml down
+./start.sh
 ```
 
 ### 系统服务部署
@@ -517,6 +519,5 @@ dlv debug cmd/llm-proxy/main.go
 
 ## 相关链接
 
-- [Python 版本](../)
-- [可行性分析文档](../docs/plans/go-refactoring-feasibility-analysis.md)
 - [API 文档](http://localhost:8000/help)
+- [Makefile 帮助](Makefile) — `make help` 查看所有可用命令
