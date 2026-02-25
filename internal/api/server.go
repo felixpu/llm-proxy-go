@@ -37,6 +37,7 @@ type ServerDeps struct {
 	EmbeddingCacheRepo *repository.EmbeddingCacheRepository
 	SystemConfigRepo *repository.SystemConfigRepository
 	EndpointStore    *service.EndpointStore
+	RateLimit        *middleware.RateLimitConfig
 	DB               *sql.DB
 	Logger           *zap.Logger
 }
@@ -53,7 +54,7 @@ func NewServer(deps ServerDeps) *Server {
 	r.Use(gin.Recovery())
 	r.Use(middleware.Logger(logger))
 	r.Use(middleware.SecurityHeaders())
-	r.Use(middleware.RateLimit(nil))
+	r.Use(middleware.RateLimit(deps.RateLimit))
 	r.Use(middleware.CSRF(nil))
 
 	// Inject endpoints into context for proxy handler (dynamic per-request).

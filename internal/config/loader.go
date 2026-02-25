@@ -136,6 +136,17 @@ func applyEnvOverrides(cfg *Config) {
 	if dbPath := os.Getenv("LLM_PROXY_DB"); dbPath != "" {
 		cfg.Database.Path = dbPath
 	}
+
+	// Log rotation config
+	cfg.LogRotation.MaxSizeMB = getEnvInt("LLM_PROXY_LOG_MAX_SIZE_MB", cfg.LogRotation.MaxSizeMB)
+	cfg.LogRotation.MaxBackups = getEnvInt("LLM_PROXY_LOG_MAX_BACKUPS", cfg.LogRotation.MaxBackups)
+	cfg.LogRotation.MaxAgeDays = getEnvInt("LLM_PROXY_LOG_MAX_AGE_DAYS", cfg.LogRotation.MaxAgeDays)
+	cfg.LogRotation.Compress = getEnvBool("LLM_PROXY_LOG_COMPRESS", cfg.LogRotation.Compress)
+
+	// Rate limit config
+	cfg.RateLimit.Enabled = getEnvBool("LLM_PROXY_RATE_LIMIT_ENABLED", cfg.RateLimit.Enabled)
+	cfg.RateLimit.MaxRequests = getEnvInt("LLM_PROXY_RATE_LIMIT_MAX_REQUESTS", cfg.RateLimit.MaxRequests)
+	cfg.RateLimit.WindowSeconds = getEnvInt("LLM_PROXY_RATE_LIMIT_WINDOW_SECONDS", cfg.RateLimit.WindowSeconds)
 }
 
 // String utility functions (avoiding external dependencies).

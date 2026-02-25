@@ -16,6 +16,23 @@ type Config struct {
 	HealthCheck HealthCheckConfig
 	LoadBalance LoadBalanceConfig
 	Database    DatabaseConfig
+	LogRotation LogRotationConfig
+	RateLimit   RateLimitConfig
+}
+
+// LogRotationConfig holds log rotation settings powered by lumberjack.
+type LogRotationConfig struct {
+	MaxSizeMB  int  // Maximum size in MB before rotation
+	MaxBackups int  // Maximum number of old log files to retain
+	MaxAgeDays int  // Maximum number of days to retain old log files
+	Compress   bool // Whether to gzip compress rotated files
+}
+
+// RateLimitConfig holds rate limiting configuration.
+type RateLimitConfig struct {
+	Enabled       bool
+	MaxRequests   int
+	WindowSeconds int
 }
 
 // ProxyConfig holds proxy server configuration.
@@ -102,6 +119,17 @@ func DefaultConfig() *Config {
 			MaxOpenConns:    25,
 			MaxIdleConns:    5,
 			ConnMaxLifetime: 5 * time.Minute,
+		},
+		LogRotation: LogRotationConfig{
+			MaxSizeMB:  10,
+			MaxBackups: 5,
+			MaxAgeDays: 30,
+			Compress:   true,
+		},
+		RateLimit: RateLimitConfig{
+			Enabled:       true,
+			MaxRequests:   100,
+			WindowSeconds: 60,
 		},
 	}
 }

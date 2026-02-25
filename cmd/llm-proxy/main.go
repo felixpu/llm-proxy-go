@@ -7,16 +7,20 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/user/llm-proxy-go/internal/api"
+	"github.com/user/llm-proxy-go/internal/api/middleware"
 	"github.com/user/llm-proxy-go/internal/config"
 	"github.com/user/llm-proxy-go/internal/database"
 	"github.com/user/llm-proxy-go/internal/repository"
 	"github.com/user/llm-proxy-go/internal/service"
 	"github.com/user/llm-proxy-go/internal/version"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 func main() {
@@ -37,7 +41,8 @@ func run() error {
 	}
 
 	// Initialize logger.
-	logger, err := newLogger(cfg.Proxy.LogLevel)
+	logDir := getLogDir()
+	logger, err := newLogger(cfg.Proxy.LogLevel, logDir, cfg.LogRotation)
 	if err != nil {
 		return fmt.Errorf("init logger: %w", err)
 	}
@@ -142,8 +147,13 @@ func run() error {
 		EmbeddingCacheRepo: embeddingCacheRepo,
 		SystemConfigRepo:   systemConfigRepo,
 		EndpointStore:      endpointStore,
-		DB:                 db,
-		Logger:             logger,
+		RateLimit: &middleware.RateLimitConfig{
+			Enabled:       cfg.RateLimit.Enabled,
+			MaxRequests:   cfg.RateLimit.MaxRequests,
+			WindowSeconds: cfg.RateLimit.WindowSeconds,
+		},
+		DB:     db,
+		Logger: logger,
 	})
 
 	// Start server in goroutine.
@@ -179,20 +189,48 @@ func run() error {
 	return nil
 }
 
-func newLogger(level string) (*zap.Logger, error) {
-	cfg := zap.NewProductionConfig()
+func newLogger(level string, logDir string, rotation config.LogRotationConfig) (*zap.Logger, error) {
+	var zapLevel zapcore.Level
 	switch level {
 	case "debug", "DEBUG":
-		cfg.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
+		zapLevel = zap.DebugLevel
 	case "warn", "WARN":
-		cfg.Level = zap.NewAtomicLevelAt(zap.WarnLevel)
+		zapLevel = zap.WarnLevel
 	case "error", "ERROR":
-		cfg.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
+		zapLevel = zap.ErrorLevel
 	default:
-		cfg.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
+		zapLevel = zap.InfoLevel
 	}
-	// Configure file output
-	cfg.OutputPaths = []string{"logs/llm-proxy.log"}
-	cfg.ErrorOutputPaths = []string{"logs/llm-proxy-error.log"}
-	return cfg.Build()
+
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return nil, fmt.Errorf("create log dir %s: %w", logDir, err)
+	}
+
+	lj := &lumberjack.Logger{
+		Filename:   filepath.Join(logDir, "llm-proxy.log"),
+		MaxSize:    rotation.MaxSizeMB,
+		MaxBackups: rotation.MaxBackups,
+		MaxAge:     rotation.MaxAgeDays,
+		Compress:   rotation.Compress,
+	}
+
+	encoderCfg := zap.NewProductionEncoderConfig()
+	core := zapcore.NewCore(
+		zapcore.NewJSONEncoder(encoderCfg),
+		zapcore.AddSync(lj),
+		zapLevel,
+	)
+
+	return zap.New(core,
+		zap.ErrorOutput(zapcore.Lock(os.Stderr)),
+		zap.AddCaller(),
+		zap.AddStacktrace(zap.ErrorLevel),
+	), nil
+}
+
+func getLogDir() string {
+	if dir := os.Getenv("LLM_PROXY_LOGS_DIR"); dir != "" {
+		return dir
+	}
+	return "logs"
 }
