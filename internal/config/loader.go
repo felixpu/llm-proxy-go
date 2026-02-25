@@ -40,7 +40,7 @@ func Load() (*Config, error) {
 
 // loadDotEnv loads .env file from the project root.
 func loadDotEnv() {
-	envFile := filepath.Join(filepath.Dir(paths.GetBasePath()), ".env")
+	envFile := filepath.Join(paths.GetBasePath(), ".env")
 	data, err := os.ReadFile(envFile)
 	if err != nil {
 		return // .env file is optional
