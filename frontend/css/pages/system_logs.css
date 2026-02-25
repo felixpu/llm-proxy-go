@@ -1,0 +1,359 @@
+/* 页面容器 - flex 布局填充剩余空间 */
+.main-content:has(.log-terminal) {
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 55px);
+}
+
+.system-logs-container {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+/* 统计卡片图标颜色 */
+.stat-icon-error {
+    color: var(--color-error);
+}
+
+.stat-icon-warning {
+    color: var(--color-warning);
+}
+
+.stat-icon-success {
+    color: var(--color-success);
+}
+
+/* 工具栏 - 复用 filter-toolbar 布局 */
+.system-logs-container .filter-toolbar {
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    margin-bottom: var(--spacing-md);
+}
+
+/* 搜索框 */
+.toolbar-search {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.toolbar-search-icon {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 14px;
+    height: 14px;
+    color: var(--text-muted);
+    pointer-events: none;
+}
+
+.toolbar-search input.toolbar-search-input {
+    height: 28px;
+    width: 160px;
+    padding: 0 var(--spacing-sm) 0 32px;
+    font-size: var(--font-size-sm);
+    font-family: inherit;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    transition: border-color var(--transition-fast);
+}
+
+.toolbar-search input.toolbar-search-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+}
+
+.toolbar-search input.toolbar-search-input::placeholder {
+    color: var(--text-muted);
+}
+
+/* 分段控件 - WARNING/ERROR 变体 */
+.segment-btn-warn {
+    background: var(--color-warning) !important;
+    color: #fff !important;
+}
+
+.segment-btn-error {
+    background: var(--color-error) !important;
+    color: #fff !important;
+}
+
+/* 复选框 */
+.checkbox-inline {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.checkbox-inline input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--color-primary);
+}
+
+/* 日志计数 */
+.log-count {
+    font-size: var(--font-size-xs);
+    color: var(--text-muted);
+    white-space: nowrap;
+    padding: 2px var(--spacing-sm);
+    background: var(--bg-surface);
+    border-radius: var(--radius-sm);
+}
+
+.status-indicator {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    white-space: nowrap;
+}
+
+.status-indicator.active {
+    background: rgba(16, 185, 129, 0.1);
+    color: var(--color-success);
+}
+
+.status-indicator.paused {
+    background: rgba(107, 114, 128, 0.1);
+    color: var(--color-muted);
+}
+
+.pulse {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.status-indicator.active .pulse {
+    animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+/* 日志终端 */
+.log-terminal {
+    background: var(--code-bg);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-md) 0;
+    flex: 1;
+    min-height: 200px;
+    overflow-y: auto;
+    font-family: var(--font-mono);
+    font-size: var(--font-size-xs);
+    line-height: 1.5;
+}
+
+.log-line {
+    display: grid;
+    grid-template-columns: 48px 64px 100px 160px 200px 1fr;
+    gap: 12px;
+    padding: 1px 12px;
+    transition: background 0.1s ease;
+}
+
+.log-line:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.log-col {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.log-line-number {
+    color: #4a4a4a;
+    text-align: right;
+    user-select: none;
+}
+
+.log-level {
+    font-weight: var(--font-weight-medium);
+}
+
+.log-level-debug { color: var(--text-secondary); }
+.log-level-info { color: #60a5fa; }
+.log-level-warning { color: #fbbf24; }
+.log-level-error { color: #f87171; }
+
+.log-timestamp {
+    color: var(--text-secondary);
+}
+
+.log-worker {
+    color: #a78bfa;
+    font-weight: var(--font-weight-medium);
+}
+
+.log-caller {
+    color: #6b7280;
+    font-size: 0.9em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.log-message {
+    color: var(--code-text);
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+
+.log-empty {
+    text-align: center;
+    color: var(--text-secondary);
+    padding: var(--spacing-4xl);
+}
+
+mark {
+    background-color: #fbbf24;
+    color: #1a1a1a;
+    padding: 0 2px;
+    border-radius: 2px;
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+    /* 工具栏紧凑化 */
+    .system-logs-container .filter-toolbar {
+        flex-wrap: wrap;
+        gap: var(--spacing-xs);
+        padding: var(--spacing-xs) var(--spacing-sm);
+        margin-bottom: var(--spacing-sm);
+    }
+
+    .system-logs-container .filter-toolbar-divider {
+        display: none;
+    }
+
+    .system-logs-container .segment-control {
+        order: 10;
+        width: 100%;
+        justify-content: center;
+    }
+
+    .system-logs-container .segment-btn {
+        flex: 1;
+        min-width: 0;
+    }
+
+    .toolbar-search {
+        order: 11;
+        flex: 1;
+        min-width: 0;
+    }
+
+    .toolbar-search input.toolbar-search-input {
+        width: 100%;
+    }
+
+    .status-indicator {
+        font-size: 10px;
+        padding: 2px var(--spacing-xs);
+    }
+
+    .checkbox-inline {
+        font-size: var(--font-size-xs);
+    }
+
+    .checkbox-inline input[type="checkbox"] {
+        width: 12px;
+        height: 12px;
+    }
+
+    .log-count {
+        font-size: 10px;
+    }
+
+    /* 日志行：堆叠布局 */
+    .log-line {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: var(--spacing-sm) var(--spacing-md);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .log-line:last-child {
+        border-bottom: none;
+    }
+
+    .log-line-number {
+        display: none;
+    }
+
+    .log-level,
+    .log-worker,
+    .log-timestamp {
+        display: inline;
+        font-size: 10px;
+    }
+
+    /* 元数据行 */
+    .log-line {
+        position: relative;
+    }
+
+    .log-level {
+        position: absolute;
+        top: var(--spacing-sm);
+        left: var(--spacing-md);
+    }
+
+    .log-worker {
+        position: absolute;
+        top: var(--spacing-sm);
+        left: 70px;
+    }
+
+    .log-timestamp {
+        position: absolute;
+        top: var(--spacing-sm);
+        right: var(--spacing-md);
+    }
+
+    /* 消息区域 */
+    .log-message {
+        margin-top: 20px;
+        font-size: var(--font-size-xs);
+        line-height: 1.4;
+        max-height: 4.2em;
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        white-space: normal;
+        word-break: break-word;
+    }
+
+    /* 展开状态 */
+    .log-line.expanded .log-message {
+        max-height: none;
+        -webkit-line-clamp: unset;
+        white-space: pre-wrap;
+    }
+
+    /* 可展开指示器 */
+    .log-message::after {
+        content: '';
+    }
+}

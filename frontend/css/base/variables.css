@@ -1,0 +1,215 @@
+/* ========================================
+   设计系统 - 色彩、字体、间距
+   ======================================== */
+
+:root {
+    /* 字体系统 */
+    --font-display: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    --font-mono: 'SF Mono', Monaco, 'Cascadia Code', 'Courier New', monospace;
+
+    /* 主色：精致的蓝色系（纯色，无渐变） */
+    --color-primary: #3b82f6;
+    --color-primary-hover: #2563eb;
+    --color-primary-active: #1d4ed8;
+    --color-primary-subtle: #eff6ff;
+    --color-primary-shadow: rgba(59, 130, 246, 0.25);
+
+    /* 状态色（柔和版） */
+    --color-success: #10b981;
+    --color-success-bg: rgba(16, 185, 129, 0.1);
+    --color-success-border: rgba(16, 185, 129, 0.3);
+    --color-warning: #f59e0b;
+    --color-warning-bg: rgba(245, 158, 11, 0.1);
+    --color-warning-border: rgba(245, 158, 11, 0.3);
+    --color-error: #ef4444;
+    --color-error-bg: rgba(239, 68, 68, 0.1);
+    --color-error-border: rgba(239, 68, 68, 0.3);
+    --color-info: #3b82f6;
+    --color-info-bg: rgba(59, 130, 246, 0.1);
+    --color-info-border: rgba(59, 130, 246, 0.3);
+
+    /* 辅助色系 */
+    --color-secondary: #8b5cf6;
+    --color-accent: #ec4899;
+    --color-danger: #dc2626;
+    --color-danger-light: #fef2f2;
+    --color-info-light: #e0f2fe;
+    --color-info-lighter: #bae6fd;
+    --color-info-dark: #0c4a6e;
+
+    /* 亮色模式背景层次 */
+    --bg-base: #fafafa;
+    --bg-elevated: #ffffff;
+    --bg-surface: #f4f4f5;
+    --bg-hover: #e4e4e7;
+    --bg-active: #d4d4d8;
+
+    /* 亮色模式文字 */
+    --text-primary: #18181b;
+    --text-secondary: #52525b;
+    --text-tertiary: #71717a;
+    --text-muted: #a1a1aa;
+    --text-inverse: #fafafa;
+
+    /* 亮色模式边框 */
+    --border-color: #e4e4e7;
+    --border-subtle: #f4f4f5;
+    --border-strong: #d4d4d8;
+
+    /* 侧边栏（跟随主题） */
+    --sidebar-bg: #ffffff;
+    --sidebar-surface: #f4f4f5;
+    --sidebar-hover: #e4e4e7;
+    --sidebar-active-bg: var(--color-primary);
+    --sidebar-text: #52525b;
+    --sidebar-text-hover: #18181b;
+    --sidebar-text-active: #ffffff;
+    --sidebar-border: #e4e4e7;
+
+    /* 兼容旧变量名 */
+    --primary-color: var(--color-primary);
+    --primary-hover: var(--color-primary-hover);
+    --success-color: var(--color-success);
+    --warning-color: var(--color-warning);
+    --danger-color: var(--color-error);
+    --bg-color: var(--bg-base);
+    --sidebar-active: var(--sidebar-text-active);
+    --card-bg: var(--bg-elevated);
+    --text-color: var(--text-primary);
+    --secondary-color: #6b7280;
+    --secondary-hover: #4b5563;
+    --info-color: var(--color-info);
+    --info-hover: #2563eb;
+    --bg-secondary: var(--bg-surface);
+
+    /* 状态颜色（兼容） */
+    --status-healthy-bg: var(--color-success-bg);
+    --status-healthy-text: #065f46;
+    --status-unhealthy-bg: var(--color-error-bg);
+    --status-unhealthy-text: #991b1b;
+    --status-unknown-bg: var(--color-warning-bg);
+    --status-unknown-text: #92400e;
+
+    /* 表格颜色 */
+    --table-header-bg: var(--bg-surface);
+    --table-border: var(--border-color);
+    --table-hover-bg: var(--bg-hover);
+
+    /* 代码块 */
+    --code-bg: #18181b;
+    --code-text: #e4e4e7;
+
+    /* 输入框 */
+    --input-border: var(--border-color);
+    --input-focus-border: var(--color-primary);
+    --input-focus-shadow: rgba(59, 130, 246, 0.15);
+
+    /* 灰度色阶（Zinc 色系） */
+    --gray-50: #fafafa;
+    --gray-100: #f4f4f5;
+    --gray-200: #e4e4e7;
+    --gray-300: #d4d4d8;
+    --gray-400: #a1a1aa;
+    --gray-500: #71717a;
+    --gray-600: #52525b;
+    --gray-700: #3f3f46;
+    --gray-800: #27272a;
+    --gray-900: #18181b;
+    --gray-950: #09090b;
+
+    /* Slate 色系（用于特定UI组件） */
+    --slate-50: #f8fafc;
+    --slate-100: #f1f5f9;
+    --slate-200: #e2e8f0;
+    --slate-300: #cbd5e1;
+    --slate-400: #94a3b8;
+    --slate-500: #64748b;
+    --slate-600: #475569;
+    --slate-700: #334155;
+    --slate-800: #1e293b;
+    --slate-900: #0f172a;
+
+    /* 间距系统 */
+    --spacing-2xs: 3px;
+    --spacing-xs: 4px;
+    --spacing-sm: 8px;
+    --spacing-md: 12px;
+    --spacing-lg: 16px;
+    --spacing-xl: 20px;
+    --spacing-2xl: 24px;
+    --spacing-3xl: 32px;
+    --spacing-4xl: 40px;
+    --spacing-5xl: 48px;
+
+    /* 圆角系统 */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-xl: 12px;
+    --radius-2xl: 16px;
+    --radius-full: 9999px;
+
+    /* 阴影系统（亮色模式） */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+    --shadow-xl: 0 8px 16px rgba(0, 0, 0, 0.1), 0 4px 8px rgba(0, 0, 0, 0.06);
+    --shadow-2xl: 0 16px 32px rgba(0, 0, 0, 0.12), 0 8px 16px rgba(0, 0, 0, 0.08);
+    --shadow-primary: 0 4px 12px var(--color-primary-shadow);
+
+    /* 字体大小 */
+    --font-size-xs: 0.75rem;      /* 12px */
+    --font-size-sm: 0.8125rem;    /* 13px */
+    --font-size-base: 0.875rem;   /* 14px */
+    --font-size-md: 0.9375rem;    /* 15px */
+    --font-size-lg: 1rem;         /* 16px */
+    --font-size-xl: 1.125rem;     /* 18px */
+    --font-size-2xl: 1.25rem;     /* 20px */
+    --font-size-3xl: 1.5rem;      /* 24px */
+    --font-size-4xl: 1.75rem;     /* 28px */
+
+    /* 字重 */
+    --font-weight-normal: 400;
+    --font-weight-medium: 500;
+    --font-weight-semibold: 600;
+    --font-weight-bold: 700;
+
+    /* 行高 */
+    --line-height-tight: 1.25;
+    --line-height-normal: 1.5;
+    --line-height-relaxed: 1.8;
+
+    /* 过渡 */
+    --transition-fast: 0.15s ease;
+    --transition-base: 0.2s ease;
+    --transition-slow: 0.3s ease;
+    --transition-spring: 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    --transition-normal: 0.2s ease;
+
+    /* 角色颜色系统 */
+    --role-simple-bg: rgba(59, 130, 246, 0.15);
+    --role-simple-bg-solid: #dbeafe;
+    --role-simple-color: #2563eb;
+    --role-simple-border: rgba(59, 130, 246, 0.2);
+
+    --role-default-bg: rgba(99, 102, 241, 0.15);
+    --role-default-bg-solid: #e0e7ff;
+    --role-default-color: #4f46e5;
+    --role-default-border: rgba(99, 102, 241, 0.2);
+
+    --role-complex-bg: rgba(168, 85, 247, 0.15);
+    --role-complex-bg-solid: #fae8ff;
+    --role-complex-color: #7c3aed;
+    --role-complex-border: rgba(168, 85, 247, 0.2);
+
+    /* 侧边栏尺寸 */
+    --sidebar-width: 240px;
+    --sidebar-collapsed-width: 60px;
+
+    /* z-index 层级管理 */
+    --z-sticky: 10;
+    --z-dropdown: 200;
+    --z-modal: 1000;
+    --z-toast: 2000;
+}

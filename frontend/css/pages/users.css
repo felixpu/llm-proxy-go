@@ -1,0 +1,88 @@
+/* ========================================
+   用户管理页面样式
+   ======================================== */
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+    /* 隐藏表格，显示卡片 */
+    .users-table-container {
+        display: none;
+    }
+
+    .users-mobile {
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacing-md);
+    }
+
+    .user-card {
+        background: var(--card-bg);
+        border-radius: var(--radius-lg);
+        padding: var(--spacing-md);
+        border: 1px solid var(--border-color);
+        box-shadow: var(--shadow-sm);
+    }
+
+    .user-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: var(--spacing-sm);
+        padding-bottom: var(--spacing-sm);
+        border-bottom: 1px solid var(--border-color);
+    }
+
+    .user-card-title {
+        font-weight: var(--font-weight-semibold);
+        font-size: var(--font-size-base);
+        color: var(--text-primary);
+        margin-bottom: 4px;
+    }
+
+    .user-card-badges {
+        display: flex;
+        gap: var(--spacing-xs);
+        flex-wrap: wrap;
+    }
+
+    .user-card-body {
+        margin-bottom: var(--spacing-md);
+    }
+
+    .user-stat {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .user-stat-label {
+        font-size: var(--font-size-xs);
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .user-stat-value {
+        font-size: var(--font-size-sm);
+        font-weight: var(--font-weight-medium);
+        color: var(--text-primary);
+    }
+
+    .user-card-footer {
+        display: flex;
+        gap: var(--spacing-xs);
+        flex-wrap: wrap;
+    }
+
+    .user-card-footer .btn {
+        flex: 1;
+        min-width: fit-content;
+    }
+}
+
+/* 桌面端隐藏移动端卡片 */
+@media (min-width: 769px) {
+    .users-mobile {
+        display: none;
+    }
+}

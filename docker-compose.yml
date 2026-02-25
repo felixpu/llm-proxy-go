@@ -1,0 +1,29 @@
+# LLM Proxy Go - Docker Compose 配置
+services:
+  llm-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+    container_name: llm-proxy-go
+    restart: unless-stopped
+    ports:
+      - "${LLM_PROXY_PORT:-8000}:8000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - LLM_PROXY_HOST=0.0.0.0
+      - LLM_PROXY_PORT=8000
+      - LLM_PROXY_SECRET_KEY=${LLM_PROXY_SECRET_KEY:-change-this-to-a-random-secret-key}
+      - LLM_PROXY_SESSION_EXPIRE_HOURS=${LLM_PROXY_SESSION_EXPIRE_HOURS:-24}
+      - LLM_PROXY_DEFAULT_ADMIN_USERNAME=${LLM_PROXY_DEFAULT_ADMIN_USERNAME:-admin}
+      - LLM_PROXY_DEFAULT_ADMIN_PASSWORD=${LLM_PROXY_DEFAULT_ADMIN_PASSWORD:-admin123}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

@@ -1,0 +1,339 @@
+/* ========================================
+   暗色模式
+   ======================================== */
+
+:root.dark {
+    /* 暗色模式侧边栏 */
+    --sidebar-bg: #09090b;
+    --sidebar-surface: #18181b;
+    --sidebar-hover: #27272a;
+    --sidebar-text: #a1a1aa;
+    --sidebar-text-hover: #fafafa;
+    --sidebar-border: #27272a;
+
+    /* 暗色模式背景层次 */
+    --bg-base: #09090b;
+    --bg-elevated: #18181b;
+    --bg-surface: #27272a;
+    --bg-hover: #3f3f46;
+    --bg-active: #52525b;
+
+    /* 暗色模式文字 */
+    --text-primary: #fafafa;
+    --text-secondary: #a1a1aa;
+    --text-tertiary: #71717a;
+    --text-muted: #52525b;
+    --text-inverse: #18181b;
+
+    /* 暗色模式边框 */
+    --border-color: #27272a;
+    --border-subtle: #18181b;
+    --border-strong: #3f3f46;
+
+    /* 暗色模式状态色背景 */
+    --color-success-bg: rgba(16, 185, 129, 0.15);
+    --color-warning-bg: rgba(245, 158, 11, 0.15);
+    --color-error-bg: rgba(239, 68, 68, 0.15);
+    --color-info-bg: rgba(59, 130, 246, 0.15);
+    --color-primary-subtle: rgba(59, 130, 246, 0.15);
+
+    /* 暗色模式状态文字 */
+    --status-healthy-text: #34d399;
+    --status-unhealthy-text: #f87171;
+    --status-unknown-text: #fbbf24;
+
+    /* 暗色模式阴影 */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.2);
+    --shadow-xl: 0 8px 16px rgba(0, 0, 0, 0.5), 0 4px 8px rgba(0, 0, 0, 0.3);
+    --shadow-2xl: 0 16px 32px rgba(0, 0, 0, 0.6), 0 8px 16px rgba(0, 0, 0, 0.4);
+
+    /* 代码块 */
+    --code-bg: #27272a;
+    --code-text: #e4e4e7;
+
+    /* 兼容旧变量 */
+    --bg-color: var(--bg-base);
+    --card-bg: var(--bg-elevated);
+    --text-color: var(--text-primary);
+    --bg-secondary: var(--bg-surface);
+    --table-header-bg: var(--bg-surface);
+    --table-hover-bg: var(--bg-hover);
+}
+
+/* ========================================
+   主题切换按钮
+   ======================================== */
+
+.theme-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+    color: var(--text-secondary);
+    transition: all var(--transition-fast);
+}
+
+.theme-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--border-strong);
+}
+
+.theme-toggle svg {
+    width: 18px;
+    height: 18px;
+    transition: transform var(--transition-base);
+}
+
+.theme-toggle:hover svg {
+    transform: rotate(15deg);
+}
+
+/* 亮色模式下显示月亮图标 */
+.theme-toggle .icon-moon {
+    display: block;
+}
+
+.theme-toggle .icon-sun {
+    display: none;
+}
+
+/* 暗色模式下显示太阳图标 */
+:root.dark .theme-toggle .icon-moon {
+    display: none;
+}
+
+:root.dark .theme-toggle .icon-sun {
+    display: block;
+}
+
+/* ========================================
+   暗色模式特定样式覆盖
+   ======================================== */
+
+:root.dark .login-container {
+    background: var(--bg-elevated);
+    border-color: var(--border-color);
+}
+
+:root.dark body.login-body::before {
+    background:
+        radial-gradient(circle at 20% 80%, rgba(59, 130, 246, 0.15) 0%, transparent 50%),
+        radial-gradient(circle at 80% 20%, rgba(139, 92, 246, 0.15) 0%, transparent 50%);
+}
+
+:root.dark .login-header h1 {
+    background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+:root.dark .code-block {
+    background: var(--bg-surface);
+}
+
+:root.dark .dropdown-item.danger:hover {
+    background: var(--color-error-bg);
+}
+
+:root.dark .api-key-display {
+    background: linear-gradient(135deg, var(--bg-surface) 0%, var(--bg-hover) 100%);
+}
+
+:root.dark .api-key-warning {
+    background: var(--color-warning-bg);
+    border-color: var(--color-warning-border);
+    color: var(--status-unknown-text);
+}
+
+:root.dark .help-note {
+    background: var(--color-warning-bg);
+    border-color: var(--color-warning-border);
+    color: var(--status-unknown-text);
+}
+
+:root.dark #custom-time-range {
+    background-color: var(--bg-surface);
+    border-color: var(--border-color);
+}
+
+/* 暗色模式下的角色标签 */
+:root.dark .role-simple {
+    background: rgba(59, 130, 246, 0.2);
+    color: #60a5fa;
+}
+
+:root.dark .role-default {
+    background: rgba(99, 102, 241, 0.2);
+    color: #818cf8;
+}
+
+:root.dark .role-complex {
+    background: rgba(168, 85, 247, 0.2);
+    color: #c084fc;
+}
+
+/* 暗色模式下的模型标签 */
+:root.dark .model-tag {
+    background: rgba(59, 130, 246, 0.2);
+    color: #60a5fa;
+}
+
+:root.dark .model-tag.role-simple {
+    background: rgba(59, 130, 246, 0.2);
+    color: #60a5fa;
+}
+
+:root.dark .model-tag.role-default {
+    background: rgba(99, 102, 241, 0.2);
+    color: #818cf8;
+}
+
+:root.dark .model-tag.role-complex {
+    background: rgba(168, 85, 247, 0.2);
+    color: #c084fc;
+}
+
+/* 暗色模式下的状态徽章 */
+:root.dark .status-healthy {
+    background: var(--color-success-bg);
+    color: var(--status-healthy-text);
+}
+
+:root.dark .status-unhealthy {
+    background: var(--color-error-bg);
+    color: var(--status-unhealthy-text);
+}
+
+:root.dark .status-unknown {
+    background: var(--color-warning-bg);
+    color: var(--status-unknown-text);
+}
+
+/* 暗色模式下的日志状态图标 */
+:root.dark .log-icon-success {
+    color: #34d399;
+}
+
+:root.dark .log-icon-error {
+    color: #f87171;
+}
+
+:root.dark .log-icon-stream {
+    color: #60a5fa;
+}
+
+/* 暗色模式下的确认对话框图标 */
+:root.dark .confirm-warning .confirm-icon {
+    background: var(--color-warning-bg);
+}
+
+:root.dark .confirm-danger .confirm-icon {
+    background: var(--color-error-bg);
+}
+
+:root.dark .confirm-info .confirm-icon {
+    background: var(--color-info-bg);
+}
+
+/* 暗色模式下的 role-badge */
+:root.dark .role-badge.role-simple {
+    background: rgba(59, 130, 246, 0.2);
+    color: #93c5fd;
+}
+
+:root.dark .role-badge.role-default {
+    background: rgba(99, 102, 241, 0.2);
+    color: #a5b4fc;
+}
+
+:root.dark .role-badge.role-complex {
+    background: rgba(168, 85, 247, 0.2);
+    color: #d8b4fe;
+}
+
+/* ========================================
+   暗色模式 - Detected Models Panel
+   ======================================== */
+
+:root.dark .detected-models-panel {
+    background: var(--bg-elevated);
+    border-color: var(--border-color);
+}
+
+:root.dark .detected-models-header {
+    background: var(--bg-surface);
+    border-bottom-color: var(--border-color);
+}
+
+:root.dark .detected-models-format {
+    background: rgba(59, 130, 246, 0.15);
+    color: #60a5fa;
+    border-color: rgba(59, 130, 246, 0.25);
+}
+
+:root.dark .detected-models-search input {
+    background: var(--bg-surface);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+
+:root.dark .detected-models-search input:focus {
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.15);
+}
+
+:root.dark .detected-models-search-icon {
+    color: var(--text-muted);
+}
+
+:root.dark .detected-model-tag {
+    background: var(--bg-surface);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+
+:root.dark .detected-model-tag:hover {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+}
+
+:root.dark .detected-model-tag.is-selected {
+    background: var(--color-primary);
+    color: #fff;
+    border-color: var(--color-primary);
+}
+
+:root.dark .detected-model-tag.is-selected:hover {
+    background: var(--color-primary-hover);
+    border-color: var(--color-primary-hover);
+}
+
+:root.dark .skeleton-header,
+:root.dark .skeleton-tag {
+    background: var(--bg-surface);
+}
+
+:root.dark .detected-models-error {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.25);
+    color: #f87171;
+}
+
+:root.dark .detected-models-body::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+}
+
+:root.dark .detect-btn-spinner {
+    border-color: var(--border-strong);
+    border-top-color: var(--text-primary);
+}

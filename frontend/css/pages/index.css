@@ -1,0 +1,279 @@
+/* ========================================
+   首页/仪表盘样式
+   ======================================== */
+
+/* 模型状态网格布局 */
+.models-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: var(--spacing-md);
+}
+
+/* 模型卡片 */
+.model-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-left: 3px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-md);
+    transition: all var(--transition-base);
+    position: relative;
+}
+
+.model-card:hover {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+}
+
+/* 角色色条 */
+.model-card--simple {
+    border-left-color: var(--role-simple-color);
+}
+
+.model-card--default {
+    border-left-color: var(--role-default-color);
+}
+
+.model-card--complex {
+    border-left-color: var(--role-complex-color);
+}
+
+/* 卡片头部 */
+.model-card__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-sm);
+}
+
+.model-card__name {
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    color: var(--text-primary);
+    line-height: var(--line-height-tight);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+
+.model-card__role {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    flex-shrink: 0;
+}
+
+/* 服务商标签容器 */
+.model-card__providers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+    align-items: center;
+}
+
+/* 服务商标签 */
+.model-card__provider {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.4;
+    transition: all var(--transition-fast);
+    position: relative;
+    padding-left: 18px;
+}
+
+.model-card__provider::before {
+    content: '';
+    position: absolute;
+    left: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    transition: all var(--transition-fast);
+}
+
+.model-card__provider--healthy {
+    background: var(--color-success-bg);
+    color: var(--status-healthy-text);
+    border: 1px solid var(--color-success-border);
+}
+
+.model-card__provider--healthy::before {
+    background: var(--color-success);
+    box-shadow: 0 0 4px rgba(16, 185, 129, 0.4);
+}
+
+.model-card__provider--healthy:hover {
+    background: rgba(16, 185, 129, 0.15);
+    border-color: var(--color-success);
+}
+
+.model-card__provider--unhealthy {
+    background: var(--color-error-bg);
+    color: var(--status-unhealthy-text);
+    border: 1px solid var(--color-error-border);
+}
+
+.model-card__provider--unhealthy::before {
+    background: var(--color-error);
+    box-shadow: 0 0 4px rgba(239, 68, 68, 0.4);
+}
+
+.model-card__provider--unhealthy:hover {
+    background: rgba(239, 68, 68, 0.15);
+    border-color: var(--color-error);
+}
+
+.model-card__provider--unknown {
+    background: rgba(113, 113, 122, 0.08);
+    color: var(--gray-700);
+    border: 1px solid var(--gray-300);
+}
+
+.model-card__provider--unknown::before {
+    background: var(--gray-500);
+    box-shadow: 0 0 4px rgba(113, 113, 122, 0.3);
+}
+
+.model-card__provider--unknown:hover {
+    background: rgba(113, 113, 122, 0.12);
+    border-color: var(--gray-400);
+}
+
+.model-card__provider--none {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px dashed var(--border-color);
+    padding-left: 8px;
+}
+
+.model-card__provider--none::before {
+    display: none;
+}
+
+.model-card__provider--none:hover {
+    border-color: var(--gray-400);
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+    .models-grid {
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: var(--spacing-sm);
+    }
+
+    .model-card {
+        padding: var(--spacing-sm);
+    }
+
+    .model-card__name {
+        font-size: var(--font-size-sm);
+    }
+
+    .model-card__role {
+        font-size: 10px;
+    }
+
+    .model-card__provider {
+        font-size: 11px;
+        padding: 2px 6px 2px 16px;
+    }
+
+    .model-card__provider::before {
+        width: 5px;
+        height: 5px;
+        left: 5px;
+    }
+
+    /* 移动端隐藏表格,显示卡片 */
+    .table-container {
+        display: none;
+    }
+
+    .endpoints-mobile {
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacing-md);
+    }
+
+    .endpoint-card {
+        background: var(--card-bg);
+        border-radius: var(--radius-lg);
+        padding: var(--spacing-md);
+        border: 1px solid var(--border-color);
+        box-shadow: var(--shadow-sm);
+    }
+
+    .endpoint-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: var(--spacing-sm);
+        padding-bottom: var(--spacing-sm);
+        border-bottom: 1px solid var(--border-color);
+    }
+
+    .endpoint-card-title {
+        font-weight: var(--font-weight-semibold);
+        font-size: var(--font-size-base);
+        color: var(--text-primary);
+    }
+
+    .endpoint-card-model {
+        font-size: var(--font-size-sm);
+        color: var(--text-secondary);
+        margin-top: 2px;
+    }
+
+    .endpoint-card-body {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: var(--spacing-sm);
+    }
+
+    .endpoint-stat {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .endpoint-stat-label {
+        font-size: var(--font-size-xs);
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .endpoint-stat-value {
+        font-size: var(--font-size-base);
+        font-weight: var(--font-weight-medium);
+        color: var(--text-primary);
+    }
+
+    .endpoint-stat.full-width {
+        grid-column: 1 / -1;
+    }
+}
+
+@media (max-width: 480px) {
+    .models-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* 桌面端隐藏移动端卡片 */
+@media (min-width: 769px) {
+    .endpoints-mobile {
+        display: none;
+    }
+}

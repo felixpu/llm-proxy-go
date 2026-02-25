@@ -1,0 +1,289 @@
+/* ========================================
+   缓存监控页面样式
+   ======================================== */
+
+/* 主布局：图表 + 缓存层统计 */
+.cache-main-grid {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: var(--spacing-xl);
+    margin-bottom: var(--spacing-xl);
+}
+
+/* 图表容器 */
+.chart-container {
+    position: relative;
+    height: 280px;
+    background: var(--card-bg);
+    border-radius: var(--radius-md);
+}
+
+/* 图表控制栏 */
+.chart-controls {
+    display: flex;
+    gap: var(--spacing-sm);
+    align-items: center;
+}
+
+.chart-controls select {
+    width: auto;
+    min-width: 90px;
+    height: 32px;
+    font-size: var(--font-size-sm);
+}
+
+/* 缓存层统计列 */
+.cache-layers-column {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.cache-layer-card {
+    background: var(--card-bg);
+    border-radius: var(--radius-lg);
+    padding: var(--spacing-lg);
+    box-shadow: var(--shadow-sm);
+    border: 1px solid var(--border-color);
+    transition: all var(--transition-normal);
+}
+
+.layer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-lg);
+    padding-bottom: var(--spacing-md);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.layer-title {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+}
+
+.layer-icon {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-md);
+    background: var(--bg-surface);
+}
+
+.cache-layer-card:nth-child(1) .layer-icon {
+    background: rgba(79, 70, 229, 0.1);
+    color: var(--role-default-color);
+}
+
+.cache-layer-card:nth-child(2) .layer-icon {
+    background: rgba(16, 185, 129, 0.1);
+    color: var(--color-success);
+}
+
+.cache-layer-card:nth-child(3) .layer-icon {
+    background: rgba(245, 158, 11, 0.1);
+    color: var(--color-warning);
+}
+
+.layer-icon svg {
+    width: 20px;
+    height: 20px;
+    stroke: currentColor;
+}
+
+.layer-header h4 {
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    margin: 0;
+    color: var(--text-color);
+}
+
+.layer-stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-md);
+}
+
+.layer-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--spacing-sm);
+    background: var(--bg-surface);
+    border-radius: var(--radius-md);
+}
+
+.layer-stat .value {
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-bold);
+    color: var(--text-color);
+    line-height: 1.2;
+}
+
+.layer-stat .label {
+    font-size: var(--font-size-xs);
+    color: var(--text-muted);
+    margin-top: var(--spacing-xs);
+}
+
+.layer-bar {
+    height: 8px;
+    background: var(--gray-200);
+    border-radius: var(--radius-full);
+    overflow: hidden;
+}
+
+.layer-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4f46e5, #6366f1);
+    border-radius: var(--radius-full);
+    transition: width 0.5s ease;
+}
+
+.layer-bar-fill.layer-bar-l2 {
+    background: linear-gradient(90deg, #10b981, #34d399);
+}
+
+.layer-bar-fill.layer-bar-l3 {
+    background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+
+/* LLM 统计网格 */
+.llm-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: var(--spacing-md);
+}
+
+.llm-stat-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: var(--spacing-lg);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+}
+
+.llm-stat-value {
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-semibold);
+    margin-bottom: var(--spacing-xs);
+}
+
+.llm-stat-label {
+    font-size: var(--font-size-xs);
+    color: var(--text-muted);
+}
+
+/* 内容预览单元格 */
+.content-preview {
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+    font-size: var(--font-size-sm);
+}
+
+/* 响应式 - 缓存监控 */
+@media (max-width: 1200px) {
+    .cache-main-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .cache-layers-column {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: var(--spacing-md);
+    }
+
+    .llm-stats-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@media (max-width: 768px) {
+    .cache-layers-column {
+        grid-template-columns: 1fr;
+    }
+
+    /* 缓存层卡片紧凑化 */
+    .cache-layer-card {
+        padding: var(--spacing-md);
+    }
+
+    .layer-header {
+        margin-bottom: var(--spacing-sm);
+        padding-bottom: var(--spacing-sm);
+    }
+
+    .layer-icon {
+        width: 32px;
+        height: 32px;
+    }
+
+    .layer-icon svg {
+        width: 16px;
+        height: 16px;
+    }
+
+    .layer-header h4 {
+        font-size: var(--font-size-sm);
+    }
+
+    .layer-stats {
+        gap: var(--spacing-sm);
+        margin-bottom: var(--spacing-sm);
+    }
+
+    .layer-stat {
+        padding: var(--spacing-xs);
+    }
+
+    .layer-stat .value {
+        font-size: var(--font-size-base);
+    }
+
+    .layer-stat .label {
+        font-size: 10px;
+    }
+
+    .llm-stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: var(--spacing-sm);
+    }
+
+    .llm-stat-item {
+        padding: var(--spacing-sm);
+    }
+
+    .llm-stat-value {
+        font-size: var(--font-size-base);
+    }
+
+    .llm-stat-label {
+        font-size: 10px;
+    }
+
+    .chart-controls {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: var(--spacing-xs);
+    }
+
+    .chart-controls select {
+        flex: 1;
+        min-width: 80px;
+        height: 28px;
+        font-size: var(--font-size-xs);
+    }
+
+    /* 图表容器高度缩小 */
+    .chart-container {
+        height: 200px;
+    }
+}

@@ -1,0 +1,27 @@
+/* ========================================
+   系统设置页面样式
+   ======================================== */
+
+/* 设置页面 */
+.actions-row {
+    display: flex;
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-lg);
+}
+
+.config-source {
+    font-size: var(--font-size-base);
+    color: var(--text-muted);
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+    .actions-row {
+        flex-direction: column;
+        gap: var(--spacing-sm);
+    }
+
+    .actions-row .btn {
+        width: 100%;
+    }
+}

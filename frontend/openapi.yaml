@@ -1,0 +1,1258 @@
+openapi: 3.0.3
+info:
+  title: LLM Proxy API
+  description: |
+    智能 AI 模型代理服务 API。支持多端点负载均衡和基于内容的智能路由，兼容 Anthropic Messages API。
+
+    ## 认证方式
+
+    - **Cookie Session**: 通过 `/api/auth/login` 登录获取 session cookie
+    - **Bearer Token**: 在 Authorization header 中携带 API Key（用于代理端点）
+  version: 0.1.0
+  contact:
+    name: LLM Proxy
+
+servers:
+  - url: /
+    description: 当前服务器
+
+tags:
+  - name: 认证
+    description: 用户登录/登出/会话管理
+  - name: 用户管理
+    description: 用户 CRUD 操作
+  - name: API Key
+    description: API Key 管理
+  - name: 代理
+    description: LLM 代理端点（兼容 Anthropic API）
+  - name: 日志
+    description: 请求日志查询
+  - name: 系统状态
+    description: 健康检查与系统状态
+  - name: 配置管理
+    description: 系统配置（路由/负载均衡/健康检查/UI）
+  - name: 模型管理
+    description: 模型 CRUD
+  - name: 提供商管理
+    description: 提供商 CRUD 与模型检测
+  - name: 路由规则
+    description: 智能路由规则管理
+  - name: 缓存
+    description: 路由缓存监控与管理
+  - name: 系统日志
+    description: 服务运行日志
+
+security:
+  - cookieAuth: []
+  - bearerAuth: []
+
+paths:
+  # ===== 认证 =====
+  /api/auth/login:
+    post:
+      tags: [认证]
+      summary: 用户登录
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: 认证失败
+      security: []
+
+  /api/auth/logout:
+    post:
+      tags: [认证]
+      summary: 用户登出
+      responses:
+        '200':
+          description: 登出成功
+
+  /api/auth/me:
+    get:
+      tags: [认证]
+      summary: 获取当前用户信息
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUser'
+
+  /api/auth/refresh:
+    post:
+      tags: [认证]
+      summary: 刷新会话
+      responses:
+        '200':
+          description: 刷新成功
+
+  # ===== 用户管理 =====
+  /api/users/me:
+    get:
+      tags: [用户管理]
+      summary: 获取当前用户详情
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+  /api/users/change-password:
+    post:
+      tags: [用户管理]
+      summary: 修改当前用户密码
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [old_password, new_password]
+              properties:
+                old_password:
+                  type: string
+                new_password:
+                  type: string
+                  minLength: 6
+      responses:
+        '200':
+          description: 修改成功
+        '400':
+          description: 参数错误
+
+  /api/users:
+    get:
+      tags: [用户管理]
+      summary: 列出所有用户（管理员）
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+    post:
+      tags: [用户管理]
+      summary: 创建用户（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+
+  /api/users/{id}:
+    get:
+      tags: [用户管理]
+      summary: 获取用户详情（管理员）
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '404':
+          description: 用户不存在
+    patch:
+      tags: [用户管理]
+      summary: 更新用户（管理员）
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: 更新成功
+    delete:
+      tags: [用户管理]
+      summary: 删除用户（管理员）
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 删除成功
+
+  /api/users/{id}/password:
+    post:
+      tags: [用户管理]
+      summary: 管理员重置用户密码
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_password]
+              properties:
+                new_password:
+                  type: string
+                  minLength: 6
+      responses:
+        '200':
+          description: 重置成功
+
+  # ===== API Key =====
+  /api/keys:
+    get:
+      tags: [API Key]
+      summary: 列出当前用户的 API Key
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/APIKey'
+    post:
+      tags: [API Key]
+      summary: 创建 API Key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                expires_at:
+                  type: string
+                  format: date-time
+      responses:
+        '201':
+          description: 创建成功（返回完整 key，仅此一次）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIKeyCreated'
+
+  /api/keys/{id}:
+    get:
+      tags: [API Key]
+      summary: 获取 API Key 详情
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIKey'
+    delete:
+      tags: [API Key]
+      summary: 删除 API Key
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 删除成功
+
+  /api/keys/{id}/revoke:
+    post:
+      tags: [API Key]
+      summary: 吊销 API Key
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 吊销成功
+
+  # ===== 代理 =====
+  /v1/messages:
+    post:
+      tags: [代理]
+      summary: 发送消息（兼容 Anthropic API）
+      description: |
+        代理端点，兼容 Anthropic Messages API。
+        支持智能路由：根据请求内容自动选择最优模型和端点。
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MessagesRequest'
+      responses:
+        '200':
+          description: 成功
+          headers:
+            X-Proxy-Endpoint:
+              schema:
+                type: string
+              description: 实际使用的端点
+            X-Proxy-Model:
+              schema:
+                type: string
+              description: 实际使用的模型
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessagesResponse'
+
+  # ===== 日志 =====
+  /api/logs:
+    get:
+      tags: [日志]
+      summary: 查询请求日志（管理员）
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: model
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedLogs'
+    delete:
+      tags: [日志]
+      summary: 清除请求日志（管理员）
+      responses:
+        '200':
+          description: 清除成功
+
+  /api/logs/stats:
+    get:
+      tags: [日志]
+      summary: 获取日志统计（管理员）
+      responses:
+        '200':
+          description: 成功
+
+  /api/logs/{id}:
+    get:
+      tags: [日志]
+      summary: 获取日志详情（管理员）
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: 成功
+
+  /api/logs/{id}/mark-inaccurate:
+    post:
+      tags: [日志]
+      summary: 标记路由不准确（管理员）
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: 标记成功
+
+  # ===== 系统状态 =====
+  /api/health:
+    get:
+      tags: [系统状态]
+      summary: 健康检查
+      security: []
+      responses:
+        '200':
+          description: 服务健康
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /api/status:
+    get:
+      tags: [系统状态]
+      summary: 获取系统状态
+      responses:
+        '200':
+          description: 成功
+
+  /api/routing/debug:
+    get:
+      tags: [系统状态]
+      summary: 路由调试信息
+      responses:
+        '200':
+          description: 成功
+
+  /api/routing/test:
+    post:
+      tags: [系统状态]
+      summary: 测试路由
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+      responses:
+        '200':
+          description: 路由测试结果
+
+  /api/health/check-now:
+    post:
+      tags: [系统状态]
+      summary: 立即触发健康检查（管理员）
+      responses:
+        '200':
+          description: 检查已触发
+
+  # ===== 配置管理 =====
+  /api/config/routing:
+    get:
+      tags: [配置管理]
+      summary: 获取路由配置（管理员）
+      responses:
+        '200':
+          description: 成功
+    put:
+      tags: [配置管理]
+      summary: 更新路由配置（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 更新成功
+
+  /api/config/load-balance:
+    get:
+      tags: [配置管理]
+      summary: 获取负载均衡配置（管理员）
+      responses:
+        '200':
+          description: 成功
+    put:
+      tags: [配置管理]
+      summary: 更新负载均衡配置（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 更新成功
+
+  /api/config/health-check:
+    get:
+      tags: [配置管理]
+      summary: 获取健康检查配置（管理员）
+      responses:
+        '200':
+          description: 成功
+    put:
+      tags: [配置管理]
+      summary: 更新健康检查配置（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 更新成功
+
+  /api/config/ui:
+    get:
+      tags: [配置管理]
+      summary: 获取 UI 配置（管理员）
+      responses:
+        '200':
+          description: 成功
+    put:
+      tags: [配置管理]
+      summary: 更新 UI 配置（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 更新成功
+
+  /api/config/reload:
+    post:
+      tags: [配置管理]
+      summary: 重新加载配置（管理员）
+      responses:
+        '200':
+          description: 重载成功
+
+  /api/config/migrate:
+    post:
+      tags: [配置管理]
+      summary: 迁移配置（管理员）
+      responses:
+        '200':
+          description: 迁移成功
+
+  /api/config/endpoints:
+    get:
+      tags: [配置管理]
+      summary: 列出端点（管理员）
+      responses:
+        '200':
+          description: 成功
+    post:
+      tags: [配置管理]
+      summary: 创建端点（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: 创建成功
+
+  /api/config/endpoints/{endpoint_id}:
+    delete:
+      tags: [配置管理]
+      summary: 删除端点（管理员）
+      parameters:
+        - name: endpoint_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功
+
+  # ===== 模型管理 =====
+  /api/config/models:
+    get:
+      tags: [模型管理]
+      summary: 列出所有模型（管理员）
+      responses:
+        '200':
+          description: 成功
+    post:
+      tags: [模型管理]
+      summary: 创建模型（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: 创建成功
+
+  /api/config/models/{model_id}:
+    get:
+      tags: [模型管理]
+      summary: 获取模型详情（管理员）
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+    put:
+      tags: [模型管理]
+      summary: 更新模型（管理员）
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 更新成功
+    delete:
+      tags: [模型管理]
+      summary: 删除模型（管理员）
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功
+
+  # ===== 提供商管理 =====
+  /api/config/providers:
+    get:
+      tags: [提供商管理]
+      summary: 列出所有提供商（管理员）
+      responses:
+        '200':
+          description: 成功
+    post:
+      tags: [提供商管理]
+      summary: 创建提供商（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: 创建成功
+
+  /api/config/providers/{provider_id}:
+    get:
+      tags: [提供商管理]
+      summary: 获取提供商详情（管理员）
+      parameters:
+        - name: provider_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+    put:
+      tags: [提供商管理]
+      summary: 更新提供商（管理员）
+      parameters:
+        - name: provider_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 更新成功
+    delete:
+      tags: [提供商管理]
+      summary: 删除提供商（管理员）
+      parameters:
+        - name: provider_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功
+
+  /api/config/providers/{provider_id}/models:
+    get:
+      tags: [提供商管理]
+      summary: 获取提供商的模型列表（管理员）
+      parameters:
+        - name: provider_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+
+  /api/config/detect-models:
+    post:
+      tags: [提供商管理]
+      summary: 检测提供商可用模型（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 检测结果
+
+  # ===== 路由规则 =====
+  /api/config/routing/models:
+    get:
+      tags: [路由规则]
+      summary: 列出路由模型（管理员）
+      responses:
+        '200':
+          description: 成功
+    post:
+      tags: [路由规则]
+      summary: 创建路由模型（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: 创建成功
+
+  /api/config/routing/models/{model_id}:
+    get:
+      tags: [路由规则]
+      summary: 获取路由模型详情（管理员）
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+    put:
+      tags: [路由规则]
+      summary: 更新路由模型（管理员）
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 更新成功
+    delete:
+      tags: [路由规则]
+      summary: 删除路由模型（管理员）
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功
+
+  /api/config/routing/llm-config:
+    get:
+      tags: [路由规则]
+      summary: 获取 LLM 路由配置（管理员）
+      responses:
+        '200':
+          description: 成功
+    put:
+      tags: [路由规则]
+      summary: 更新 LLM 路由配置（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 更新成功
+
+  /api/config/routing/rules:
+    get:
+      tags: [路由规则]
+      summary: 列出所有路由规则（管理员）
+      responses:
+        '200':
+          description: 成功
+    post:
+      tags: [路由规则]
+      summary: 创建路由规则（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '201':
+          description: 创建成功
+
+  /api/config/routing/rules/builtin:
+    get:
+      tags: [路由规则]
+      summary: 列出内置规则（管理员）
+      responses:
+        '200':
+          description: 成功
+
+  /api/config/routing/rules/custom:
+    get:
+      tags: [路由规则]
+      summary: 列出自定义规则（管理员）
+      responses:
+        '200':
+          description: 成功
+
+  /api/config/routing/rules/stats:
+    get:
+      tags: [路由规则]
+      summary: 获取规则统计（管理员）
+      responses:
+        '200':
+          description: 成功
+
+  /api/config/routing/rules/test:
+    post:
+      tags: [路由规则]
+      summary: 测试消息匹配规则（管理员）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+      responses:
+        '200':
+          description: 匹配结果
+
+  /api/config/routing/rules/{rule_id}:
+    get:
+      tags: [路由规则]
+      summary: 获取规则详情（管理员）
+      parameters:
+        - name: rule_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 成功
+    put:
+      tags: [路由规则]
+      summary: 更新规则（管理员）
+      parameters:
+        - name: rule_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: 更新成功
+    delete:
+      tags: [路由规则]
+      summary: 删除规则（管理员）
+      parameters:
+        - name: rule_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 删除成功
+
+  # ===== 缓存 =====
+  /api/cache/stats:
+    get:
+      tags: [缓存]
+      summary: 获取缓存统计（管理员）
+      responses:
+        '200':
+          description: 成功
+
+  /api/cache/stats/timeseries:
+    get:
+      tags: [缓存]
+      summary: 获取缓存时序数据（管理员）
+      responses:
+        '200':
+          description: 成功
+
+  /api/cache/entries:
+    get:
+      tags: [缓存]
+      summary: 获取缓存条目（管理员）
+      responses:
+        '200':
+          description: 成功
+
+  /api/cache/clear:
+    post:
+      tags: [缓存]
+      summary: 清除缓存（管理员）
+      responses:
+        '200':
+          description: 清除成功
+
+  /api/cache/stats/reset:
+    post:
+      tags: [缓存]
+      summary: 重置缓存统计（管理员）
+      responses:
+        '200':
+          description: 重置成功
+
+  # ===== 路由分析 =====
+  /api/routing/analysis/stats:
+    get:
+      tags: [日志]
+      summary: 获取路由分析统计（管理员）
+      responses:
+        '200':
+          description: 成功
+
+  /api/routing/analysis/inaccurate:
+    get:
+      tags: [日志]
+      summary: 获取不准确路由记录（管理员）
+      responses:
+        '200':
+          description: 成功
+
+  /api/routing/analysis/export:
+    get:
+      tags: [日志]
+      summary: 导出路由数据（管理员）
+      responses:
+        '200':
+          description: 成功
+
+  # ===== 系统日志 =====
+  /api/system-logs:
+    get:
+      tags: [系统日志]
+      summary: 获取系统日志
+      parameters:
+        - name: level
+          in: query
+          schema:
+            type: string
+            enum: [debug, info, warn, error]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        '200':
+          description: 成功
+
+  /api/system-logs/stream:
+    get:
+      tags: [系统日志]
+      summary: 实时系统日志流（SSE）
+      responses:
+        '200':
+          description: SSE 事件流
+
+  /api/system-logs/clear:
+    post:
+      tags: [系统日志]
+      summary: 清除系统日志（管理员）
+      responses:
+        '200':
+          description: 清除成功
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: session_token
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: API Key 认证
+
+  schemas:
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          $ref: '#/components/schemas/CurrentUser'
+
+    CurrentUser:
+      type: object
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        role:
+          type: string
+          enum: [admin, user]
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        role:
+          type: string
+          enum: [admin, user]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateUserRequest:
+      type: object
+      required: [username, password, role]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          minLength: 6
+        role:
+          type: string
+          enum: [admin, user]
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        username:
+          type: string
+        role:
+          type: string
+          enum: [admin, user]
+
+    APIKey:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        key_prefix:
+          type: string
+          description: Key 前缀（用于识别）
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+
+    APIKeyCreated:
+      allOf:
+        - $ref: '#/components/schemas/APIKey'
+        - type: object
+          properties:
+            key:
+              type: string
+              description: 完整 API Key（仅创建时返回）
+
+    MessagesRequest:
+      type: object
+      required: [model, messages, max_tokens]
+      properties:
+        model:
+          type: string
+          example: claude-sonnet-4-20250514
+        messages:
+          type: array
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role:
+                type: string
+                enum: [user, assistant]
+              content:
+                type: string
+        max_tokens:
+          type: integer
+          example: 1024
+        system:
+          type: string
+        temperature:
+          type: number
+          format: float
+        stream:
+          type: boolean
+
+    MessagesResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          example: message
+        role:
+          type: string
+          example: assistant
+        content:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              text:
+                type: string
+        model:
+          type: string
+        stop_reason:
+          type: string
+        usage:
+          type: object
+          properties:
+            input_tokens:
+              type: integer
+            output_tokens:
+              type: integer
+
+    PaginatedLogs:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer

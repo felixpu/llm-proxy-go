@@ -1,0 +1,296 @@
+/* ========================================
+   模态框和对话框
+   ======================================== */
+
+/* 模态框 */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: var(--spacing-2xl);
+    backdrop-filter: blur(4px);
+}
+
+.modal.hidden {
+    display: none;
+}
+
+/* 模态框内容容器 - 核心 flex 布局 */
+.modal-content {
+    background: var(--bg-elevated);
+    border-radius: var(--radius-xl);
+    max-width: 500px;
+    width: 100%;
+    max-height: min(90vh, 700px);
+    box-shadow: var(--shadow-2xl);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+    animation: modalSlideIn 0.2s ease-out;
+}
+
+@keyframes modalSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px) scale(0.98);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* 宽模态框变体 */
+.modal-content.modal-lg {
+    max-width: 700px;
+}
+
+.modal-content.modal-xl {
+    max-width: 900px;
+}
+
+/* 模态框头部 - 固定不滚动 */
+.modal-header {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--spacing-lg) var(--spacing-xl);
+    border-bottom: 1px solid var(--border-color);
+    background-color: var(--card-bg);
+    position: relative;
+    z-index: 1;
+}
+
+.modal-header h3 {
+    font-size: var(--font-size-lg);
+    font-weight: var(--font-weight-semibold);
+    margin: 0;
+    line-height: 1.4;
+}
+
+.modal-close {
+    flex: 0 0 auto;
+    background: none;
+    border: none;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--font-size-2xl);
+    cursor: pointer;
+    color: var(--text-muted);
+    line-height: 1;
+    border-radius: var(--radius-sm);
+    transition: all var(--transition-fast);
+    margin: calc(var(--spacing-sm) * -1);
+}
+
+.modal-close:hover {
+    color: var(--text-color);
+    background-color: var(--hover-bg);
+}
+
+/* 模态框主体 - 可滚动区域 */
+.modal-body {
+    flex: 1 1 auto;
+    padding: var(--spacing-xl);
+    overflow-y: auto;
+    overflow-x: hidden;
+    min-height: 0; /* 关键：允许 flex 子元素收缩 */
+    overscroll-behavior: contain;
+}
+
+/* 自定义滚动条样式 */
+.modal-body::-webkit-scrollbar {
+    width: 6px;
+}
+
+.modal-body::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.modal-body::-webkit-scrollbar-thumb {
+    background-color: var(--border-color);
+    border-radius: 3px;
+}
+
+.modal-body::-webkit-scrollbar-thumb:hover {
+    background-color: var(--text-muted);
+}
+
+/* 模态框内的表单不应影响滚动 */
+.modal-body > form {
+    display: contents;
+}
+
+/* 模态框底部 - 固定不滚动 */
+.modal-footer {
+    flex: 0 0 auto;
+    padding: var(--spacing-lg) var(--spacing-xl);
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    gap: var(--spacing-md);
+    background-color: var(--card-bg);
+    position: relative;
+    z-index: 1;
+}
+
+/* 底部左对齐内容 */
+.modal-footer-left {
+    margin-right: auto;
+}
+
+/* 底部按钮组 */
+.modal-footer .btn-group {
+    display: flex;
+    gap: var(--spacing-sm);
+}
+
+/* 确认对话框 */
+.confirm-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1100;
+    backdrop-filter: blur(2px);
+}
+
+.confirm-dialog {
+    background: var(--card-bg);
+    border-radius: var(--radius-xl);
+    width: 100%;
+    max-width: 400px;
+    padding: var(--spacing-2xl);
+    text-align: center;
+    box-shadow: var(--shadow-2xl);
+}
+
+.confirm-icon {
+    width: 56px;
+    height: 56px;
+    margin: 0 auto var(--spacing-lg);
+    border-radius: var(--radius-full);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.confirm-icon svg {
+    width: 28px;
+    height: 28px;
+}
+
+.confirm-warning .confirm-icon {
+    background: #fef3c7;
+    color: var(--warning-color);
+}
+
+.confirm-danger .confirm-icon {
+    background: #fee2e2;
+    color: var(--danger-color);
+}
+
+.confirm-info .confirm-icon {
+    background: #dbeafe;
+    color: var(--info-color);
+}
+
+.confirm-title {
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-semibold);
+    color: var(--text-color);
+    margin-bottom: var(--spacing-sm);
+}
+
+.confirm-message {
+    font-size: var(--font-size-base);
+    color: var(--text-color);
+    margin-bottom: var(--spacing-xs);
+    line-height: 1.5;
+}
+
+.confirm-detail {
+    font-size: var(--font-size-sm);
+    color: var(--text-muted);
+    margin-bottom: var(--spacing-lg);
+}
+
+.confirm-actions {
+    display: flex;
+    gap: var(--spacing-md);
+    justify-content: center;
+    margin-top: var(--spacing-xl);
+}
+
+.confirm-actions .btn {
+    min-width: 100px;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+    .modal {
+        backdrop-filter: none;
+    }
+
+    .modal-content {
+        width: calc(100% - var(--spacing-xl));
+        max-width: none;
+        margin: var(--spacing-lg);
+        max-height: calc(100vh - var(--spacing-2xl));
+        animation: none;
+    }
+
+    /* 修复移动端原生 select 定位问题 - 使用浏览器原生选择器 */
+    .modal-body select {
+        appearance: auto;
+        -webkit-appearance: menulist;
+        -moz-appearance: menulist;
+    }
+
+    .modal-header,
+    .modal-body,
+    .modal-footer {
+        padding: var(--spacing-lg);
+    }
+
+    .modal-footer {
+        flex-direction: column-reverse;
+        gap: var(--spacing-sm);
+    }
+
+    .modal-footer .btn {
+        width: 100%;
+    }
+
+    .confirm-dialog {
+        max-width: calc(100% - var(--spacing-2xl));
+        padding: var(--spacing-xl);
+    }
+
+    .confirm-actions {
+        flex-direction: column-reverse;
+    }
+
+    .confirm-actions .btn {
+        width: 100%;
+        min-width: auto;
+    }
+}

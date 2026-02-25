@@ -1,0 +1,155 @@
+/* ========================================
+   API Keys 页面样式
+   ======================================== */
+
+/* API Key 显示 */
+.api-key-display {
+    font-family: var(--font-mono);
+    background: linear-gradient(135deg, var(--bg-surface) 0%, var(--bg-hover) 100%);
+    padding: var(--spacing-md) var(--spacing-lg);
+    border-radius: var(--radius-lg);
+    word-break: break-all;
+    border: 1px solid var(--border-color);
+    font-size: var(--font-size-sm);
+    line-height: 1.6;
+    position: relative;
+}
+
+.api-key-display::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 4px;
+    height: 100%;
+    background: linear-gradient(180deg, var(--color-primary), #8b5cf6);
+    border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+}
+
+.api-key-warning {
+    background: var(--color-warning-bg);
+    border: 1px solid var(--color-warning-border);
+    color: var(--color-warning);
+    padding: var(--spacing-md) var(--spacing-lg);
+    border-radius: var(--radius-lg);
+    margin-top: var(--spacing-md);
+    font-size: var(--font-size-sm);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+    .api-key-display {
+        padding: var(--spacing-sm) var(--spacing-md);
+        font-size: 11px;
+    }
+
+    .api-key-warning {
+        padding: var(--spacing-sm) var(--spacing-md);
+        font-size: 12px;
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    /* 移动端隐藏表格,显示卡片 */
+    .keys-table-container {
+        display: none;
+    }
+
+    .keys-mobile {
+        display: flex;
+        flex-direction: column;
+        gap: var(--spacing-md);
+    }
+
+    .key-card {
+        background: var(--card-bg);
+        border-radius: var(--radius-lg);
+        padding: var(--spacing-md);
+        border: 1px solid var(--border-color);
+        box-shadow: var(--shadow-sm);
+    }
+
+    .key-card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: var(--spacing-sm);
+        padding-bottom: var(--spacing-sm);
+        border-bottom: 1px solid var(--border-color);
+    }
+
+    .key-card-title {
+        font-weight: var(--font-weight-semibold);
+        font-size: var(--font-size-base);
+        color: var(--text-primary);
+        margin-bottom: 4px;
+    }
+
+    .key-card-prefix {
+        font-size: var(--font-size-sm);
+        color: var(--text-secondary);
+    }
+
+    .key-card-prefix code {
+        font-family: var(--font-mono);
+        font-size: var(--font-size-xs);
+    }
+
+    .key-card-body {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: var(--spacing-sm);
+        margin-bottom: var(--spacing-md);
+    }
+
+    .key-stat {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .key-stat-label {
+        font-size: var(--font-size-xs);
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .key-stat-value {
+        font-size: var(--font-size-sm);
+        font-weight: var(--font-weight-medium);
+        color: var(--text-primary);
+    }
+
+    .key-stat.full-width {
+        grid-column: 1 / -1;
+    }
+
+    .key-card-actions {
+        display: flex;
+        gap: var(--spacing-xs);
+        flex-direction: column;
+    }
+
+    .key-card-actions .btn {
+        width: 100%;
+        justify-content: center;
+        gap: var(--spacing-xs);
+    }
+
+    .key-card-actions .btn svg {
+        width: 14px;
+        height: 14px;
+        flex-shrink: 0;
+    }
+}
+
+/* 桌面端隐藏移动端卡片 */
+@media (min-width: 769px) {
+    .keys-mobile {
+        display: none;
+    }
+}
