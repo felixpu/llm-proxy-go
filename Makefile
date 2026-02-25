@@ -6,6 +6,7 @@ GIT_COMMIT   := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown"
 BUILD_TIME   := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 VERSION_PKG  := $(MODULE)/internal/version
 
+# LDFLAGS 唯一定义处
 LDFLAGS := -s -w \
     -X '$(VERSION_PKG).Version=$(VERSION)' \
     -X '$(VERSION_PKG).GitCommit=$(GIT_COMMIT)' \
@@ -18,8 +19,41 @@ BINARY       := $(APP_NAME)
 GOOS     := $(shell go env GOOS)
 GOARCH   := $(shell go env GOARCH)
 
-.PHONY: build build-linux-amd64 build-linux-arm64 build-darwin-amd64 build-darwin-arm64 \
-        build-windows-amd64 release clean docker docker-compose version \
+# 跨平台构建目标列表
+PLATFORMS := linux-amd64 linux-arm64 darwin-amd64 darwin-arm64 windows-amd64
+
+# ============ 跨平台构建模板 ============
+
+# binary_name(os) — windows 加 .exe 后缀
+binary_name = $(if $(filter windows,$(1)),$(DIST_DIR)/$(APP_NAME)-$(1)-$(2).exe,$(DIST_DIR)/$(APP_NAME)-$(1)-$(2))
+
+# 生成 build-<os>-<arch> target
+define BUILD_TEMPLATE
+build-$(1)-$(2):
+	@echo "Building for $(1)/$(2)..."
+	@mkdir -p $(DIST_DIR)
+	CGO_ENABLED=0 GOOS=$(1) GOARCH=$(2) \
+	    go build -ldflags "$$(LDFLAGS)" -o $$(call binary_name,$(1),$(2)) ./cmd/llm-proxy
+endef
+
+# 生成 release-<os>-<arch> target
+define RELEASE_TEMPLATE
+release-$(1)-$(2): build-$(1)-$(2)
+	@./scripts/build.sh --binary $$(call binary_name,$(1),$(2)) --os $(1) --arch $(2) --version $$(VERSION)
+endef
+
+# 展开所有平台的 build 和 release target
+$(foreach p,$(PLATFORMS),$(eval $(call BUILD_TEMPLATE,$(word 1,$(subst -, ,$(p))),$(word 2,$(subst -, ,$(p))))))
+$(foreach p,$(PLATFORMS),$(eval $(call RELEASE_TEMPLATE,$(word 1,$(subst -, ,$(p))),$(word 2,$(subst -, ,$(p))))))
+
+# ============ .PHONY 声明 ============
+
+BUILD_TARGETS  := $(foreach p,$(PLATFORMS),build-$(p))
+RELEASE_TARGETS := $(foreach p,$(PLATFORMS),release-$(p))
+
+.PHONY: build build-all $(BUILD_TARGETS) \
+        release release-all $(RELEASE_TARGETS) \
+        clean docker docker-compose version \
         test test-unit test-integration test-e2e test-all test-coverage help
 
 # ============ 构建目标 ============
@@ -29,35 +63,14 @@ build:
 	CGO_ENABLED=$(CGO_ENABLED) go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/llm-proxy
 	@echo "Done: ./$(BINARY)"
 
-build-linux-amd64:
-	@echo "Building for linux/amd64..."
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-	    go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-linux-amd64 ./cmd/llm-proxy
-
-build-linux-arm64:
-	@echo "Building for linux/arm64..."
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-	    go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-linux-arm64 ./cmd/llm-proxy
-
-build-darwin-amd64:
-	@echo "Building for darwin/amd64..."
-	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 \
-	    go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-darwin-amd64 ./cmd/llm-proxy
-
-build-darwin-arm64:
-	@echo "Building for darwin/arm64..."
-	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 \
-	    go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-darwin-arm64 ./cmd/llm-proxy
-
-build-windows-amd64:
-	@echo "Building for windows/amd64..."
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 \
-	    go build -ldflags "$(LDFLAGS)" -o $(DIST_DIR)/$(APP_NAME)-windows-amd64.exe ./cmd/llm-proxy
+build-all: $(BUILD_TARGETS)
 
 # ============ 发布目标 ============
 
 release: build
-	@./scripts/build.sh --version $(VERSION)
+	@./scripts/build.sh --binary ./$(BINARY) --os $(GOOS) --arch $(GOARCH) --version $(VERSION)
+
+release-all: $(RELEASE_TARGETS)
 
 # ============ Docker 目标 ============
 
@@ -65,7 +78,8 @@ docker:
 	docker build -t $(APP_NAME):$(VERSION) -t $(APP_NAME):latest \
 	    --build-arg VERSION=$(VERSION) \
 	    --build-arg GIT_COMMIT=$(GIT_COMMIT) \
-	    --build-arg BUILD_TIME=$(BUILD_TIME) .
+	    --build-arg BUILD_TIME=$(BUILD_TIME) \
+	    --build-arg MODULE=$(MODULE) .
 
 docker-compose:
 	docker-compose up -d --build
@@ -112,22 +126,23 @@ test-coverage:
 
 help:
 	@echo "Build targets:"
-	@echo "  make build              - Build for current platform"
-	@echo "  make build-linux-amd64  - Cross-compile for Linux x64"
-	@echo "  make build-linux-arm64  - Cross-compile for Linux arm64"
-	@echo "  make build-darwin-amd64 - Cross-compile for macOS x64"
-	@echo "  make build-darwin-arm64 - Cross-compile for macOS arm64"
-	@echo "  make build-windows-amd64 - Cross-compile for Windows x64"
-	@echo "  make release            - Build + create release archive"
-	@echo "  make docker             - Build Docker image"
-	@echo "  make docker-compose     - Start with docker-compose"
-	@echo "  make clean              - Remove build artifacts"
-	@echo "  make version            - Show current version"
+	@echo "  make build                - Build for current platform"
+	@echo "  make build-<os>-<arch>    - Cross-compile (e.g. build-linux-amd64)"
+	@echo "  make build-all            - Cross-compile all platforms"
+	@echo "  make release              - Build + create release archive (current platform)"
+	@echo "  make release-<os>-<arch>  - Build + release for specific platform"
+	@echo "  make release-all          - Build + release all platforms"
+	@echo "  make docker               - Build Docker image"
+	@echo "  make docker-compose       - Start with docker-compose"
+	@echo "  make clean                - Remove build artifacts"
+	@echo "  make version              - Show current version"
 	@echo ""
 	@echo "Test targets:"
-	@echo "  make test               - Run unit tests (default)"
-	@echo "  make test-unit          - Run unit tests only"
-	@echo "  make test-integration   - Run integration tests"
-	@echo "  make test-e2e           - Run E2E tests"
-	@echo "  make test-all           - Run all tests"
-	@echo "  make test-coverage      - Run tests with coverage report"
+	@echo "  make test                 - Run unit tests (default)"
+	@echo "  make test-unit            - Run unit tests only"
+	@echo "  make test-integration     - Run integration tests"
+	@echo "  make test-e2e             - Run E2E tests"
+	@echo "  make test-all             - Run all tests"
+	@echo "  make test-coverage        - Run tests with coverage report"
+	@echo ""
+	@echo "Platforms: $(PLATFORMS)"

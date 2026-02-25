@@ -7,6 +7,7 @@ FROM golang:1.24-bookworm AS builder
 ARG VERSION=dev
 ARG GIT_COMMIT=unknown
 ARG BUILD_TIME=unknown
+ARG MODULE=github.com/user/llm-proxy-go
 
 WORKDIR /build
 
@@ -20,9 +21,9 @@ COPY . .
 # 编译（纯 Go，无需 CGO）
 RUN CGO_ENABLED=0 go build \
     -ldflags "-s -w \
-        -X 'github.com/user/llm-proxy-go/internal/version.Version=${VERSION}' \
-        -X 'github.com/user/llm-proxy-go/internal/version.GitCommit=${GIT_COMMIT}' \
-        -X 'github.com/user/llm-proxy-go/internal/version.BuildTime=${BUILD_TIME}'" \
+        -X '${MODULE}/internal/version.Version=${VERSION}' \
+        -X '${MODULE}/internal/version.GitCommit=${GIT_COMMIT}' \
+        -X '${MODULE}/internal/version.BuildTime=${BUILD_TIME}'" \
     -o llm-proxy ./cmd/llm-proxy
 
 # ============ 运行阶段 ============
