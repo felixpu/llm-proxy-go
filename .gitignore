@@ -1,0 +1,21 @@
+# Log files
+logs/
+*.log
+
+# Binary
+llm-proxy
+*.exe
+
+# Build artifacts
+dist/
+
+# Environment
+.env
+
+# Database
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# IDE / local config
+.claude/
