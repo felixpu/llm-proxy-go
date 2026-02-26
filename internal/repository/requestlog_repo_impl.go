@@ -120,7 +120,8 @@ func (r *RequestLogRepositoryImpl) List(
 	return logs, total, rows.Err()
 }
 
-// GetStatistics retrieves aggregated statistics.
+// GetStatistics retrieves aggregated statistics. Queries run sequentially
+// to stay compatible with single-connection SQLite (e.g. in-memory test DBs).
 func (r *RequestLogRepositoryImpl) GetStatistics(
 	ctx context.Context,
 	startTime, endTime *time.Time,
@@ -130,7 +131,9 @@ func (r *RequestLogRepositoryImpl) GetStatistics(
 ) (*LogStatistics, error) {
 	whereSQL, params := r.buildWhere(userID, modelName, endpointName, startTime, endTime, success)
 
-	// Overall statistics
+	var stats LogStatistics
+
+	// 1. Overall statistics
 	overallQuery := fmt.Sprintf(`
 		SELECT
 			COUNT(*) as total_requests,
@@ -145,84 +148,77 @@ func (r *RequestLogRepositoryImpl) GetStatistics(
 		FROM request_logs
 		WHERE %s
 	`, whereSQL)
-
-	var stats LogStatistics
-	err := r.readDB.QueryRowContext(ctx, overallQuery, params...).Scan(
+	if err := r.readDB.QueryRowContext(ctx, overallQuery, params...).Scan(
 		&stats.TotalRequests, &stats.TotalCost, &stats.AvgLatency,
 		&stats.SuccessRate, &stats.TotalInputTokens, &stats.TotalOutputTokens,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, fmt.Errorf("failed to get overall statistics: %w", err)
 	}
-
-	// Round values
 	stats.TotalCost = roundToPlaces(stats.TotalCost, 6)
 	stats.AvgLatency = roundToPlaces(stats.AvgLatency, 2)
 	stats.SuccessRate = roundToPlaces(stats.SuccessRate, 2)
 
-	// By model statistics
-	modelQuery := fmt.Sprintf(`
-		SELECT
-			model_name,
-			COUNT(*) as requests,
-			COALESCE(SUM(cost), 0) as cost,
-			COALESCE(AVG(latency_ms), 0) as avg_latency,
-			COALESCE(SUM(input_tokens), 0) as input_tokens,
-			COALESCE(SUM(output_tokens), 0) as output_tokens
-		FROM request_logs
-		WHERE %s
-		GROUP BY model_name
-		ORDER BY requests DESC
-	`, whereSQL)
-
-	modelRows, err := r.readDB.QueryContext(ctx, modelQuery, params...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get model statistics: %w", err)
-	}
-	defer modelRows.Close()
-
-	for modelRows.Next() {
-		var ms ModelStatistics
-		if err := modelRows.Scan(&ms.ModelName, &ms.Requests, &ms.Cost, &ms.AvgLatency, &ms.InputTokens, &ms.OutputTokens); err != nil {
-			return nil, fmt.Errorf("failed to scan model statistics: %w", err)
-		}
-		ms.Cost = roundToPlaces(ms.Cost, 6)
-		ms.AvgLatency = roundToPlaces(ms.AvgLatency, 2)
-		stats.ByModel = append(stats.ByModel, ms)
-	}
-
-	// By endpoint statistics
-	endpointQuery := fmt.Sprintf(`
-		SELECT
-			endpoint_name,
-			COUNT(*) as requests,
-			COALESCE(SUM(cost), 0) as cost,
-			COALESCE(AVG(latency_ms), 0) as avg_latency,
-			CASE WHEN COUNT(*) > 0
-				THEN SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*)
+	// 2. By model + by endpoint in a single UNION ALL query
+	unionQuery := fmt.Sprintf(`
+		SELECT 'model' AS kind, model_name AS name,
+			COUNT(*) AS requests, COALESCE(SUM(cost),0) AS cost,
+			COALESCE(AVG(latency_ms),0) AS avg_latency,
+			COALESCE(SUM(input_tokens),0) AS input_tokens,
+			COALESCE(SUM(output_tokens),0) AS output_tokens,
+			0 AS success_rate
+		FROM request_logs WHERE %s GROUP BY model_name
+		UNION ALL
+		SELECT 'endpoint' AS kind, endpoint_name AS name,
+			COUNT(*) AS requests, COALESCE(SUM(cost),0) AS cost,
+			COALESCE(AVG(latency_ms),0) AS avg_latency,
+			0 AS input_tokens, 0 AS output_tokens,
+			CASE WHEN COUNT(*)>0
+				THEN SUM(CASE WHEN success=1 THEN 1 ELSE 0 END)*100.0/COUNT(*)
 				ELSE 0
-			END as success_rate
-		FROM request_logs
-		WHERE %s
-		GROUP BY endpoint_name
-		ORDER BY requests DESC
-	`, whereSQL)
+			END AS success_rate
+		FROM request_logs WHERE %s GROUP BY endpoint_name
+	`, whereSQL, whereSQL)
 
-	endpointRows, err := r.readDB.QueryContext(ctx, endpointQuery, params...)
+	// params are used twice (once per sub-query)
+	unionParams := make([]any, 0, len(params)*2)
+	unionParams = append(unionParams, params...)
+	unionParams = append(unionParams, params...)
+
+	rows, err := r.readDB.QueryContext(ctx, unionQuery, unionParams...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get endpoint statistics: %w", err)
+		return nil, fmt.Errorf("failed to get grouped statistics: %w", err)
 	}
-	defer endpointRows.Close()
+	defer rows.Close()
 
-	for endpointRows.Next() {
-		var es EndpointStatistics
-		if err := endpointRows.Scan(&es.EndpointName, &es.Requests, &es.Cost, &es.AvgLatency, &es.SuccessRate); err != nil {
-			return nil, fmt.Errorf("failed to scan endpoint statistics: %w", err)
+	for rows.Next() {
+		var kind, name string
+		var requests, inputTokens, outputTokens int64
+		var cost, avgLatency, successRate float64
+		if err := rows.Scan(&kind, &name, &requests, &cost, &avgLatency, &inputTokens, &outputTokens, &successRate); err != nil {
+			return nil, fmt.Errorf("failed to scan grouped statistics: %w", err)
 		}
-		es.Cost = roundToPlaces(es.Cost, 6)
-		es.AvgLatency = roundToPlaces(es.AvgLatency, 2)
-		es.SuccessRate = roundToPlaces(es.SuccessRate, 2)
-		stats.ByEndpoint = append(stats.ByEndpoint, es)
+		switch kind {
+		case "model":
+			stats.ByModel = append(stats.ByModel, ModelStatistics{
+				ModelName:    name,
+				Requests:     requests,
+				Cost:         roundToPlaces(cost, 6),
+				AvgLatency:   roundToPlaces(avgLatency, 2),
+				InputTokens:  inputTokens,
+				OutputTokens: outputTokens,
+			})
+		case "endpoint":
+			stats.ByEndpoint = append(stats.ByEndpoint, EndpointStatistics{
+				EndpointName: name,
+				Requests:     requests,
+				Cost:         roundToPlaces(cost, 6),
+				AvgLatency:   roundToPlaces(avgLatency, 2),
+				SuccessRate:  roundToPlaces(successRate, 2),
+			})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate grouped statistics: %w", err)
 	}
 
 	return &stats, nil
@@ -481,4 +477,130 @@ type EndpointStatistics struct {
 	Cost         float64 `json:"cost"`
 	AvgLatency   float64 `json:"avg_latency"`
 	SuccessRate  float64 `json:"success_rate"`
+}
+
+// RoutingAggregation holds SQL-aggregated routing statistics.
+type RoutingAggregation struct {
+	TotalRequests   int64
+	MethodCounts    map[string]int64
+	RuleCounts      map[string]int64
+	RuleIDs         map[string]*int64
+	InaccurateCount int64
+}
+
+// GetRoutingAggregation returns routing method/rule counts via SQL aggregation.
+func (r *RequestLogRepositoryImpl) GetRoutingAggregation(ctx context.Context, startTime, endTime *time.Time) (*RoutingAggregation, error) {
+	whereSQL, params := r.buildWhere(nil, nil, nil, startTime, endTime, nil)
+
+	// Total count
+	var total int64
+	countQ := fmt.Sprintf(`SELECT COUNT(*) FROM request_logs WHERE %s`, whereSQL)
+	if err := r.readDB.QueryRowContext(ctx, countQ, params...).Scan(&total); err != nil {
+		return nil, fmt.Errorf("failed to count logs for routing aggregation: %w", err)
+	}
+
+	agg := &RoutingAggregation{
+		TotalRequests: total,
+		MethodCounts:  make(map[string]int64),
+		RuleCounts:    make(map[string]int64),
+		RuleIDs:       make(map[string]*int64),
+	}
+
+	// Aggregate by routing_method
+	methodQ := fmt.Sprintf(`
+		SELECT COALESCE(NULLIF(routing_method,''), 'unknown') AS method, COUNT(*) AS cnt
+		FROM request_logs WHERE %s GROUP BY method
+	`, whereSQL)
+	methodRows, err := r.readDB.QueryContext(ctx, methodQ, params...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to aggregate routing methods: %w", err)
+	}
+	defer methodRows.Close()
+	for methodRows.Next() {
+		var method string
+		var cnt int64
+		if err := methodRows.Scan(&method, &cnt); err != nil {
+			return nil, fmt.Errorf("failed to scan routing method row: %w", err)
+		}
+		agg.MethodCounts[method] = cnt
+	}
+
+	// Aggregate by matched_rule_name (non-empty only)
+	ruleQ := fmt.Sprintf(`
+		SELECT matched_rule_name, MIN(matched_rule_id) AS rule_id, COUNT(*) AS cnt
+		FROM request_logs
+		WHERE %s AND matched_rule_name != ''
+		GROUP BY matched_rule_name
+	`, whereSQL)
+	ruleRows, err := r.readDB.QueryContext(ctx, ruleQ, params...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to aggregate routing rules: %w", err)
+	}
+	defer ruleRows.Close()
+	for ruleRows.Next() {
+		var name string
+		var ruleID sql.NullInt64
+		var cnt int64
+		if err := ruleRows.Scan(&name, &ruleID, &cnt); err != nil {
+			return nil, fmt.Errorf("failed to scan routing rule row: %w", err)
+		}
+		agg.RuleCounts[name] = cnt
+		if ruleID.Valid {
+			id := ruleID.Int64
+			agg.RuleIDs[name] = &id
+		}
+	}
+
+	// Inaccurate count
+	inaccQ := fmt.Sprintf(`SELECT COUNT(*) FROM request_logs WHERE %s AND is_inaccurate = 1`, whereSQL)
+	if err := r.readDB.QueryRowContext(ctx, inaccQ, params...).Scan(&agg.InaccurateCount); err != nil {
+		return nil, fmt.Errorf("failed to count inaccurate logs: %w", err)
+	}
+
+	return agg, nil
+}
+
+// ListInaccurate returns inaccurate logs with SQL-level filtering and pagination.
+func (r *RequestLogRepositoryImpl) ListInaccurate(ctx context.Context, limit, offset int) ([]*models.RequestLog, int64, error) {
+	// Count
+	var total int64
+	if err := r.readDB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM request_logs WHERE is_inaccurate = 1`,
+	).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("failed to count inaccurate logs: %w", err)
+	}
+
+	query := `
+		SELECT
+			request_logs.id, request_logs.request_id, request_logs.user_id,
+			COALESCE(u.username, '未知用户') as username,
+			request_logs.api_key_id, request_logs.model_name, request_logs.endpoint_name,
+			request_logs.task_type, request_logs.input_tokens, request_logs.output_tokens,
+			request_logs.latency_ms, request_logs.cost, request_logs.status_code,
+			request_logs.success, request_logs.stream, request_logs.created_at,
+			'' as message_preview, '' as request_content, '' as response_content,
+			request_logs.routing_method, request_logs.routing_reason,
+			request_logs.matched_rule_id, request_logs.matched_rule_name, request_logs.all_matches,
+			request_logs.is_inaccurate
+		FROM request_logs
+		LEFT JOIN users u ON request_logs.user_id = u.id
+		WHERE request_logs.is_inaccurate = 1
+		ORDER BY request_logs.created_at DESC
+		LIMIT ? OFFSET ?
+	`
+	rows, err := r.readDB.QueryContext(ctx, query, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query inaccurate logs: %w", err)
+	}
+	defer rows.Close()
+
+	logs := make([]*models.RequestLog, 0)
+	for rows.Next() {
+		log, err := r.scanLog(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		logs = append(logs, log)
+	}
+	return logs, total, rows.Err()
 }

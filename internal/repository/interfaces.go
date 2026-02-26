@@ -80,4 +80,8 @@ type RequestLogRepository interface {
 	Count(ctx context.Context, modelName, endpointName *string, startTime, endTime *time.Time) (int64, error)
 	Delete(ctx context.Context, modelName, endpointName *string, startTime, endTime *time.Time) (int64, error)
 	MarkInaccurate(ctx context.Context, id int64, inaccurate bool) error
+	// GetRoutingAggregation returns routing method/rule counts via SQL aggregation.
+	GetRoutingAggregation(ctx context.Context, startTime, endTime *time.Time) (*RoutingAggregation, error)
+	// ListInaccurate returns inaccurate logs with pagination (SQL-level filtering).
+	ListInaccurate(ctx context.Context, limit, offset int) ([]*models.RequestLog, int64, error)
 }

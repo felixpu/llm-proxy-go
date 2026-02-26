@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -9,6 +10,11 @@ import (
 	"github.com/user/llm-proxy-go/internal/api/middleware"
 	"github.com/user/llm-proxy-go/internal/repository"
 	"go.uber.org/zap"
+)
+
+const (
+	// routingQueryTimeout caps the maximum execution time for routing analysis queries.
+	routingQueryTimeout = 10 * time.Second
 )
 
 // RoutingAnalysisHandler handles routing analysis endpoints.
@@ -54,7 +60,7 @@ type RuleStats struct {
 	Percentage float64 `json:"percentage"`
 }
 
-// GetRoutingStats returns routing decision statistics.
+// GetRoutingStats returns routing decision statistics via SQL aggregation.
 // GET /api/routing/analysis/stats?start_time=...&end_time=...
 func (h *RoutingAnalysisHandler) GetRoutingStats(c *gin.Context) {
 	currentUser := middleware.GetCurrentUser(c)
@@ -63,7 +69,8 @@ func (h *RoutingAnalysisHandler) GetRoutingStats(c *gin.Context) {
 		return
 	}
 
-	ctx := c.Request.Context()
+	ctx, cancel := context.WithTimeout(c.Request.Context(), routingQueryTimeout)
+	defer cancel()
 
 	var startTime, endTime *time.Time
 	if st := c.Query("start_time"); st != "" {
@@ -77,47 +84,21 @@ func (h *RoutingAnalysisHandler) GetRoutingStats(c *gin.Context) {
 		}
 	}
 
-	// Get logs for analysis
-	logs, total, err := h.logRepo.List(ctx, 10000, 0, nil, nil, nil, startTime, endTime, nil)
+	agg, err := h.logRepo.GetRoutingAggregation(ctx, startTime, endTime)
 	if err != nil {
-		h.logger.Error("failed to get logs for routing analysis", zap.Error(err))
+		h.logger.Error("failed to get routing aggregation", zap.Error(err))
 		errorResponse(c, http.StatusInternalServerError, "Failed to get routing statistics")
 		return
 	}
 
+	total := agg.TotalRequests
 	stats := RoutingStats{
 		TotalRequests: total,
 		ByMethod:      make(map[string]MethodStats),
 		ByRule:        make([]RuleStats, 0),
 	}
 
-	// Count by routing method
-	methodCounts := make(map[string]int64)
-	ruleCounts := make(map[string]int64)
-	ruleIDs := make(map[string]*int64)
-	var inaccurateCount int64
-
-	for _, log := range logs {
-		method := log.RoutingMethod
-		if method == "" {
-			method = "unknown"
-		}
-		methodCounts[method]++
-
-		if log.MatchedRuleName != "" {
-			ruleCounts[log.MatchedRuleName]++
-			if log.MatchedRuleID != nil {
-				ruleIDs[log.MatchedRuleName] = log.MatchedRuleID
-			}
-		}
-
-		if log.IsInaccurate {
-			inaccurateCount++
-		}
-	}
-
-	// Calculate percentages for methods
-	for method, count := range methodCounts {
+	for method, count := range agg.MethodCounts {
 		pct := 0.0
 		if total > 0 {
 			pct = float64(count) * 100.0 / float64(total)
@@ -128,29 +109,28 @@ func (h *RoutingAnalysisHandler) GetRoutingStats(c *gin.Context) {
 		}
 	}
 
-	// Calculate percentages for rules
-	for ruleName, count := range ruleCounts {
+	for ruleName, count := range agg.RuleCounts {
 		pct := 0.0
 		if total > 0 {
 			pct = float64(count) * 100.0 / float64(total)
 		}
 		stats.ByRule = append(stats.ByRule, RuleStats{
-			RuleID:     ruleIDs[ruleName],
+			RuleID:     agg.RuleIDs[ruleName],
 			RuleName:   ruleName,
 			Count:      count,
 			Percentage: roundToPlaces(pct, 2),
 		})
 	}
 
-	stats.InaccurateCount = inaccurateCount
+	stats.InaccurateCount = agg.InaccurateCount
 	if total > 0 {
-		stats.InaccurateRate = roundToPlaces(float64(inaccurateCount)*100.0/float64(total), 2)
+		stats.InaccurateRate = roundToPlaces(float64(agg.InaccurateCount)*100.0/float64(total), 2)
 	}
 
 	c.JSON(http.StatusOK, stats)
 }
 
-// GetInaccurateLogs returns logs marked as inaccurate.
+// GetInaccurateLogs returns logs marked as inaccurate via SQL-level filtering.
 // GET /api/routing/analysis/inaccurate?limit=50&offset=0
 func (h *RoutingAnalysisHandler) GetInaccurateLogs(c *gin.Context) {
 	currentUser := middleware.GetCurrentUser(c)
@@ -159,66 +139,45 @@ func (h *RoutingAnalysisHandler) GetInaccurateLogs(c *gin.Context) {
 		return
 	}
 
-	ctx := c.Request.Context()
+	ctx, cancel := context.WithTimeout(c.Request.Context(), routingQueryTimeout)
+	defer cancel()
+
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
 
-	// Get all logs and filter inaccurate ones
-	logs, _, err := h.logRepo.List(ctx, 10000, 0, nil, nil, nil, nil, nil, nil)
+	logs, total, err := h.logRepo.ListInaccurate(ctx, limit, offset)
 	if err != nil {
-		h.logger.Error("failed to get logs", zap.Error(err))
+		h.logger.Error("failed to get inaccurate logs", zap.Error(err))
 		errorResponse(c, http.StatusInternalServerError, "Failed to get inaccurate logs")
 		return
 	}
 
-	// Filter inaccurate logs
-	var inaccurateLogs []*struct {
-		ID              int64   `json:"id"`
-		CreatedAt       string  `json:"created_at"`
-		ModelName       string  `json:"model_name"`
-		TaskType        string  `json:"task_type"`
-		RoutingMethod   string  `json:"routing_method"`
-		MatchedRuleName string  `json:"matched_rule_name"`
-		MessagePreview  string  `json:"message_preview"`
+	// Map to response format
+	type inaccurateEntry struct {
+		ID              int64  `json:"id"`
+		CreatedAt       string `json:"created_at"`
+		ModelName       string `json:"model_name"`
+		TaskType        string `json:"task_type"`
+		RoutingMethod   string `json:"routing_method"`
+		MatchedRuleName string `json:"matched_rule_name"`
+		MessagePreview  string `json:"message_preview"`
 	}
 
+	entries := make([]inaccurateEntry, 0, len(logs))
 	for _, log := range logs {
-		if log.IsInaccurate {
-			inaccurateLogs = append(inaccurateLogs, &struct {
-				ID              int64   `json:"id"`
-				CreatedAt       string  `json:"created_at"`
-				ModelName       string  `json:"model_name"`
-				TaskType        string  `json:"task_type"`
-				RoutingMethod   string  `json:"routing_method"`
-				MatchedRuleName string  `json:"matched_rule_name"`
-				MessagePreview  string  `json:"message_preview"`
-			}{
-				ID:              log.ID,
-				CreatedAt:       log.CreatedAt.Format(time.RFC3339),
-				ModelName:       log.ModelName,
-				TaskType:        log.TaskType,
-				RoutingMethod:   log.RoutingMethod,
-				MatchedRuleName: log.MatchedRuleName,
-				MessagePreview:  log.MessagePreview,
-			})
-		}
-	}
-
-	total := len(inaccurateLogs)
-
-	// Apply pagination
-	start := min(offset, total)
-	end := min(start+limit, total)
-
-	var result any
-	if start < total {
-		result = inaccurateLogs[start:end]
-	} else {
-		result = []any{}
+		entries = append(entries, inaccurateEntry{
+			ID:              log.ID,
+			CreatedAt:       log.CreatedAt.Format(time.RFC3339),
+			ModelName:       log.ModelName,
+			TaskType:        log.TaskType,
+			RoutingMethod:   log.RoutingMethod,
+			MatchedRuleName: log.MatchedRuleName,
+			MessagePreview:  log.MessagePreview,
+		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"logs":   result,
+		"logs":   entries,
 		"total":  total,
 		"limit":  limit,
 		"offset": offset,
