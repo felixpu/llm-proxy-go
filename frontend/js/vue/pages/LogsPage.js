@@ -185,7 +185,7 @@ window.VuePages = window.VuePages || {};
         }
       }
 
-      // 加载统计数据
+      // 加载统计数据 + 筛选选项（合并为单次请求）
       async function loadStats() {
         try {
           var params = buildFilterParams();
@@ -196,28 +196,17 @@ window.VuePages = window.VuePages || {};
           stats.totalCost = data.total_cost || 0;
           stats.avgLatency = data.avg_latency || 0;
           stats.successRate = data.success_rate || 0;
+          // Extract filter options from the same response
+          filterOptions.models = (data.by_model || []).map(function (item) {
+            return item.model_name;
+          });
+          filterOptions.endpoints = (data.by_endpoint || []).map(
+            function (item) {
+              return item.endpoint_name;
+            },
+          );
         } catch (error) {
           console.error("加载统计失败:", error);
-        }
-      }
-
-      // 加载筛选选项（从 stats 接口的 by_model / by_endpoint）
-      async function loadFilterOptions() {
-        try {
-          var response = await VueApi.get("/api/logs/stats");
-          if (response.ok) {
-            var data = await response.json();
-            filterOptions.models = (data.by_model || []).map(function (item) {
-              return item.model_name;
-            });
-            filterOptions.endpoints = (data.by_endpoint || []).map(
-              function (item) {
-                return item.endpoint_name;
-              },
-            );
-          }
-        } catch (error) {
-          console.error("加载筛选选项失败:", error);
         }
       }
 
@@ -511,7 +500,6 @@ window.VuePages = window.VuePages || {};
           currentPage.value = 0;
           await loadLogs();
           await loadStats();
-          await loadFilterOptions();
         } catch (error) {
           toastStore.error("删除日志失败: " + error.message);
         }
@@ -560,7 +548,6 @@ window.VuePages = window.VuePages || {};
         headerActionsStore.value = LogsHeaderActions;
         document.addEventListener("click", closeAllDropdowns);
         await loadUIConfig();
-        await loadFilterOptions();
         setTimeRange("day");
         startAutoRefresh();
       });
