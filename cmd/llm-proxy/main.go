@@ -186,6 +186,7 @@ func run() error {
 			Enabled:       cfg.RateLimit.Enabled,
 			MaxRequests:   cfg.RateLimit.MaxRequests,
 			WindowSeconds: cfg.RateLimit.WindowSeconds,
+			ExemptPaths:   middleware.DefaultRateLimitConfig().ExemptPaths,
 		},
 		DB:     db,
 		Logger: logger,

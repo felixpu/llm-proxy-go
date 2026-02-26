@@ -27,9 +27,11 @@ func DefaultRateLimitConfig() *RateLimitConfig {
 		ExemptPaths: []string{
 			"/api/health",
 			"/api/status",
-			"/static/",
-			"/login",
+			"/css/",
+			"/js/",
+			"/vendor/",
 			"/favicon.ico",
+			"/logo.png",
 		},
 	}
 }
