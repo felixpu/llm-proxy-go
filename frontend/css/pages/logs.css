@@ -536,3 +536,89 @@
         max-height: 200px;
     }
 }
+
+/* ========================================
+   Inline expand link & collapse button
+   ======================================== */
+
+/* "...更多" inline link (injected span inside pre) */
+.expand-inline-link {
+    color: var(--color-primary);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: inherit;
+    padding: 2px 4px;
+    border-radius: 3px;
+    transition: all var(--transition-fast);
+}
+
+.expand-inline-link:hover {
+    background: var(--color-primary-subtle);
+    text-decoration: underline;
+}
+
+.expand-inline-link:active {
+    opacity: 0.7;
+}
+
+/* Expanded state: increase max-height */
+.message-preview.expanded {
+    max-height: 600px;
+}
+
+/* Loading indicator */
+.expand-loading {
+    text-align: center;
+    padding: var(--spacing-sm);
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+}
+
+/* Collapse button */
+.btn-expand-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: var(--spacing-sm);
+    padding: var(--spacing-xs) var(--spacing-md);
+    font-size: var(--font-size-sm);
+    font-family: inherit;
+    color: var(--color-primary);
+    background: var(--color-primary-subtle);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.btn-expand-toggle:hover {
+    background: rgba(59, 130, 246, 0.15);
+    border-color: var(--color-primary);
+}
+
+.btn-expand-toggle:active {
+    transform: translateY(1px);
+}
+
+.btn-expand-toggle svg {
+    flex-shrink: 0;
+}
+
+/* Content switch animation */
+.message-preview {
+    animation: contentFadeIn 0.2s ease-out;
+}
+
+@keyframes contentFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* Mobile: collapse button full width */
+@media (max-width: 768px) {
+    .btn-expand-toggle {
+        width: 100%;
+        justify-content: center;
+        min-height: 36px;
+    }
+}

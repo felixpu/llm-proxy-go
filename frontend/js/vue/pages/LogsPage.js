@@ -82,6 +82,11 @@ window.VuePages = window.VuePages || {};
       var detailLoading = ref(false);
       var markingInaccurate = ref(false);
 
+      // 请求内容展开/收起
+      var expandedRequest = ref(false);
+      var highlightedRequest = ref("");
+      var expandLoading = ref(false);
+
       // 自动刷新
       var autoRefreshInterval = ref(30);
       var refreshIntervalId = null;
@@ -372,6 +377,10 @@ window.VuePages = window.VuePages || {};
         showDetailModal.value = true;
         detailLoading.value = true;
         logDetail.value = null;
+        // Reset expand state and cache
+        expandedRequest.value = false;
+        highlightedRequest.value = "";
+        expandLoading.value = false;
         try {
           var response = await VueApi.get("/api/logs/" + logId);
           if (!response.ok) throw new Error("加载详情失败");
@@ -566,6 +575,54 @@ window.VuePages = window.VuePages || {};
         return VueUtils.highlightJson(VueUtils.formatJsonPretty(str));
       }
 
+      // Preview HTML with inline "...more" link
+      var previewHtmlWithMore = computed(function () {
+        if (!logDetail.value) return "";
+        var preview = logDetail.value.message_preview;
+        var html = preview ? formatJsonHighlight(preview) : "";
+        if (logDetail.value.request_content) {
+          if (!preview) {
+            html =
+              '<span style="color: var(--text-secondary);">(无预览)</span> ';
+          }
+          html +=
+            '<span class="expand-inline-link" data-action="expand">...更多</span>';
+        }
+        return html;
+      });
+
+      // Toggle request content expand/collapse
+      function toggleRequestExpand() {
+        if (
+          !expandedRequest.value &&
+          !highlightedRequest.value &&
+          logDetail.value
+        ) {
+          // Lazy highlight on first expand
+          expandLoading.value = true;
+          requestAnimationFrame(function () {
+            highlightedRequest.value = formatJsonHighlight(
+              logDetail.value.request_content,
+            );
+            expandedRequest.value = true;
+            expandLoading.value = false;
+          });
+          return;
+        }
+        expandedRequest.value = !expandedRequest.value;
+      }
+
+      // Event delegation for "...more" click inside v-html
+      function handlePreviewClick(event) {
+        var target = event.target;
+        if (
+          target.classList.contains("expand-inline-link") &&
+          target.dataset.action === "expand"
+        ) {
+          toggleRequestExpand();
+        }
+      }
+
       // 返回所有需要暴露的变量和方法
       return {
         // 状态
@@ -617,6 +674,12 @@ window.VuePages = window.VuePages || {};
         toggleInaccurate: toggleInaccurate,
         confirmDeleteLogs: confirmDeleteLogs,
         formatJsonHighlight: formatJsonHighlight,
+        expandedRequest: expandedRequest,
+        highlightedRequest: highlightedRequest,
+        expandLoading: expandLoading,
+        previewHtmlWithMore: previewHtmlWithMore,
+        toggleRequestExpand: toggleRequestExpand,
+        handlePreviewClick: handlePreviewClick,
       };
 
       // __CONTINUE_TEMPLATE__
@@ -935,15 +998,19 @@ window.VuePages = window.VuePages || {};
                             </div>\
                         </div>\
                     </div>\
-                    <!-- 消息预览 -->\
-                    <div class="detail-section" v-show="logDetail.message_preview">\
-                        <h4>消息预览</h4>\
-                        <pre class="message-preview json-viewer" v-html="formatJsonHighlight(logDetail.message_preview)"></pre>\
-                    </div>\
-                    <!-- 完整请求内容 -->\
-                    <div class="detail-section" v-show="logDetail.request_content">\
-                        <h4>完整请求内容</h4>\
-                        <pre class="request-content json-viewer" v-html="formatJsonHighlight(logDetail.request_content)"></pre>\
+                    <!-- 消息预览 / 完整请求内容（单一 div，内容切换） -->\
+                    <div class="detail-section" v-show="logDetail.message_preview || logDetail.request_content">\
+                        <h4>{{ expandedRequest ? \'完整请求内容\' : \'消息预览\' }}</h4>\
+                        <pre class="message-preview json-viewer"\
+                             :key="\'req-\' + expandedRequest"\
+                             :class="{ expanded: expandedRequest }"\
+                             v-html="expandedRequest ? highlightedRequest : previewHtmlWithMore"\
+                             @click="handlePreviewClick($event)"></pre>\
+                        <div v-if="expandLoading" class="expand-loading"><span>加载中...</span></div>\
+                        <button v-if="expandedRequest && !expandLoading" class="btn-expand-toggle" @click="toggleRequestExpand()">\
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="18 15 12 9 6 15"/></svg>\
+                            收起\
+                        </button>\
                     </div>\
                     <!-- 响应内容 / 错误原因 -->\
                     <div class="detail-section" v-show="logDetail.response_content">\
