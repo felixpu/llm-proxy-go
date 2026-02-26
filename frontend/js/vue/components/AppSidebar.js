@@ -62,16 +62,36 @@ window.VueComponents = window.VueComponents || {};
     },
     template: `
       <nav class="sidebar" :class="{ 'collapsed': collapsed, 'open': mobileOpen }">
-        <!-- Logo -->
-        <div class="logo">
-          <img src="/logo.png" alt="LLM Proxy Logo">
-          <div class="logo-text">
-            <h1>LLM Proxy</h1>
-            <span class="version">v0.1.0</span>
+        <!-- Sidebar header: two-row layout -->
+        <div class="sidebar-header">
+          <div class="sidebar-header-row1">
+            <img src="/logo.png" alt="LLM Proxy Logo">
+            <div class="logo-text">
+              <h1>LLM Proxy</h1>
+              <span class="version">v0.1.0</span>
+            </div>
+          </div>
+          <div class="sidebar-header-row2">
+            <div class="header-user" v-if="username">
+              <span class="username">{{ username }}</span>
+              <span class="role-badge" :class="'role-' + role">{{ role }}</span>
+            </div>
+            <div class="header-actions-bar">
+              <button class="header-icon-btn theme-toggle-sidebar" @click="themeStore.toggle()" :title="themeStore.isDark() ? '切换到明亮模式' : '切换到暗黑模式'" aria-label="切换主题">
+                <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+                <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+              </button>
+              <a class="header-icon-btn" href="#/api-docs" :class="{ 'active': isActive('api-docs') }" title="API 文档">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+              </a>
+              <a class="header-icon-btn logout-btn" href="javascript:void(0)" title="退出登录" @click.prevent="handleLogout">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+              </a>
+            </div>
           </div>
         </div>
 
-        <!-- 导航菜单 -->
+        <!-- Navigation menu -->
         <ul class="nav-menu">
           <!-- 概览分组 -->
           <li class="nav-group">
@@ -160,35 +180,6 @@ window.VueComponents = window.VueComponents || {};
           </svg>
         </button>
 
-        <!-- 底部区域 -->
-        <div class="nav-footer">
-          <div class="user-info" v-if="username">
-            <span class="username">{{ username }}</span>
-            <span class="role-badge" :class="'role-' + role">{{ role }}</span>
-          </div>
-          <ul class="nav-footer-menu">
-            <li><a href="#/api-docs" :class="{ 'active': isActive('api-docs') }" title="API 文档">
-              <svg class="link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
-                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
-              </svg>
-              <span class="link-text">API 文档</span>
-            </a></li>
-            <li><button class="theme-toggle-sidebar" @click="themeStore.toggle()" :title="themeStore.isDark() ? '切换到明亮模式' : '切换到暗黑模式'" aria-label="切换主题">
-              <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-              <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-              <span class="link-text">{{ themeStore.isDark() ? '明亮模式' : '暗黑模式' }}</span>
-            </button></li>
-            <li><a href="javascript:void(0)" class="logout-link" title="退出登录" @click.prevent="handleLogout">
-              <svg class="link-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-                <polyline points="16 17 21 12 16 7"/>
-                <line x1="21" y1="12" x2="9" y2="12"/>
-              </svg>
-              <span class="link-text">退出登录</span>
-            </a></li>
-          </ul>
-        </div>
       </nav>
     `,
   };

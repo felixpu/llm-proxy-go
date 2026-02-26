@@ -921,21 +921,7 @@ label.checkbox-label {
     color: var(--text-muted);
 }
 
-/* 用户信息 */
-.user-info {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 0;
-    margin-bottom: 8px;
-    border-bottom: 1px solid var(--sidebar-border);
-}
-
-.user-info .username {
-    color: var(--sidebar-text-hover);
-    font-weight: var(--font-weight-medium);
-}
-
+/* 角色徽章 */
 .role-badge {
     font-size: var(--font-size-xs);
     padding: 4px 10px;
