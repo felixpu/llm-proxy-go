@@ -18,7 +18,6 @@
     <link rel="stylesheet" href="/css/pages/settings.css">
     <link rel="stylesheet" href="/css/pages/help.css">
     <link rel="stylesheet" href="/css/pages/api_docs.css">
-    <link rel="stylesheet" href="/vendor/swagger-ui/swagger-ui.css">
     <style>[v-cloak] { display: none !important; }</style>
     <!-- 主题初始化（防闪烁） -->
     <script src="/js/theme-init.js"></script>
@@ -26,44 +25,41 @@
 <body>
     <div id="app" v-cloak></div>
 
-    <!-- Vue 3 -->
+    <!-- Vue 3 (sync — required before defer scripts) -->
     <script src="/vendor/js/vue.global.prod.js"></script>
     <!-- Chart.js -->
-    <script src="/vendor/js/chart.umd.min.js"></script>
-    <!-- Swagger UI -->
-    <script src="/vendor/swagger-ui/swagger-ui-bundle.js"></script>
-    <script src="/vendor/swagger-ui/swagger-ui-standalone-preset.js"></script>
-    <!-- Vue App -->
-    <script src="/js/vue/api.js"></script>
-    <script src="/js/vue/utils.js"></script>
-    <script src="/js/vue/stores/auth.js"></script>
-    <script src="/js/vue/stores/theme.js"></script>
-    <script src="/js/vue/stores/sidebar.js"></script>
-    <script src="/js/vue/stores/toast.js"></script>
-    <script src="/js/vue/stores/modal.js"></script>
-    <script src="/js/vue/stores/confirm.js"></script>
-    <script src="/js/vue/stores/headerActions.js"></script>
-    <script src="/js/vue/composables/usePagination.js"></script>
-    <script src="/js/vue/composables/useValidation.js"></script>
-    <script src="/js/vue/components/AppToast.js"></script>
-    <script src="/js/vue/components/AppModal.js"></script>
-    <script src="/js/vue/components/ConfirmDialog.js"></script>
-    <script src="/js/vue/components/DataTable.js"></script>
-    <script src="/js/vue/components/AppSidebar.js"></script>
-    <script src="/js/vue/components/AppHeader.js"></script>
-    <script src="/js/vue/components/AppLayout.js"></script>
-    <script src="/js/vue/pages/LoginPage.js"></script>
-    <script src="/js/vue/pages/DashboardPage.js"></script>
-    <script src="/js/vue/pages/HelpPage.js"></script>
-    <script src="/js/vue/pages/SettingsPage.js"></script>
-    <script src="/js/vue/pages/SystemLogsPage.js"></script>
-    <script src="/js/vue/pages/ApiKeysPage.js"></script>
-    <script src="/js/vue/pages/UsersPage.js"></script>
-    <script src="/js/vue/pages/LogsPage.js"></script>
-    <script src="/js/vue/pages/CacheMonitorPage.js"></script>
-    <script src="/js/vue/pages/ModelProviderPage.js"></script>
-    <script src="/js/vue/pages/RoutingPage.js"></script>
-    <script src="/js/vue/pages/ApiDocsPage.js"></script>
-    <script src="/js/vue/app.js"></script>
+    <script defer src="/vendor/js/chart.umd.min.js"></script>
+    <!-- Vue App (defer preserves execution order) -->
+    <script defer src="/js/vue/api.js"></script>
+    <script defer src="/js/vue/utils.js"></script>
+    <script defer src="/js/vue/stores/auth.js"></script>
+    <script defer src="/js/vue/stores/theme.js"></script>
+    <script defer src="/js/vue/stores/sidebar.js"></script>
+    <script defer src="/js/vue/stores/toast.js"></script>
+    <script defer src="/js/vue/stores/modal.js"></script>
+    <script defer src="/js/vue/stores/confirm.js"></script>
+    <script defer src="/js/vue/stores/headerActions.js"></script>
+    <script defer src="/js/vue/composables/usePagination.js"></script>
+    <script defer src="/js/vue/composables/useValidation.js"></script>
+    <script defer src="/js/vue/components/AppToast.js"></script>
+    <script defer src="/js/vue/components/AppModal.js"></script>
+    <script defer src="/js/vue/components/ConfirmDialog.js"></script>
+    <script defer src="/js/vue/components/DataTable.js"></script>
+    <script defer src="/js/vue/components/AppSidebar.js"></script>
+    <script defer src="/js/vue/components/AppHeader.js"></script>
+    <script defer src="/js/vue/components/AppLayout.js"></script>
+    <script defer src="/js/vue/pages/LoginPage.js"></script>
+    <script defer src="/js/vue/pages/DashboardPage.js"></script>
+    <script defer src="/js/vue/pages/HelpPage.js"></script>
+    <script defer src="/js/vue/pages/SettingsPage.js"></script>
+    <script defer src="/js/vue/pages/SystemLogsPage.js"></script>
+    <script defer src="/js/vue/pages/ApiKeysPage.js"></script>
+    <script defer src="/js/vue/pages/UsersPage.js"></script>
+    <script defer src="/js/vue/pages/LogsPage.js"></script>
+    <script defer src="/js/vue/pages/CacheMonitorPage.js"></script>
+    <script defer src="/js/vue/pages/ModelProviderPage.js"></script>
+    <script defer src="/js/vue/pages/RoutingPage.js"></script>
+    <script defer src="/js/vue/pages/ApiDocsPage.js"></script>
+    <script defer src="/js/vue/app.js"></script>
 </body>
 </html>
