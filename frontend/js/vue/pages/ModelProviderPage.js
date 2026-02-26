@@ -925,7 +925,7 @@ window.VuePages = window.VuePages || {};
                     <div class="form-group">\
                         <button type="button" class="btn" @click="detectModels()" :disabled="detecting" :style="(!providerForm.base_url || (!providerForm.api_key && !editingProvider)) ? \'opacity:0.5;pointer-events:none\' : \'\'">\
                             <span v-show="detecting" class="detect-btn-spinner"></span>\
-                            <span v-show="!detecting">\\ud83d\\udd0d 检测可用模型</span>\
+                            <span v-show="!detecting"><svg style="width:14px;height:14px;vertical-align:-1px;margin-right:4px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>检测可用模型</span>\
                             <span v-show="detecting">检测中...</span>\
                         </button>\
                         <p class="help-text">根据 Base URL 和 API Key 自动检测服务商支持的模型</p>\
