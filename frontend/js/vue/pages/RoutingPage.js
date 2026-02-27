@@ -93,10 +93,11 @@ window.VuePages = window.VuePages || {};
       var ruleTestResult = ref(null);
       var ruleTestLoading = ref(false);
 
-      // 内置规则视图状态
-      var builtinSearchQuery = ref("");
-      var builtinFilterTaskType = ref("");
-      var builtinSortBy = ref("priority-desc");
+      // 规则视图状态（统一管理内置和自定义规则）
+      var ruleSearchQuery = ref("");
+      var ruleFilterTaskType = ref("");
+      var ruleFilterSource = ref("");
+      var ruleSortBy = ref("priority-desc");
       var expandedRuleId = ref(null);
 
       // 下拉菜单
@@ -117,11 +118,28 @@ window.VuePages = window.VuePages || {};
         return tierCycle[index % tierCycle.length];
       }
 
-      var filteredBuiltinRules = computed(function () {
-        var rules = builtinRules.value.slice();
+      var filteredAllRules = computed(function () {
+        // 合并内置和自定义规则，附加来源标记
+        var allRules = [];
+        for (var i = 0; i < builtinRules.value.length; i++) {
+          allRules.push(Object.assign({}, builtinRules.value[i], { _source: "builtin" }));
+        }
+        for (var j = 0; j < customRules.value.length; j++) {
+          allRules.push(Object.assign({}, customRules.value[j], { _source: "custom" }));
+        }
+
+        var rules = allRules;
+
+        // 来源过滤
+        if (ruleFilterSource.value) {
+          rules = rules.filter(function (r) {
+            return r._source === ruleFilterSource.value;
+          });
+        }
+
         // 搜索
-        if (builtinSearchQuery.value) {
-          var q = builtinSearchQuery.value.toLowerCase();
+        if (ruleSearchQuery.value) {
+          var q = ruleSearchQuery.value.toLowerCase();
           rules = rules.filter(function (r) {
             return (
               r.name.toLowerCase().indexOf(q) !== -1 ||
@@ -132,14 +150,16 @@ window.VuePages = window.VuePages || {};
             );
           });
         }
+
         // 过滤任务类型
-        if (builtinFilterTaskType.value) {
+        if (ruleFilterTaskType.value) {
           rules = rules.filter(function (r) {
-            return r.task_type === builtinFilterTaskType.value;
+            return r.task_type === ruleFilterTaskType.value;
           });
         }
+
         // 排序
-        var parts = builtinSortBy.value.split("-");
+        var parts = ruleSortBy.value.split("-");
         var field = parts[0];
         var order = parts[1];
         rules.sort(function (a, b) {
@@ -235,26 +255,31 @@ window.VuePages = window.VuePages || {};
         return found ? found.name : "-- 请选择服务商 --";
       });
 
-      // 内置规则统计
-      var builtinEnabledCount = computed(function () {
-        return builtinRules.value.filter(function (r) {
-          return r.enabled;
-        }).length;
+      // 统一规则统计
+      var allRulesCount = computed(function () {
+        return builtinRules.value.length + customRules.value.length;
       });
-      var builtinSimpleCount = computed(function () {
-        return builtinRules.value.filter(function (r) {
-          return r.task_type === "simple";
-        }).length;
+      var allEnabledCount = computed(function () {
+        return builtinRules.value.filter(function (r) { return r.enabled; }).length +
+               customRules.value.filter(function (r) { return r.enabled; }).length;
       });
-      var builtinDefaultCount = computed(function () {
-        return builtinRules.value.filter(function (r) {
-          return r.task_type === "default";
-        }).length;
+      var allBuiltinCount = computed(function () {
+        return builtinRules.value.length;
       });
-      var builtinComplexCount = computed(function () {
-        return builtinRules.value.filter(function (r) {
-          return r.task_type === "complex";
-        }).length;
+      var allCustomCount = computed(function () {
+        return customRules.value.length;
+      });
+      var allSimpleCount = computed(function () {
+        return builtinRules.value.filter(function (r) { return r.task_type === "simple"; }).length +
+               customRules.value.filter(function (r) { return r.task_type === "simple"; }).length;
+      });
+      var allDefaultCount = computed(function () {
+        return builtinRules.value.filter(function (r) { return r.task_type === "default"; }).length +
+               customRules.value.filter(function (r) { return r.task_type === "default"; }).length;
+      });
+      var allComplexCount = computed(function () {
+        return builtinRules.value.filter(function (r) { return r.task_type === "complex"; }).length +
+               customRules.value.filter(function (r) { return r.task_type === "complex"; }).length;
       });
 
       // ========== 方法 ==========
@@ -654,7 +679,9 @@ window.VuePages = window.VuePages || {};
       }
 
       function copyRuleConfig(rule) {
-        var text = JSON.stringify(rule, null, 2);
+        var copy = Object.assign({}, rule);
+        delete copy._source;
+        var text = JSON.stringify(copy, null, 2);
         navigator.clipboard
           .writeText(text)
           .then(function () {
@@ -726,9 +753,10 @@ window.VuePages = window.VuePages || {};
         ruleTestMessage: ruleTestMessage,
         ruleTestResult: ruleTestResult,
         ruleTestLoading: ruleTestLoading,
-        builtinSearchQuery: builtinSearchQuery,
-        builtinFilterTaskType: builtinFilterTaskType,
-        builtinSortBy: builtinSortBy,
+        ruleSearchQuery: ruleSearchQuery,
+        ruleFilterTaskType: ruleFilterTaskType,
+        ruleFilterSource: ruleFilterSource,
+        ruleSortBy: ruleSortBy,
         expandedRuleId: expandedRuleId,
         openDropdown: openDropdown,
         fallbackStrategyOpen: fallbackStrategyOpen,
@@ -736,7 +764,7 @@ window.VuePages = window.VuePages || {};
         primaryModelOpen: primaryModelOpen,
         fallbackModelOpen: fallbackModelOpen,
         modalProviderOpen: modalProviderOpen,
-        filteredBuiltinRules: filteredBuiltinRules,
+        filteredAllRules: filteredAllRules,
         groupedProviderModels: groupedProviderModels,
         filteredProviderModelCount: filteredProviderModelCount,
         fallbackStrategyLabel: fallbackStrategyLabel,
@@ -744,10 +772,13 @@ window.VuePages = window.VuePages || {};
         primaryModelLabel: primaryModelLabel,
         fallbackModelLabel: fallbackModelLabel,
         modalProviderLabel: modalProviderLabel,
-        builtinEnabledCount: builtinEnabledCount,
-        builtinSimpleCount: builtinSimpleCount,
-        builtinDefaultCount: builtinDefaultCount,
-        builtinComplexCount: builtinComplexCount,
+        allRulesCount: allRulesCount,
+        allEnabledCount: allEnabledCount,
+        allBuiltinCount: allBuiltinCount,
+        allCustomCount: allCustomCount,
+        allSimpleCount: allSimpleCount,
+        allDefaultCount: allDefaultCount,
+        allComplexCount: allComplexCount,
         getProviderName: getProviderName,
         switchTab: switchTab,
         saveConfig: saveConfig,
@@ -1006,27 +1037,36 @@ window.VuePages = window.VuePages || {};
             </div>\
             <div class="resource-section">\
                 <div class="resource-header">\
-                    <h4>内置规则</h4>\
+                    <h4>路由规则</h4>\
+                    <button class="btn btn-primary" @click="showRuleModal()">+ 添加规则</button>\
                 </div>\
-                <div class="rules-stats-mini" v-show="builtinRules.length > 0" v-cloak>\
-                    <div class="rules-stat-chip"><span class="stat-dot dot-total"></span> 总计 <span class="stat-num">{{ builtinRules.length }}</span></div>\
-                    <div class="rules-stat-chip"><span class="stat-dot dot-enabled"></span> 启用 <span class="stat-num">{{ builtinEnabledCount }}</span></div>\
-                    <div class="rules-stat-chip" v-show="builtinSimpleCount"><span class="stat-dot dot-simple"></span> simple <span class="stat-num">{{ builtinSimpleCount }}</span></div>\
-                    <div class="rules-stat-chip" v-show="builtinDefaultCount"><span class="stat-dot dot-default"></span> default <span class="stat-num">{{ builtinDefaultCount }}</span></div>\
-                    <div class="rules-stat-chip" v-show="builtinComplexCount"><span class="stat-dot dot-complex"></span> complex <span class="stat-num">{{ builtinComplexCount }}</span></div>\
+                <div class="rules-stats-mini" v-show="allRulesCount > 0" v-cloak>\
+                    <div class="rules-stat-chip"><span class="stat-dot dot-total"></span> 总计 <span class="stat-num">{{ allRulesCount }}</span></div>\
+                    <div class="rules-stat-chip"><span class="stat-dot dot-enabled"></span> 启用 <span class="stat-num">{{ allEnabledCount }}</span></div>\
+                    <div class="rules-stat-chip"><span class="stat-dot dot-builtin"></span> 内置 <span class="stat-num">{{ allBuiltinCount }}</span></div>\
+                    <div class="rules-stat-chip"><span class="stat-dot dot-custom"></span> 自定义 <span class="stat-num">{{ allCustomCount }}</span></div>\
+                    <div class="rules-stat-chip" v-show="allSimpleCount"><span class="stat-dot dot-simple"></span> simple <span class="stat-num">{{ allSimpleCount }}</span></div>\
+                    <div class="rules-stat-chip" v-show="allDefaultCount"><span class="stat-dot dot-default"></span> default <span class="stat-num">{{ allDefaultCount }}</span></div>\
+                    <div class="rules-stat-chip" v-show="allComplexCount"><span class="stat-dot dot-complex"></span> complex <span class="stat-num">{{ allComplexCount }}</span></div>\
                 </div>\
-                <div class="rules-toolbar" v-show="builtinRules.length > 0" v-cloak>\
+                <div class="rules-toolbar" v-show="allRulesCount > 0" v-cloak>\
                     <div class="rules-search-box">\
                         <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>\
-                        <input type="text" v-model="builtinSearchQuery" placeholder="搜索名称、描述、关键词...">\
+                        <input type="text" v-model="ruleSearchQuery" placeholder="搜索名称、描述、关键词...">\
                     </div>\
                     <div class="rules-filter-group">\
-                        <button class="rules-filter-btn" :class="{\'active\': builtinFilterTaskType === \'\'}" @click="builtinFilterTaskType = \'\'">全部</button>\
-                        <button class="rules-filter-btn" :class="{\'active\': builtinFilterTaskType === \'simple\'}" @click="builtinFilterTaskType = builtinFilterTaskType === \'simple\' ? \'\' : \'simple\'">simple</button>\
-                        <button class="rules-filter-btn" :class="{\'active\': builtinFilterTaskType === \'default\'}" @click="builtinFilterTaskType = builtinFilterTaskType === \'default\' ? \'\' : \'default\'">default</button>\
-                        <button class="rules-filter-btn" :class="{\'active\': builtinFilterTaskType === \'complex\'}" @click="builtinFilterTaskType = builtinFilterTaskType === \'complex\' ? \'\' : \'complex\'">complex</button>\
+                        <button class="rules-filter-btn" :class="{\'active\': ruleFilterSource === \'\'}" @click="ruleFilterSource = \'\'">全部</button>\
+                        <button class="rules-filter-btn" :class="{\'active\': ruleFilterSource === \'builtin\'}" @click="ruleFilterSource = ruleFilterSource === \'builtin\' ? \'\' : \'builtin\'">内置</button>\
+                        <button class="rules-filter-btn" :class="{\'active\': ruleFilterSource === \'custom\'}" @click="ruleFilterSource = ruleFilterSource === \'custom\' ? \'\' : \'custom\'">自定义</button>\
                     </div>\
-                    <select class="rules-sort-select" v-model="builtinSortBy">\
+                    <div class="rules-toolbar-sep"></div>\
+                    <div class="rules-filter-group">\
+                        <button class="rules-filter-btn" :class="{\'active\': ruleFilterTaskType === \'\'}" @click="ruleFilterTaskType = \'\'">全部</button>\
+                        <button class="rules-filter-btn" :class="{\'active\': ruleFilterTaskType === \'simple\'}" @click="ruleFilterTaskType = ruleFilterTaskType === \'simple\' ? \'\' : \'simple\'">simple</button>\
+                        <button class="rules-filter-btn" :class="{\'active\': ruleFilterTaskType === \'default\'}" @click="ruleFilterTaskType = ruleFilterTaskType === \'default\' ? \'\' : \'default\'">default</button>\
+                        <button class="rules-filter-btn" :class="{\'active\': ruleFilterTaskType === \'complex\'}" @click="ruleFilterTaskType = ruleFilterTaskType === \'complex\' ? \'\' : \'complex\'">complex</button>\
+                    </div>\
+                    <select class="rules-sort-select" v-model="ruleSortBy">\
                         <option value="priority-desc">优先级 高→低</option>\
                         <option value="priority-asc">优先级 低→高</option>\
                         <option value="name-asc">名称 A→Z</option>\
@@ -1036,19 +1076,20 @@ window.VuePages = window.VuePages || {};
                 <div v-show="rulesLoading" class="rules-empty-state" style="padding: var(--spacing-xl);">加载中...</div>\
 \
                 <div class="rules-cards-grid" v-show="!rulesLoading" v-cloak>\
-                    <div class="rules-empty-state" v-show="filteredBuiltinRules.length === 0">\
+                    <div class="rules-empty-state" v-show="filteredAllRules.length === 0">\
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>\
-                        <div v-show="builtinRules.length === 0">暂无内置规则</div>\
-                        <div v-show="builtinRules.length > 0">无匹配结果</div>\
-                        <button class="rules-clear-filters" v-show="builtinSearchQuery || builtinFilterTaskType" @click="builtinSearchQuery=\'\'; builtinFilterTaskType=\'\'">清除过滤条件</button>\
+                        <div v-show="allRulesCount === 0">暂无规则，点击上方按钮添加</div>\
+                        <div v-show="allRulesCount > 0">无匹配结果</div>\
+                        <button class="rules-clear-filters" v-show="ruleSearchQuery || ruleFilterTaskType || ruleFilterSource" @click="ruleSearchQuery=\'\'; ruleFilterTaskType=\'\'; ruleFilterSource=\'\'">清除过滤条件</button>\
                     </div>\
-                    <div v-for="r in filteredBuiltinRules" :key="r.id" class="rule-card" :class="{\'card-disabled\': !r.enabled}">\
+                    <div v-for="r in filteredAllRules" :key="r._source + \'-\' + r.id" class="rule-card" :class="{\'card-disabled\': !r.enabled}">\
                         <div class="rule-card-header">\
                             <div class="rule-card-title">\
                                 <div class="rule-card-name">{{ r.name }}</div>\
                                 <div class="rule-card-desc" v-show="r.description">{{ r.description }}</div>\
                             </div>\
                             <div class="rule-card-badges">\
+                                <span class="rule-source-badge" :class="\'source-\' + r._source">{{ r._source === \'builtin\' ? \'内置\' : \'自定义\' }}</span>\
                                 <span class="task-type-badge" :class="\'type-\' + r.task_type">{{ r.task_type }}</span>\
                             </div>\
                         </div>\
@@ -1065,7 +1106,7 @@ window.VuePages = window.VuePages || {};
                             </div>\
                             <div v-show="!r.keywords || r.keywords.length === 0" class="text-muted" style="font-size:var(--font-size-xs);">无关键词匹配</div>\
                         </div>\
-                        <div class="rule-card-expand" v-show="expandedRuleId === r.id" v-cloak>\
+                        <div class="rule-card-expand" v-show="expandedRuleId === (r._source + \'-\' + r.id)" v-cloak>\
                             <div class="rule-card-detail">\
                                 <div class="rule-card-detail-row" v-show="r.pattern">\
                                     <span class="rule-card-detail-label">正则:</span>\
@@ -1082,9 +1123,9 @@ window.VuePages = window.VuePages || {};
                             </div>\
                         </div>\
                         <div class="rule-card-footer">\
-                            <button class="rule-card-action" :class="{\'expanded\': expandedRuleId === r.id}" @click="expandedRuleId = expandedRuleId === r.id ? null : r.id" v-show="r.pattern || r.condition || (r.keywords && r.keywords.length > 8)">\
+                            <button class="rule-card-action" :class="{\'expanded\': expandedRuleId === (r._source + \'-\' + r.id)}" @click="expandedRuleId = expandedRuleId === (r._source + \'-\' + r.id) ? null : (r._source + \'-\' + r.id)" v-show="r.pattern || r.condition || (r.keywords && r.keywords.length > 8)">\
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>\
-                                <span>{{ expandedRuleId === r.id ? \'收起\' : \'详情\' }}</span>\
+                                <span>{{ expandedRuleId === (r._source + \'-\' + r.id) ? \'收起\' : \'详情\' }}</span>\
                             </button>\
                             <button class="rule-card-action" @click="showRuleModal(r)">\
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>\
@@ -1094,72 +1135,12 @@ window.VuePages = window.VuePages || {};
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>\
                                 复制\
                             </button>\
+                            <button class="rule-card-action rule-card-action--danger" v-show="r._source === \'custom\'" @click="deleteRule(r)">\
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>\
+                                删除\
+                            </button>\
                         </div>\
                     </div>\
-                </div>\
-            </div>\
-\
-            <div class="resource-section">\
-                <div class="resource-header">\
-                    <h4>自定义规则</h4>\
-                    <button class="btn btn-primary" @click="showRuleModal()">+ 添加规则</button>\
-                </div>\
-                <div class="routing-models-table-container">\
-                    <table class="table">\
-                        <thead>\
-                            <tr>\
-                                <th>名称</th>\
-                                <th>关键词</th>\
-                                <th>正则</th>\
-                                <th>条件</th>\
-                                <th>任务类型</th>\
-                                <th>优先级</th>\
-                                <th>状态</th>\
-                                <th>操作</th>\
-                            </tr>\
-                        </thead>\
-                        <tbody>\
-                            <tr v-show="rulesLoading"><td colspan="8" class="loading">加载中...</td></tr>\
-                            <tr v-show="!rulesLoading && customRules.length === 0" v-cloak><td colspan="8" class="empty">暂无自定义规则，点击上方按钮添加</td></tr>\
-                            <tr v-for="r in customRules" :key="r.id">\
-                                <td><code>{{ r.name }}</code></td>\
-                                <td>\
-                                    <div class="rule-keywords" v-show="r.keywords && r.keywords.length > 0">\
-                                        <span v-for="kw in (r.keywords || [])" :key="kw" class="rule-keyword-tag">{{ kw }}</span>\
-                                    </div>\
-                                    <span v-show="!r.keywords || r.keywords.length === 0" class="text-muted">-</span>\
-                                </td>\
-                                <td><code class="rule-pattern">{{ r.pattern || \'-\' }}</code></td>\
-                                <td><code class="rule-condition">{{ r.condition || \'-\' }}</code></td>\
-                                <td><span class="task-type-badge" :class="\'type-\' + r.task_type">{{ r.task_type }}</span></td>\
-                                <td>{{ r.priority }}</td>\
-                                <td>\
-                                    <span v-show="r.enabled" class="status-pill status-enabled">启用</span>\
-                                    <span v-show="!r.enabled" class="status-pill status-disabled">禁用</span>\
-                                </td>\
-                                <td>\
-                                    <div class="dropdown">\
-                                        <button class="dropdown-trigger" @click.stop="toggleDropdown(\'rule-\' + r.id)">\
-                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">\
-                                                <circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/>\
-                                            </svg>\
-                                        </button>\
-                                        <div class="dropdown-menu" v-show="openDropdown === \'rule-\' + r.id" v-cloak>\
-                                            <button class="dropdown-item" @click="showRuleModal(r); openDropdown = null">\
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>\
-                                                编辑\
-                                            </button>\
-                                            <div class="dropdown-divider"></div>\
-                                            <button class="dropdown-item danger" @click="deleteRule(r); openDropdown = null">\
-                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>\
-                                                删除\
-                                            </button>\
-                                        </div>\
-                                    </div>\
-                                </td>\
-                            </tr>\
-                        </tbody>\
-                    </table>\
                 </div>\
             </div>\
 \

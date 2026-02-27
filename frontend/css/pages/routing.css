@@ -1645,6 +1645,49 @@
     text-decoration: underline;
 }
 
+/* 规则来源 badge */
+.rule-source-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1;
+}
+
+.rule-source-badge.source-builtin {
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+}
+
+.rule-source-badge.source-custom {
+    background: rgba(59, 130, 246, 0.1);
+    color: var(--color-primary);
+}
+
+/* 工具栏分隔线 */
+.rules-toolbar-sep {
+    width: 1px;
+    height: 20px;
+    background: var(--border-color);
+    margin: 0 var(--spacing-sm);
+}
+
+/* 统计 dot 颜色 */
+.stat-dot.dot-builtin {
+    background: var(--text-muted);
+}
+
+.stat-dot.dot-custom {
+    background: var(--color-primary);
+}
+
+/* 删除按钮危险样式 */
+.rule-card-action--danger:hover {
+    color: var(--color-danger);
+}
+
 /* 响应式 - 卡片视图 */
 @media (max-width: 1200px) {
     .rules-cards-grid {
@@ -1673,6 +1716,10 @@
     .rules-stats-mini {
         flex-wrap: wrap;
         gap: var(--spacing-sm);
+    }
+
+    .rules-toolbar-sep {
+        display: none;
     }
 }
 
