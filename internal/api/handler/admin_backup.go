@@ -10,16 +10,18 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/user/llm-proxy-go/internal/service"
 )
 
 // BackupHandler handles configuration backup and restore.
 type BackupHandler struct {
-	db *sql.DB
+	db            *sql.DB
+	endpointStore *service.EndpointStore
 }
 
 // NewBackupHandler creates a new BackupHandler.
-func NewBackupHandler(db *sql.DB) *BackupHandler {
-	return &BackupHandler{db: db}
+func NewBackupHandler(db *sql.DB, endpointStore *service.EndpointStore) *BackupHandler {
+	return &BackupHandler{db: db, endpointStore: endpointStore}
 }
 
 // --- Backup data structures (override json:"-" fields) ---
@@ -516,6 +518,9 @@ func (h *BackupHandler) Import(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "配置导入成功"})
+
+	// Refresh in-memory endpoint store so dashboard reflects imported data immediately.
+	go h.endpointStore.ReloadAndNotify(context.Background())
 }
 
 // importProviders inserts providers and their provider_models associations.

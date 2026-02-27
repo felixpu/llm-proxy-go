@@ -209,7 +209,7 @@ func NewServer(deps ServerDeps) *Server {
 		configGroup.DELETE("/endpoints/:endpoint_id", handler.DeleteEndpoint)
 
 		// Backup / restore
-		backupHandler := handler.NewBackupHandler(deps.DB)
+		backupHandler := handler.NewBackupHandler(deps.DB, deps.EndpointStore)
 		configGroup.GET("/backup/export", backupHandler.Export)
 		configGroup.POST("/backup/import", backupHandler.Import)
 
