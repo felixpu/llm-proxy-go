@@ -20,4 +20,4 @@ data/*.db-wal
 # IDE / local config
 .claude/
 .DS_Store
-.history/
+.history/llm-proxy.db

@@ -65,6 +65,7 @@ window.VuePages = window.VuePages || {};
         enabled: true,
         description: "",
         model_ids: [],
+        custom_headers: "",
       });
 
       // 角色选项
@@ -301,6 +302,7 @@ window.VuePages = window.VuePages || {};
         providerForm.enabled = true;
         providerForm.description = "";
         providerForm.model_ids = [];
+        providerForm.custom_headers = "";
         showProviderModal.value = true;
       }
 
@@ -321,6 +323,9 @@ window.VuePages = window.VuePages || {};
         providerForm.model_ids = (provider.models || []).map(function (m) {
           return m.id;
         });
+        providerForm.custom_headers = provider.custom_headers && Object.keys(provider.custom_headers).length > 0
+          ? JSON.stringify(provider.custom_headers, null, 2)
+          : "";
         showProviderModal.value = true;
       }
 
@@ -345,6 +350,17 @@ window.VuePages = window.VuePages || {};
             description: providerForm.description || null,
             model_ids: providerForm.model_ids,
           };
+          if (providerForm.custom_headers) {
+            try {
+              data.custom_headers = JSON.parse(providerForm.custom_headers);
+            } catch (e) {
+              toastStore.error("自定义请求头格式错误，请输入有效的 JSON");
+              saving.value = false;
+              return;
+            }
+          } else {
+            data.custom_headers = {};
+          }
           if (providerForm.api_key) {
             data.api_key = providerForm.api_key;
           } else if (!editingProvider.value) {
@@ -475,6 +491,46 @@ window.VuePages = window.VuePages || {};
         }
       }
 
+      // ========== 快速切换启用/禁用 ==========
+
+      async function toggleModelEnabled(model) {
+        var newEnabled = !model.enabled;
+        model.enabled = newEnabled; // optimistic update
+        try {
+          var response = await VueApi.request("/api/config/models/" + model.id, {
+            method: "PUT",
+            body: JSON.stringify({ enabled: newEnabled }),
+          });
+          if (!response.ok) {
+            model.enabled = !newEnabled; // rollback
+            var err = await response.json();
+            toastStore.error(err.detail || "切换失败");
+          }
+        } catch (error) {
+          model.enabled = !newEnabled; // rollback
+          toastStore.error("切换失败: " + error.message);
+        }
+      }
+
+      async function toggleProviderEnabled(provider) {
+        var newEnabled = !provider.enabled;
+        provider.enabled = newEnabled; // optimistic update
+        try {
+          var response = await VueApi.request("/api/config/providers/" + provider.id, {
+            method: "PUT",
+            body: JSON.stringify({ enabled: newEnabled }),
+          });
+          if (!response.ok) {
+            provider.enabled = !newEnabled; // rollback
+            var err = await response.json();
+            toastStore.error(err.detail || "切换失败");
+          }
+        } catch (error) {
+          provider.enabled = !newEnabled; // rollback
+          toastStore.error("切换失败: " + error.message);
+        }
+      }
+
       // ========== 下拉菜单 ==========
 
       function toggleDropdown(id) {
@@ -539,6 +595,8 @@ window.VuePages = window.VuePages || {};
         isModelSelected: isModelSelected,
         toggleDetectedModel: toggleDetectedModel,
         toggleDropdown: toggleDropdown,
+        toggleModelEnabled: toggleModelEnabled,
+        toggleProviderEnabled: toggleProviderEnabled,
       };
     },
     template:
@@ -590,7 +648,7 @@ window.VuePages = window.VuePages || {};
                         <div class="relation-card-header">\
                             <div class="provider-info">\
                                 <span class="provider-name">{{ provider.name }}</span>\
-                                <span :class="\'status-badge status-\' + (provider.enabled ? \'healthy\' : \'unhealthy\')">{{ provider.enabled ? \'启用\' : \'禁用\' }}</span>\
+                                <label class="toggle-switch" @click.stop><input type="checkbox" :checked="provider.enabled" @change="toggleProviderEnabled(provider)"><span class="toggle-slider"></span></label>\
                             </div>\
                             <div class="provider-meta">\
                                 <span class="url-cell" :title="provider.base_url">{{ provider.base_url }}</span>\
@@ -661,7 +719,7 @@ window.VuePages = window.VuePages || {};
                                 <td>{{ p.weight }}</td>\
                                 <td>{{ p.max_concurrent }}</td>\
                                 <td>\
-                                    <span :class="\'status-badge status-\' + (p.enabled ? \'healthy\' : \'unhealthy\')">{{ p.enabled ? \'启用\' : \'禁用\' }}</span>\
+                                    <label class="toggle-switch" @click.stop><input type="checkbox" :checked="p.enabled" @change="toggleProviderEnabled(p)"><span class="toggle-slider"></span></label>\
                                 </td>\
                                 <td>\
                                     <div class="dropdown">\
@@ -692,7 +750,7 @@ window.VuePages = window.VuePages || {};
                                 <div class="provider-card-title">{{ p.name }}</div>\
                                 <div class="provider-card-url" :title="p.base_url">{{ p.base_url }}</div>\
                             </div>\
-                            <span :class="\'status-badge status-\' + (p.enabled ? \'healthy\' : \'unhealthy\')">{{ p.enabled ? \'启用\' : \'禁用\' }}</span>\
+                            <label class="toggle-switch" @click.stop><input type="checkbox" :checked="p.enabled" @change="toggleProviderEnabled(p)"><span class="toggle-slider"></span></label>\
                         </div>\
                         <div class="provider-card-body">\
                             <div class="provider-stat">\
@@ -753,7 +811,7 @@ window.VuePages = window.VuePages || {};
                             <tr v-for="m in models" :key="m.id">\
                                 <td><strong>{{ m.name }}</strong></td>\
                                 <td><span :class="\'model-role role-\' + m.role">{{ m.role }}</span></td>\
-                                <td><span :class="\'status-badge status-\' + (m.enabled ? \'healthy\' : \'unhealthy\')">{{ m.enabled ? \'启用\' : \'禁用\' }}</span></td>\
+                                <td><label class="toggle-switch" @click.stop><input type="checkbox" :checked="m.enabled" @change="toggleModelEnabled(m)"><span class="toggle-slider"></span></label></td>\
                                 <td>${{ m.cost_per_mtok_input }}</td>\
                                 <td>${{ m.cost_per_mtok_output }}</td>\
                                 <td>{{ (m.billing_multiplier != null ? m.billing_multiplier : 1.0) }}x</td>\
@@ -787,7 +845,7 @@ window.VuePages = window.VuePages || {};
                             <div>\
                                 <div class="model-mobile-name">{{ m.name }}</div>\
                                 <span :class="\'model-role role-\' + m.role">{{ m.role }}</span>\
-                                <span :class="\'status-badge status-\' + (m.enabled ? \'healthy\' : \'unhealthy\')" style="margin-left: 6px">{{ m.enabled ? \'启用\' : \'禁用\' }}</span>\
+                                <label class="toggle-switch" style="margin-left: 6px; vertical-align: middle;" @click.stop><input type="checkbox" :checked="m.enabled" @change="toggleModelEnabled(m)"><span class="toggle-slider"></span></label>\
                             </div>\
                         </div>\
                         <div class="model-mobile-body">\
@@ -985,7 +1043,12 @@ window.VuePages = window.VuePages || {};
                     </div>\
                     <div class="form-row">\
                         <div class="form-group">\
-                            <label>权重</label>\
+                            <label class="label-with-help">\
+                                权重\
+                                <span class="help-icon" data-tooltip="权重用于加权负载均衡时的流量分配。&#10;&#10;• 权重越高，该服务商被选中的概率越大&#10;• 仅在负载均衡策略为「加权」时生效&#10;&#10;示例：服务商A(10) + 服务商B(1)&#10;→ A 被选中概率 91%，B 为 9%" data-tooltip-pos="bottom">\
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>\
+                                </span>\
+                            </label>\
                             <input type="number" v-model.number="providerForm.weight" min="1">\
                         </div>\
                         <div class="form-group">\
@@ -996,6 +1059,15 @@ window.VuePages = window.VuePages || {};
                     <div class="form-group">\
                         <label>描述 <span class="text-muted">(可选)</span></label>\
                         <input type="text" v-model="providerForm.description" placeholder="服务商描述信息">\
+                    </div>\
+                    <div class="form-group">\
+                        <label class="label-with-help">\
+                            自定义请求头 <span class="text-muted">(可选)</span>\
+                            <span class="help-icon" data-tooltip="JSON 格式的自定义 HTTP 请求头，转发请求时附加到上游。&#10;优先级最高，可覆盖默认头部。&#10;&#10;示例：&#10;{&#10;  &quot;User-Agent&quot;: &quot;claude-code/1.0&quot;,&#10;  &quot;X-Client-Type&quot;: &quot;claude-code&quot;&#10;}" data-tooltip-pos="bottom">\
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>\
+                            </span>\
+                        </label>\
+                        <textarea v-model="providerForm.custom_headers" rows="4" placeholder=\'{"User-Agent": "claude-code/1.0", "X-Client-Type": "claude-code"}\' style="font-family: monospace; font-size: 13px;"></textarea>\
                     </div>\
                     <div class="form-group">\
                         <label class="checkbox-label">\

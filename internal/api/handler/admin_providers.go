@@ -22,26 +22,28 @@ func maskAPIKey(apiKey string) string {
 
 // ProviderCreate represents a provider creation request.
 type ProviderCreate struct {
-	Name          string  `json:"name" binding:"required"`
-	BaseURL       string  `json:"base_url" binding:"required"`
-	APIKey        string  `json:"api_key" binding:"required"`
-	Weight        int     `json:"weight"`
-	MaxConcurrent int     `json:"max_concurrent"`
-	Enabled       bool    `json:"enabled"`
-	Description   string  `json:"description"`
-	ModelIDs      []int64 `json:"model_ids"`
+	Name          string            `json:"name" binding:"required"`
+	BaseURL       string            `json:"base_url" binding:"required"`
+	APIKey        string            `json:"api_key" binding:"required"`
+	Weight        int               `json:"weight"`
+	MaxConcurrent int               `json:"max_concurrent"`
+	Enabled       bool              `json:"enabled"`
+	Description   string            `json:"description"`
+	ModelIDs      []int64           `json:"model_ids"`
+	CustomHeaders map[string]string `json:"custom_headers"`
 }
 
 // ProviderUpdate represents a provider update request.
 type ProviderUpdate struct {
-	Name          *string `json:"name"`
-	BaseURL       *string `json:"base_url"`
-	APIKey        *string `json:"api_key"`
-	Weight        *int    `json:"weight"`
-	MaxConcurrent *int    `json:"max_concurrent"`
-	Enabled       *bool   `json:"enabled"`
-	Description   *string `json:"description"`
-	ModelIDs      []int64 `json:"model_ids"`
+	Name          *string            `json:"name"`
+	BaseURL       *string            `json:"base_url"`
+	APIKey        *string            `json:"api_key"`
+	Weight        *int               `json:"weight"`
+	MaxConcurrent *int               `json:"max_concurrent"`
+	Enabled       *bool              `json:"enabled"`
+	Description   *string            `json:"description"`
+	ModelIDs      []int64            `json:"model_ids"`
+	CustomHeaders *map[string]string `json:"custom_headers"`
 }
 
 // DetectModelsRequest represents a model detection request.
@@ -151,6 +153,7 @@ func (h *ProviderHandler) CreateProvider(c *gin.Context) {
 		MaxConcurrent: req.MaxConcurrent,
 		Enabled:       req.Enabled,
 		Description:   req.Description,
+		CustomHeaders: req.CustomHeaders,
 	}
 	id, err := h.providerRepo.Insert(c.Request.Context(), p, req.ModelIDs)
 	if err != nil {
@@ -181,6 +184,7 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 	if req.MaxConcurrent != nil { updates["max_concurrent"] = *req.MaxConcurrent }
 	if req.Enabled != nil { updates["enabled"] = *req.Enabled }
 	if req.Description != nil { updates["description"] = *req.Description }
+	if req.CustomHeaders != nil { updates["custom_headers"] = *req.CustomHeaders }
 	if err := h.providerRepo.Update(c.Request.Context(), id, updates, req.ModelIDs); err != nil {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return

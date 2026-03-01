@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -23,7 +24,7 @@ func NewProviderRepository(db *sql.DB) *SQLProviderRepository {
 func (r *SQLProviderRepository) FindByID(ctx context.Context, id int64) (*models.Provider, error) {
 	row := r.db.QueryRowContext(ctx,
 		`SELECT id, name, base_url, api_key, weight, max_concurrent,
-		        enabled, description, created_at, updated_at
+		        enabled, description, custom_headers, created_at, updated_at
 		 FROM providers WHERE id = ?`, id)
 	return scanProvider(row)
 }
@@ -31,7 +32,7 @@ func (r *SQLProviderRepository) FindByID(ctx context.Context, id int64) (*models
 func (r *SQLProviderRepository) FindByModelID(ctx context.Context, modelID int64) ([]*models.Provider, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT p.id, p.name, p.base_url, p.api_key, p.weight, p.max_concurrent,
-		        p.enabled, p.description, p.created_at, p.updated_at
+		        p.enabled, p.description, p.custom_headers, p.created_at, p.updated_at
 		 FROM providers p
 		 JOIN provider_models pm ON p.id = pm.provider_id
 		 WHERE pm.model_id = ? AND p.enabled = 1
@@ -46,7 +47,7 @@ func (r *SQLProviderRepository) FindByModelID(ctx context.Context, modelID int64
 func (r *SQLProviderRepository) FindAllEnabled(ctx context.Context) ([]*models.Provider, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, name, base_url, api_key, weight, max_concurrent,
-		        enabled, description, created_at, updated_at
+		        enabled, description, custom_headers, created_at, updated_at
 		 FROM providers WHERE enabled = 1 ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -59,12 +60,13 @@ func scanProvider(s scanner) (*models.Provider, error) {
 	var p models.Provider
 	var enabled int
 	var description sql.NullString
+	var customHeaders sql.NullString
 	var createdAt, updatedAt sql.NullTime
 
 	err := s.Scan(
 		&p.ID, &p.Name, &p.BaseURL, &p.APIKey,
 		&p.Weight, &p.MaxConcurrent, &enabled,
-		&description, &createdAt, &updatedAt,
+		&description, &customHeaders, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -73,6 +75,11 @@ func scanProvider(s scanner) (*models.Provider, error) {
 	p.Enabled = enabled == 1
 	if description.Valid {
 		p.Description = description.String
+	}
+	if customHeaders.Valid && customHeaders.String != "" {
+		if err := json.Unmarshal([]byte(customHeaders.String), &p.CustomHeaders); err != nil {
+			return nil, fmt.Errorf("unmarshal custom_headers for provider %d: %w", p.ID, err)
+		}
 	}
 	if createdAt.Valid {
 		p.CreatedAt = createdAt.Time
@@ -102,7 +109,7 @@ func scanProviders(rows *sql.Rows) ([]*models.Provider, error) {
 func (r *SQLProviderRepository) FindAll(ctx context.Context) ([]*models.Provider, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, name, base_url, api_key, weight, max_concurrent,
-		        enabled, description, created_at, updated_at
+		        enabled, description, custom_headers, created_at, updated_at
 		 FROM providers ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -119,12 +126,18 @@ func (r *SQLProviderRepository) Insert(ctx context.Context, p *models.Provider, 
 	defer tx.Rollback()
 
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
+	customHeadersJSON := ""
+	if len(p.CustomHeaders) > 0 {
+		if b, err := json.Marshal(p.CustomHeaders); err == nil {
+			customHeadersJSON = string(b)
+		}
+	}
 	result, err := tx.ExecContext(ctx,
 		`INSERT INTO providers (name, base_url, api_key, weight, max_concurrent,
-		        enabled, description, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		        enabled, description, custom_headers, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.Name, p.BaseURL, p.APIKey, p.Weight, p.MaxConcurrent,
-		boolToInt(p.Enabled), p.Description, now, now)
+		boolToInt(p.Enabled), p.Description, customHeadersJSON, now, now)
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert provider: %w", err)
 	}
@@ -161,6 +174,13 @@ func (r *SQLProviderRepository) Update(ctx context.Context, id int64, updates ma
 			if field == "enabled" {
 				if b, ok := value.(bool); ok {
 					value = boolToInt(b)
+				}
+			}
+			if field == "custom_headers" {
+				if m, ok := value.(map[string]string); ok {
+					if b, err := json.Marshal(m); err == nil {
+						value = string(b)
+					}
 				}
 			}
 			setClauses = append(setClauses, field+" = ?")

@@ -55,16 +55,17 @@ type Model struct {
 
 // Provider represents an API provider (e.g., Anthropic, OpenAI).
 type Provider struct {
-	ID            int64     `json:"id"`
-	Name          string    `json:"name"`
-	BaseURL       string    `json:"base_url"`
-	APIKey        string    `json:"-"` // Never serialize API key
-	Weight        int       `json:"weight"`
-	MaxConcurrent int       `json:"max_concurrent"`
-	Enabled       bool      `json:"enabled"`
-	Description   string    `json:"description,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID            int64             `json:"id"`
+	Name          string            `json:"name"`
+	BaseURL       string            `json:"base_url"`
+	APIKey        string            `json:"-"` // Never serialize API key
+	Weight        int               `json:"weight"`
+	MaxConcurrent int               `json:"max_concurrent"`
+	Enabled       bool              `json:"enabled"`
+	Description   string            `json:"description,omitempty"`
+	CustomHeaders map[string]string `json:"custom_headers,omitempty"`
+	CreatedAt     time.Time         `json:"created_at"`
+	UpdatedAt     time.Time         `json:"updated_at"`
 }
 
 // Endpoint represents a resolved endpoint (provider + model).
@@ -312,12 +313,13 @@ type FallbackInfo struct {
 // RuleStats represents routing rule statistics.
 type RuleStats struct {
 	TotalRequests    int64              `json:"total_requests"`
-	RuleHits         map[string]HitStat `json:"rule_hits"`
+	RuleHits         map[int64]HitStat  `json:"rule_hits"`
 	UnmatchedSamples []UnmatchedSample  `json:"unmatched_samples"`
 }
 
 // HitStat represents hit statistics for a single rule.
 type HitStat struct {
+	Name       string  `json:"name"`
 	Count      int64   `json:"count"`
 	Percentage float64 `json:"percentage"`
 }
@@ -351,4 +353,84 @@ type RuleExport struct {
 	Version    string         `json:"version"`
 	ExportedAt time.Time     `json:"exported_at"`
 	Rules      []RoutingRule  `json:"rules"`
+}
+
+// AnalysisRequest represents parameters for starting a routing analysis.
+type AnalysisRequest struct {
+	StartTime *time.Time `json:"start_time"`
+	EndTime   *time.Time `json:"end_time"`
+	ModelID   int64      `json:"model_id"`
+}
+
+// AnalysisTask tracks async analysis progress in memory.
+type AnalysisTask struct {
+	ID        string          `json:"id"`
+	Status    string          `json:"status"` // pending/running/completed/failed
+	Progress  int             `json:"progress"`
+	Stage     string          `json:"stage"`
+	Report    *AnalysisReport `json:"report,omitempty"`
+	Error     string          `json:"error,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
+// AnalysisReport represents a persisted analysis report.
+type AnalysisReport struct {
+	ID             int64              `json:"id"`
+	ModelUsed      string             `json:"model_used"`
+	TimeRangeStart *time.Time         `json:"time_range_start"`
+	TimeRangeEnd   *time.Time         `json:"time_range_end"`
+	TotalLogs      int                `json:"total_logs"`
+	AnalyzedLogs   int                `json:"analyzed_logs"`
+	Summary        *AnalysisSummary   `json:"summary"`
+	Issues         []AnalysisIssue    `json:"issues"`
+	Recommendations []AnalysisRecommendation `json:"recommendations"`
+	Conclusion     string             `json:"conclusion"`
+	CreatedAt      time.Time          `json:"created_at"`
+}
+
+// AnalysisSummary contains statistical overview of routing performance.
+type AnalysisSummary struct {
+	RuleMatchRate    float64 `json:"rule_match_rate"`
+	LLMFallbackRate  float64 `json:"llm_fallback_rate"`
+	InaccurateRate   float64 `json:"inaccurate_rate"`
+	TopTaskTypes     map[string]int `json:"top_task_types"`
+}
+
+// AnalysisIssue represents a detected routing problem.
+type AnalysisIssue struct {
+	Type        string `json:"type"` // false_positive/false_negative/priority_conflict/redundant_rule/overly_broad
+	Severity    string `json:"severity"` // high/medium/low
+	RuleName    string `json:"rule_name,omitempty"`
+	Description string `json:"description"`
+	Examples    []string `json:"examples,omitempty"`
+}
+
+// RecommendedRuleSpec contains structured rule parameters for one-click apply.
+type RecommendedRuleSpec struct {
+	Keywords  []string `json:"keywords,omitempty"`
+	Pattern   string   `json:"pattern,omitempty"`
+	Condition string   `json:"condition,omitempty"`
+	TaskType  string   `json:"task_type,omitempty"`
+	Priority  *int     `json:"priority,omitempty"`
+	Enabled   *bool    `json:"enabled,omitempty"`
+}
+
+// AnalysisRecommendation represents an optimization suggestion.
+type AnalysisRecommendation struct {
+	Action      string               `json:"action"` // modify/add/delete/reorder
+	RuleName    string               `json:"rule_name,omitempty"`
+	Description string               `json:"description"`
+	Details     string               `json:"details,omitempty"`
+	RuleSpec    *RecommendedRuleSpec `json:"rule_spec,omitempty"`
+}
+
+// ExtractedLogEntry is a lightweight log summary sent to the analysis LLM.
+type ExtractedLogEntry struct {
+	ID              int64  `json:"id"`
+	UserMessage     string `json:"user_message"`
+	MessageSummary  string `json:"message_summary"`
+	TaskType        string `json:"task_type"`
+	RoutingMethod   string `json:"routing_method"`
+	MatchedRuleName string `json:"matched_rule_name,omitempty"`
+	IsInaccurate    bool   `json:"is_inaccurate"`
 }
