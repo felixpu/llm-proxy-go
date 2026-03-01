@@ -178,6 +178,26 @@ window.VuePages = window.VuePages || {};
         return "method-" + (method || "unknown");
       }
 
+      // 获取路由方式的提示文本
+      function getRoutingMethodTooltip(method) {
+        if (method === "" || method === null || method === undefined) {
+          return "请求中直接指定了模型名（如 claude-opus-4-6），不走智能路由";
+        }
+        if (method === "rule") {
+          return "通过路由规则匹配决定使用的模型";
+        }
+        if (method === "llm") {
+          return "调用 LLM 分析请求内容后决定使用的模型";
+        }
+        if (method && method.startsWith("cache_")) {
+          return "从缓存中命中了之前的路由决策";
+        }
+        if (method && method.includes("fallback")) {
+          return "主要端点不可用，使用回退端点";
+        }
+        return method || "未知路由方式";
+      }
+
       // 构建查询参数
       function buildFilterParams() {
         var params = new URLSearchParams();
@@ -622,6 +642,7 @@ window.VuePages = window.VuePages || {};
         formatDateTime: formatDateTime,
         formatRoutingMethod: formatRoutingMethod,
         getRoutingMethodClass: getRoutingMethodClass,
+        getRoutingMethodTooltip: getRoutingMethodTooltip,
         loadLogs: loadLogs,
         loadStats: loadStats,
         applyFilters: applyFilters,
@@ -821,7 +842,7 @@ window.VuePages = window.VuePages || {};
                         <td><span class="model-tag">{{ log.model_name }}</span></td>\
                         <td>{{ log.endpoint_name }}</td>\
                         <td><span class="task-type-badge" :class="\'type-\' + (log.task_type || \'default\')">{{ log.task_type || "-" }}</span></td>\
-                        <td><span class="routing-method-badge" :class="getRoutingMethodClass(log.routing_method)">{{ formatRoutingMethod(log.routing_method) }}</span></td>\
+                        <td><span class="routing-method-badge" :class="getRoutingMethodClass(log.routing_method)" :title="getRoutingMethodTooltip(log.routing_method)">{{ formatRoutingMethod(log.routing_method) }}</span></td>\
                         <td>{{ log.matched_rule_name || "-" }}</td>\
                         <td>{{ (log.latency_ms || 0).toFixed(0) + " ms" }}</td>\
                         <td>{{ "$" + (log.cost || 0).toFixed(6) }}</td>\
@@ -909,7 +930,7 @@ window.VuePages = window.VuePages || {};
                             </div>\
                             <div class="detail-item">\
                                 <span class="detail-label">路由方式</span>\
-                                <span class="routing-method-badge" :class="getRoutingMethodClass(logDetail.routing_method)">{{ formatRoutingMethod(logDetail.routing_method) }}</span>\
+                                <span class="routing-method-badge" :class="getRoutingMethodClass(logDetail.routing_method)" :title="getRoutingMethodTooltip(logDetail.routing_method)">{{ formatRoutingMethod(logDetail.routing_method) }}</span>\
                             </div>\
                             <div class="detail-item">\
                                 <span class="detail-label">匹配规则</span>\
