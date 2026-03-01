@@ -44,12 +44,10 @@ func GetDataPath() string {
 	return dataPath
 }
 
-// GetDBPath returns the full path to the SQLite database file.
+// GetDBPath returns the default path to the SQLite database file.
+// Returns data/llm-proxy.db relative to the base path.
+// Environment variable override should be handled by config layer.
 func GetDBPath() string {
-	// Allow override via environment variable
-	if dbPath := os.Getenv("LLM_PROXY_DB"); dbPath != "" {
-		return dbPath
-	}
 	return filepath.Join(GetDataPath(), "llm-proxy.db")
 }
 
