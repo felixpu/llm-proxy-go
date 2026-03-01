@@ -229,6 +229,26 @@ window.VuePages = window.VuePages || {};
         }
       }
 
+      // 切换用户启用状态
+      async function toggleUserActive(user) {
+        var newActive = !user.is_active;
+        user.is_active = newActive;
+        try {
+          var response = await VueApi.patch("/api/users/" + user.id, {
+            role: user.role,
+            is_active: newActive,
+          });
+          if (!response.ok) {
+            user.is_active = !newActive;
+            var err = await response.json();
+            toastStore.error(err.detail || "切换失败");
+          }
+        } catch (error) {
+          user.is_active = !newActive;
+          toastStore.error("切换失败: " + error.message);
+        }
+      }
+
       // 切换下拉菜单
       function toggleDropdown(id) {
         openDropdown.value = openDropdown.value === id ? null : id;
@@ -290,6 +310,7 @@ window.VuePages = window.VuePages || {};
         changePassword: changePassword,
         deleteUser: deleteUser,
         toggleDropdown: toggleDropdown,
+        toggleUserActive: toggleUserActive,
       };
     },
     template:
@@ -318,9 +339,8 @@ window.VuePages = window.VuePages || {};
                         <span :class="\'role-badge role-\' + user.role">{{ user.role }}</span>\
                     </td>\
                     <td>\
-                        <span :class="\'status-badge \' + (user.is_active ? \'status-healthy\' : \'status-unhealthy\')">\
-                            {{ user.is_active ? "正常" : "已禁用" }}\
-                        </span>\
+                        <label v-if="user.username !== \'admin\'" class="toggle-switch" @click.stop><input type="checkbox" :checked="user.is_active" @change="toggleUserActive(user)"><span class="toggle-slider"></span></label>\
+                        <span v-else class="status-badge status-healthy">超级管理员</span>\
                     </td>\
                     <td>{{ formatDateTime(user.created_at) }}</td>\
                     <td>\
@@ -331,7 +351,7 @@ window.VuePages = window.VuePages || {};
                                 </svg>\
                             </button>\
                             <div class="dropdown-menu" v-show="openDropdown === user.id" v-cloak>\
-                                <button class="dropdown-item" @click="showEditModal(user); openDropdown = null">\
+                                <button v-show="user.username !== \'admin\'" class="dropdown-item" @click="showEditModal(user); openDropdown = null">\
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>\
                                     编辑\
                                 </button>\
@@ -339,8 +359,8 @@ window.VuePages = window.VuePages || {};
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>\
                                     修改密码\
                                 </button>\
-                                <div class="dropdown-divider"></div>\
-                                <button class="dropdown-item danger" @click="deleteUser(user); openDropdown = null">\
+                                <div v-show="user.username !== \'admin\'" class="dropdown-divider"></div>\
+                                <button v-show="user.username !== \'admin\'" class="dropdown-item danger" @click="deleteUser(user); openDropdown = null">\
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>\
                                     删除\
                                 </button>\
@@ -358,9 +378,8 @@ window.VuePages = window.VuePages || {};
                     <div class="user-card-title">{{ user.username }}</div>\
                     <div class="user-card-badges">\
                         <span :class="\'role-badge role-\' + user.role">{{ user.role }}</span>\
-                        <span :class="\'status-badge \' + (user.is_active ? \'status-healthy\' : \'status-unhealthy\')">\
-                            {{ user.is_active ? "正常" : "已禁用" }}\
-                        </span>\
+                        <label v-if="user.username !== \'admin\'" class="toggle-switch" @click.stop><input type="checkbox" :checked="user.is_active" @change="toggleUserActive(user)"><span class="toggle-slider"></span></label>\
+                        <span v-else class="status-badge status-healthy">超级管理员</span>\
                     </div>\
                 </div>\
             </div>\
@@ -371,9 +390,9 @@ window.VuePages = window.VuePages || {};
                 </div>\
             </div>\
             <div class="user-card-footer">\
-                <button class="btn btn-sm" @click="showEditModal(user)">编辑</button>\
+                <button v-show="user.username !== \'admin\'" class="btn btn-sm" @click="showEditModal(user)">编辑</button>\
                 <button class="btn btn-sm" @click="showPasswordModal(user)">修改密码</button>\
-                <button class="btn btn-sm btn-danger" @click="deleteUser(user)">删除</button>\
+                <button v-show="user.username !== \'admin\'" class="btn btn-sm btn-danger" @click="deleteUser(user)">删除</button>\
             </div>\
         </div>\
     </div>\

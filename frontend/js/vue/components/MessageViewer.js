@@ -65,6 +65,16 @@ window.VueComponents = window.VueComponents || {};
     try {
       var parsed = JSON.parse(jsonStr);
       if (!parsed || typeof parsed !== "object") return { _raw: jsonStr, _parseError: true };
+      // Handle Anthropic error response format: {"type":"error","error":{"type":"...","message":"..."}}
+      if (parsed.type === "error" && parsed.error) {
+        var errMsg = parsed.error.message || JSON.stringify(parsed.error);
+        return {
+          content: [{ type: "text", text: errMsg }],
+          _isError: true,
+          errorType: parsed.error.type || "unknown_error",
+          _raw: jsonStr,
+        };
+      }
       return {
         content: normalizeContent(parsed.content),
         usage: parsed.usage || null,
@@ -73,6 +83,15 @@ window.VueComponents = window.VueComponents || {};
         _raw: jsonStr,
       };
     } catch (e) {
+      // Not JSON — plain error string from err.Error()
+      if (jsonStr) {
+        return {
+          content: [{ type: "text", text: jsonStr }],
+          _isError: true,
+          errorType: "proxy_error",
+          _raw: jsonStr,
+        };
+      }
       return { _raw: jsonStr, _parseError: true };
     }
   }
@@ -155,7 +174,7 @@ window.VueComponents = window.VueComponents || {};
         }
         var res = parsedResponse.value;
         if (res && !res._parseError && res.content) {
-          msgs.push({ role: "assistant", parts: res.content, _isResponse: true });
+          msgs.push({ role: "assistant", parts: res.content, _isResponse: true, _isError: !!res._isError, _errorType: res.errorType || "" });
         }
         return msgs;
       });
@@ -327,12 +346,14 @@ window.VueComponents = window.VueComponents || {};
           <!-- Messages -->\
           <div class="mv-messages" v-if="filteredMessages.length">\
             <div v-for="(msg, mi) in filteredMessages" :key="mi" class="mv-message" :class="\'mv-message--\' + msg.role">\
-              <div class="mv-role-badge" :class="\'mv-role--\' + msg.role">\
-                <span v-if="msg.role === \'user\'">User</span>\
+              <div class="mv-role-badge" :class="[\'mv-role--\' + msg.role, { \'mv-role--error\': msg._isError }]">\
+                <span v-if="msg._isError">Error</span>\
+                <span v-else-if="msg.role === \'user\'">User</span>\
                 <span v-else-if="msg.role === \'assistant\'">{{ msg._isResponse ? "Response" : "Assistant" }}</span>\
                 <span v-else>{{ msg.role }}</span>\
               </div>\
-              <div class="mv-bubble">\
+              <div class="mv-bubble" :class="{ \'mv-bubble--error\': msg._isError }">\
+                <div class="mv-error-type" v-if="msg._isError && msg._errorType">{{ msg._errorType }}</div>\
                 <div v-for="(part, pi) in msg.parts" :key="pi" class="mv-part" :class="\'mv-part--\' + part.type">\
                   <!-- text -->\
                   <div v-if="part.type === \'text\'" class="mv-text" v-html="renderPartText(part.text)"></div>\

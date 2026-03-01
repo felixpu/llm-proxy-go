@@ -412,11 +412,22 @@ func extractLastUserMessage(req *models.AnthropicRequest) string {
 		}
 
 		if len(textParts) > 0 {
-			return strings.Join(textParts, "\n")
+			raw := strings.Join(textParts, "\n")
+			return stripSystemInjections(raw)
 		}
 	}
 
 	return ""
+}
+
+// systemInjectionRe matches system-injected XML tags from Claude Code clients.
+var systemInjectionRe = regexp.MustCompile(`(?s)<(?:system-reminder|command-name|command-message|command-args|local-command-caveat|local-command-stdout)>.*?</(?:system-reminder|command-name|command-message|command-args|local-command-caveat|local-command-stdout)>`)
+
+// stripSystemInjections removes system-injected content from user messages
+// so that routing decisions are based on actual user intent only.
+func stripSystemInjections(text string) string {
+	cleaned := systemInjectionRe.ReplaceAllString(text, "")
+	return strings.TrimSpace(cleaned)
 }
 
 // parseModelRole converts a string to ModelRole with fallback to default.

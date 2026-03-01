@@ -114,6 +114,45 @@ func (r *RoutingModelRepository) GetModelWithProvider(ctx context.Context, id in
 	return &m, nil
 }
 
+// GetModelWithProviderAny retrieves a routing model with its provider info
+// regardless of enabled status. Used for analysis where user explicitly picks the model.
+func (r *RoutingModelRepository) GetModelWithProviderAny(ctx context.Context, id int64) (*models.RoutingModelWithProvider, error) {
+	var m models.RoutingModelWithProvider
+	var enabled int
+	var description sql.NullString
+	var createdAt, updatedAt string
+
+	err := r.db.QueryRowContext(ctx, `
+		SELECT rm.id, rm.provider_id, rm.model_name, rm.enabled, rm.priority,
+			rm.cost_per_mtok_input, rm.cost_per_mtok_output, rm.billing_multiplier,
+			rm.description, rm.created_at, rm.updated_at,
+			p.base_url, p.api_key
+		FROM routing_models rm
+		JOIN providers p ON rm.provider_id = p.id
+		WHERE rm.id = ?
+	`, id).Scan(
+		&m.ID, &m.ProviderID, &m.ModelName, &enabled, &m.Priority,
+		&m.CostPerMtokInput, &m.CostPerMtokOutput, &m.BillingMultiplier,
+		&description, &createdAt, &updatedAt,
+		&m.BaseURL, &m.APIKey,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get routing model with provider: %w", err)
+	}
+
+	m.Enabled = enabled == 1
+	if description.Valid {
+		m.Description = description.String
+	}
+	m.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+	m.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+
+	return &m, nil
+}
+
 // AddModel inserts a new routing model.
 func (r *RoutingModelRepository) AddModel(ctx context.Context, m *models.RoutingModel) (int64, error) {
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")

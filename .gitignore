@@ -21,3 +21,4 @@ data/*.db-wal
 .claude/
 .DS_Store
 .history/llm-proxy.db
+.history/

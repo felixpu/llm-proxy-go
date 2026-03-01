@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -46,6 +47,8 @@ type StreamChunk struct {
 	Done bool
 	Meta *ProxyMetadata // Only set on final chunk
 }
+
+const maxEndpointRetries = 3
 
 // ProxyService forwards requests to upstream LLM providers.
 type ProxyService struct {
@@ -96,29 +99,29 @@ func (s *ProxyService) ProxyRequest(
 	selection *EndpointSelectionResult,
 	endpoints []*models.Endpoint,
 ) (*models.AnthropicResponse, *ProxyMetadata, error) {
-	start := time.Now()
 	requestID := uuid.New().String()
 
 	if selection == nil || selection.Endpoint == nil {
 		return nil, nil, fmt.Errorf("no endpoint selected")
 	}
 
-	const maxRetries = 3
 	triedEndpoints := make(map[string]bool)
 	ep := selection.Endpoint
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := 0; attempt < maxEndpointRetries; attempt++ {
+		attemptStart := time.Now()
 		epName := EndpointName(ep)
 		triedEndpoints[epName] = true
 
-		resp, meta, err := s.proxyToEndpoint(ctx, req, originalHeaders, ep, requestID, start)
+		resp, meta, err := s.proxyToEndpoint(ctx, req, originalHeaders, ep, requestID, attemptStart)
 		if err == nil {
 			meta.FallbackInfo = selection.FallbackInfo
 			return resp, meta, nil
 		}
 
-		// Check if it's a client error (4xx) - don't retry
-		if ue, ok := err.(*UpstreamError); ok && ue.StatusCode < 500 {
+		// Check if the error is non-retryable (e.g. 400, 404, 422)
+		var ue *UpstreamError
+		if errors.As(err, &ue) && !isRetryableStatusCode(ue.StatusCode) {
 			return nil, nil, err
 		}
 
@@ -168,6 +171,12 @@ func (s *ProxyService) proxyToEndpoint(
 	upReq.Header.Set("x-api-key", ep.Provider.APIKey)
 	upReq.Header.Set("anthropic-version", headerOrDefault(originalHeaders, "Anthropic-Version", "2023-06-01"))
 	copyAnthropicHeaders(originalHeaders, upReq.Header)
+	// Forward client User-Agent if present
+	if ua := originalHeaders.Get("User-Agent"); ua != "" {
+		upReq.Header.Set("User-Agent", ua)
+	}
+	// Apply provider-level custom headers (highest priority)
+	applyCustomHeaders(ep.Provider.CustomHeaders, upReq.Header)
 
 	resp, err := s.client.Do(upReq)
 	if err != nil {
@@ -177,7 +186,7 @@ func (s *ProxyService) proxyToEndpoint(
 	defer resp.Body.Close()
 
 	latencyMs := msSince(start)
-	success := resp.StatusCode < 500
+	success := resp.StatusCode < 400
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -241,6 +250,19 @@ func (e *UpstreamError) Error() string {
 	return fmt.Sprintf("upstream returned status %d", e.StatusCode)
 }
 
+// isRetryableStatusCode determines if a status code should trigger endpoint retry.
+// Retryable: 401 (invalid key), 402 (insufficient balance), 403 (quota/permission),
+// 408 (timeout), 429 (rate limit), >=500 (server errors).
+// Non-retryable: 400 (bad request), 404 (not found), 413 (too large), 422 (validation).
+func isRetryableStatusCode(code int) bool {
+	switch code {
+	case 401, 402, 403, 408, 429:
+		return true
+	default:
+		return code >= 500
+	}
+}
+
 // --- Helper functions ---
 
 func headerOrDefault(h http.Header, key, def string) string {
@@ -252,11 +274,29 @@ func headerOrDefault(h http.Header, key, def string) string {
 
 func copyAnthropicHeaders(src, dst http.Header) {
 	for k, vv := range src {
-		if len(k) > 10 && k[:10] == "Anthropic-" && k != "Anthropic-Version" {
+		lower := strings.ToLower(k)
+		// Forward Anthropic-* headers (except Anthropic-Version which is set explicitly)
+		if strings.HasPrefix(lower, "anthropic-") && lower != "anthropic-version" {
+			for _, v := range vv {
+				dst.Add(k, v)
+			}
+			continue
+		}
+		// Forward Claude Code / Stainless client identification headers
+		if lower == "x-app" || strings.HasPrefix(lower, "x-stainless-") ||
+			strings.HasPrefix(lower, "x-claude-") || lower == "x-client-app" {
 			for _, v := range vv {
 				dst.Add(k, v)
 			}
 		}
+	}
+}
+
+// applyCustomHeaders applies provider-level custom headers to the request.
+// Custom headers have the highest priority and override any previously set headers.
+func applyCustomHeaders(custom map[string]string, dst http.Header) {
+	for k, v := range custom {
+		dst.Set(k, v)
 	}
 }
 
@@ -368,7 +408,8 @@ func truncateStr(s string, maxLen int) string {
 	return string(runes[:maxLen]) + "..."
 }
 
-// ProxyStreamRequest forwards a streaming request with endpoint selection support.
+// ProxyStreamRequest forwards a streaming request with endpoint retry support.
+// Retries happen only during the connection phase (before any SSE data is sent to the client).
 func (s *ProxyService) ProxyStreamRequest(
 	ctx context.Context,
 	req *models.AnthropicRequest,
@@ -376,76 +417,118 @@ func (s *ProxyService) ProxyStreamRequest(
 	selection *EndpointSelectionResult,
 	endpoints []*models.Endpoint,
 ) (<-chan StreamChunk, *ProxyMetadata, error) {
-	start := time.Now()
 	requestID := uuid.New().String()
 
 	if selection == nil || selection.Endpoint == nil {
 		return nil, nil, fmt.Errorf("no endpoint selected")
 	}
 
+	triedEndpoints := make(map[string]bool)
 	ep := selection.Endpoint
-	epName := EndpointName(ep)
-	s.healthChecker.IncrementConnections(epName)
 
-	// Ensure stream is enabled in request and use the selected endpoint's model name
+	for attempt := 0; attempt < maxEndpointRetries; attempt++ {
+		attemptStart := time.Now()
+		epName := EndpointName(ep)
+		triedEndpoints[epName] = true
+
+		resp, err := s.connectStreamEndpoint(ctx, req, originalHeaders, ep, attemptStart)
+		if err != nil {
+			// Check if the error is non-retryable
+			var ue *UpstreamError
+			if errors.As(err, &ue) && !isRetryableStatusCode(ue.StatusCode) {
+				return nil, nil, err
+			}
+
+			s.logger.Warn("stream endpoint failed, trying alternative",
+				zap.Int("attempt", attempt+1),
+				zap.String("endpoint", epName),
+				zap.Error(err))
+
+			ep = s.selectAlternativeEndpoint(selection.Model, endpoints, triedEndpoints)
+			if ep == nil {
+				return nil, nil, fmt.Errorf("all endpoints failed for model %s: %w", selection.Model.Name, err)
+			}
+			continue
+		}
+
+		// Connection succeeded — track it and start streaming
+		s.healthChecker.IncrementConnections(epName)
+
+		meta := &ProxyMetadata{
+			RequestID:        requestID,
+			SelectedModel:    ep.Model.Name,
+			SelectedEndpoint: ep.Provider.Name,
+			InferredTaskType: string(ep.Model.Role),
+			Stream:           true,
+			StatusCode:       resp.StatusCode,
+			Success:          true,
+			FallbackInfo:     selection.FallbackInfo,
+		}
+
+		chunkChan := make(chan StreamChunk, 100)
+		// Return a copy so the caller cannot race with the goroutine
+		// that populates streaming fields (LatencyMs, InputTokens, etc.).
+		returnMeta := *meta
+		go s.readSSEStream(ctx, resp, ep, epName, attemptStart, meta, chunkChan)
+		return chunkChan, &returnMeta, nil
+	}
+
+	return nil, nil, fmt.Errorf("max retries exceeded for model %s", selection.Model.Name)
+}
+
+// connectStreamEndpoint establishes a streaming connection to a single endpoint.
+// Returns the HTTP response on success, or an error (including UpstreamError for 4xx/5xx).
+func (s *ProxyService) connectStreamEndpoint(
+	ctx context.Context,
+	req *models.AnthropicRequest,
+	originalHeaders http.Header,
+	ep *models.Endpoint,
+	start time.Time,
+) (*http.Response, error) {
+	epName := EndpointName(ep)
+
 	streamReq := *req
 	streamReq.Model = ep.Model.Name
 	streamReq.Stream = true
 
 	body, err := json.Marshal(&streamReq)
 	if err != nil {
-		s.healthChecker.DecrementConnections(epName)
-		return nil, nil, fmt.Errorf("marshal request: %w", err)
+		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
 	upstreamURL := fmt.Sprintf("%s/v1/messages", ep.Provider.BaseURL)
 	upReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
-		s.healthChecker.DecrementConnections(epName)
-		return nil, nil, fmt.Errorf("create upstream request: %w", err)
+		return nil, fmt.Errorf("create upstream request: %w", err)
 	}
 
-	// Set headers
 	upReq.Header.Set("Content-Type", "application/json")
 	upReq.Header.Set("Accept", "text/event-stream")
 	upReq.Header.Set("x-api-key", ep.Provider.APIKey)
 	upReq.Header.Set("anthropic-version", headerOrDefault(originalHeaders, "Anthropic-Version", "2023-06-01"))
 	copyAnthropicHeaders(originalHeaders, upReq.Header)
+	if ua := originalHeaders.Get("User-Agent"); ua != "" {
+		upReq.Header.Set("User-Agent", ua)
+	}
+	applyCustomHeaders(ep.Provider.CustomHeaders, upReq.Header)
 
 	resp, err := s.streamClient.Do(upReq)
 	if err != nil {
-		s.healthChecker.DecrementConnections(epName)
 		s.healthChecker.UpdateRequestStats(epName, false, msSince(start))
-		return nil, nil, fmt.Errorf("upstream request failed: %w", err)
+		return nil, fmt.Errorf("upstream request failed: %w", err)
 	}
 
-	// Check for error response
 	if resp.StatusCode >= 400 {
-		defer resp.Body.Close()
-		s.healthChecker.DecrementConnections(epName)
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
 		s.healthChecker.UpdateRequestStats(epName, false, msSince(start))
-		return nil, nil, &UpstreamError{StatusCode: resp.StatusCode, Body: respBody}
+		if readErr != nil {
+			return nil, fmt.Errorf("read upstream error response (status %d): %w", resp.StatusCode, readErr)
+		}
+		return nil, &UpstreamError{StatusCode: resp.StatusCode, Body: respBody}
 	}
 
-	// Initial metadata (will be updated with final values)
-	meta := &ProxyMetadata{
-		RequestID:        requestID,
-		SelectedModel:    ep.Model.Name,
-		SelectedEndpoint: ep.Provider.Name,
-		InferredTaskType: string(ep.Model.Role),
-		Stream:           true,
-		StatusCode:       resp.StatusCode,
-		Success:          true,
-	}
-
-	// Create channel for streaming chunks
-	chunkChan := make(chan StreamChunk, 100)
-
-	// Start goroutine to read stream
-	go s.readSSEStream(ctx, resp, ep, epName, start, meta, chunkChan)
-
-	return chunkChan, meta, nil
+	return resp, nil
 }
 
 // readSSEStream reads SSE events from the response and sends chunks to the channel.
@@ -463,19 +546,23 @@ func (s *ProxyService) readSSEStream(
 	defer s.healthChecker.DecrementConnections(epName)
 
 	var inputTokens, outputTokens int
+	var firstByteTime time.Time
 	reader := bufio.NewReader(resp.Body)
 
 	for {
 		select {
 		case <-ctx.Done():
-			chunkChan <- StreamChunk{Err: ctx.Err(), Done: true}
+			latencyMs := streamLatency(firstByteTime, start)
+			s.healthChecker.UpdateRequestStats(epName, false, latencyMs)
+			finalMeta := buildStreamMeta(meta, ep, false, latencyMs, inputTokens, outputTokens)
+			chunkChan <- StreamChunk{Err: ctx.Err(), Done: true, Meta: &finalMeta}
 			return
 		default:
 		}
 
 		line, err := reader.ReadBytes('\n')
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				// EOF may carry remaining data — send it before finishing
 				if len(line) > 0 {
 					chunkChan <- StreamChunk{Data: line}
@@ -484,13 +571,18 @@ func (s *ProxyService) readSSEStream(
 				break
 			}
 			s.logger.Error("error reading stream", zap.Error(err))
-			chunkChan <- StreamChunk{Err: err, Done: true}
-			s.healthChecker.UpdateRequestStats(epName, false, msSince(start))
+			latencyMs := streamLatency(firstByteTime, start)
+			s.healthChecker.UpdateRequestStats(epName, false, latencyMs)
+			finalMeta := buildStreamMeta(meta, ep, false, latencyMs, inputTokens, outputTokens)
+			chunkChan <- StreamChunk{Err: err, Done: true, Meta: &finalMeta}
 			return
 		}
 
 		// Send raw chunk to client
 		if len(line) > 0 {
+			if firstByteTime.IsZero() {
+				firstByteTime = time.Now()
+			}
 			chunkChan <- StreamChunk{Data: line}
 		}
 
@@ -498,18 +590,12 @@ func (s *ProxyService) readSSEStream(
 		s.parseSSEUsage(line, &inputTokens, &outputTokens)
 	}
 
-	// Calculate final metrics
-	latencyMs := msSince(start)
-	cost := calculateCostFromTokens(ep.Model, inputTokens, outputTokens)
+	// Calculate final metrics using TTFB
+	latencyMs := streamLatency(firstByteTime, start)
+	finalMeta := buildStreamMeta(meta, ep, true, latencyMs, inputTokens, outputTokens)
 
-	// Update metadata with final values
-	meta.LatencyMs = latencyMs
-	meta.InputTokens = inputTokens
-	meta.OutputTokens = outputTokens
-	meta.Cost = cost
-
-	// Send final chunk with metadata
-	chunkChan <- StreamChunk{Done: true, Meta: meta}
+	// Send final chunk with completed metadata
+	chunkChan <- StreamChunk{Done: true, Meta: &finalMeta}
 
 	// Update health stats
 	s.healthChecker.UpdateRequestStats(epName, true, latencyMs)
@@ -518,7 +604,7 @@ func (s *ProxyService) readSSEStream(
 		zap.String("request_id", meta.RequestID),
 		zap.Int("input_tokens", inputTokens),
 		zap.Int("output_tokens", outputTokens),
-		zap.Float64("cost", cost),
+		zap.Float64("cost", finalMeta.Cost),
 		zap.Float64("latency_ms", latencyMs))
 }
 
@@ -546,4 +632,23 @@ func (s *ProxyService) parseSSEUsage(line []byte, inputTokens, outputTokens *int
 	if ot, ok := usage["output_tokens"].(float64); ok {
 		*outputTokens = int(ot)
 	}
+}
+
+// streamLatency returns TTFB if available, otherwise falls back to time since start.
+func streamLatency(firstByteTime, start time.Time) float64 {
+	if !firstByteTime.IsZero() {
+		return float64(firstByteTime.Sub(start).Milliseconds())
+	}
+	return msSince(start)
+}
+
+// buildStreamMeta creates a copy of metadata with final streaming values.
+func buildStreamMeta(meta *ProxyMetadata, ep *models.Endpoint, success bool, latencyMs float64, inputTokens, outputTokens int) ProxyMetadata {
+	finalMeta := *meta
+	finalMeta.LatencyMs = latencyMs
+	finalMeta.InputTokens = inputTokens
+	finalMeta.OutputTokens = outputTokens
+	finalMeta.Cost = calculateCostFromTokens(ep.Model, inputTokens, outputTokens)
+	finalMeta.Success = success
+	return finalMeta
 }

@@ -178,6 +178,47 @@ func (h *APIKeyHandler) RevokeAPIKey(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "API key revoked"})
 }
 
+// ToggleAPIKey toggles the is_active state of an API key.
+// POST /api/keys/:id/toggle
+func (h *APIKeyHandler) ToggleAPIKey(c *gin.Context) {
+	currentUser := middleware.GetCurrentUser(c)
+	if currentUser == nil {
+		errorResponse(c, http.StatusUnauthorized, "Not authenticated")
+		return
+	}
+
+	keyID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		errorResponse(c, http.StatusBadRequest, "Invalid key ID")
+		return
+	}
+
+	key, err := h.keyRepo.FindByID(c.Request.Context(), keyID)
+	if err != nil {
+		errorResponse(c, http.StatusNotFound, "API key not found")
+		return
+	}
+
+	// Check permission
+	if currentUser.Role != string(models.UserRoleAdmin) && key.UserID != currentUser.UserID {
+		errorResponse(c, http.StatusForbidden, "No permission to modify this API key")
+		return
+	}
+
+	var userID *int64
+	if currentUser.Role != string(models.UserRoleAdmin) {
+		userID = &currentUser.UserID
+	}
+
+	newActive := !key.IsActive
+	if err := h.keyRepo.SetActive(c.Request.Context(), keyID, userID, newActive); err != nil {
+		errorResponse(c, http.StatusInternalServerError, "Failed to toggle API key")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "OK", "is_active": newActive})
+}
+
 // DeleteAPIKey deletes an API key.
 // DELETE /api/keys/:id
 func (h *APIKeyHandler) DeleteAPIKey(c *gin.Context) {

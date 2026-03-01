@@ -79,6 +79,7 @@ func (s *EndpointStore) ReloadAndNotify(ctx context.Context) {
 	s.mu.RUnlock()
 	if hc != nil {
 		hc.UpdateEndpoints(eps)
+		hc.CheckNow()
 	}
 }
 

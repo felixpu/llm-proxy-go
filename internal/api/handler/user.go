@@ -129,6 +129,12 @@ func (h *UserHandler) UpdateUser(c *gin.Context) {
 		return
 	}
 
+	// Protect the default admin account
+	if user.Username == "admin" {
+		errorResponse(c, http.StatusForbidden, "Cannot modify the super admin account")
+		return
+	}
+
 	if req.Username != "" {
 		user.Username = req.Username
 	}
@@ -160,6 +166,17 @@ func (h *UserHandler) DeleteUser(c *gin.Context) {
 	currentUser := middleware.GetCurrentUser(c)
 	if currentUser != nil && currentUser.UserID == userID {
 		errorResponse(c, http.StatusBadRequest, "Cannot delete your own account")
+		return
+	}
+
+	// Protect the default admin account
+	user, err := h.userRepo.FindByID(c.Request.Context(), userID)
+	if err != nil {
+		errorResponse(c, http.StatusNotFound, "User not found")
+		return
+	}
+	if user.Username == "admin" {
+		errorResponse(c, http.StatusForbidden, "Cannot delete the super admin account")
 		return
 	}
 

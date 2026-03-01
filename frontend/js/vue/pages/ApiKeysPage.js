@@ -231,6 +231,23 @@ window.VuePages = window.VuePages || {};
         }
       }
 
+      // 切换 API Key 启用状态
+      async function toggleKeyActive(key) {
+        var newActive = !key.is_active;
+        key.is_active = newActive;
+        try {
+          var response = await VueApi.post("/api/keys/" + key.id + "/toggle");
+          if (!response.ok) {
+            key.is_active = !newActive;
+            var err = await response.json();
+            toastStore.error(err.detail || "切换失败");
+          }
+        } catch (error) {
+          key.is_active = !newActive;
+          toastStore.error("切换失败: " + error.message);
+        }
+      }
+
       // 切换下拉菜单
       function toggleDropdown(id) {
         openDropdown.value = openDropdown.value === id ? null : id;
@@ -287,6 +304,7 @@ window.VuePages = window.VuePages || {};
         revokeKey: revokeKey,
         deleteKey: deleteKey,
         toggleDropdown: toggleDropdown,
+        toggleKeyActive: toggleKeyActive,
       };
     },
     template:
@@ -315,9 +333,7 @@ window.VuePages = window.VuePages || {};
                     <td>{{ key.name }}</td>\
                     <td><code>{{ key.key_prefix }}...</code></td>\
                     <td>\
-                        <span :class="\'status-badge \' + (key.is_active ? \'status-healthy\' : \'status-unhealthy\')">\
-                            {{ key.is_active ? "有效" : "已禁用" }}\
-                        </span>\
+                        <label class="toggle-switch" @click.stop><input type="checkbox" :checked="key.is_active" @change="toggleKeyActive(key)"><span class="toggle-slider"></span></label>\
                     </td>\
                     <td>{{ formatDateTime(key.created_at) }}</td>\
                     <td>{{ formatDateTime(key.last_used_at) }}</td>\
@@ -359,9 +375,7 @@ window.VuePages = window.VuePages || {};
                         <code>{{ key.key_prefix }}...</code>\
                     </div>\
                 </div>\
-                <span :class="\'status-badge \' + (key.is_active ? \'status-healthy\' : \'status-unhealthy\')">\
-                    {{ key.is_active ? "有效" : "已禁用" }}\
-                </span>\
+                <label class="toggle-switch" @click.stop><input type="checkbox" :checked="key.is_active" @change="toggleKeyActive(key)"><span class="toggle-slider"></span></label>\
             </div>\
             <div class="key-card-body">\
                 <div class="key-stat">\

@@ -158,7 +158,7 @@ func (r *RoutingRuleRepo) IncrementHitCount(ctx context.Context, id int64) error
 // GetStats retrieves routing rule statistics.
 func (r *RoutingRuleRepo) GetStats(ctx context.Context) (*models.RuleStats, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT name, hit_count FROM routing_rules ORDER BY hit_count DESC
+		SELECT id, name, hit_count FROM routing_rules ORDER BY hit_count DESC
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get rule stats: %w", err)
@@ -166,16 +166,20 @@ func (r *RoutingRuleRepo) GetStats(ctx context.Context) (*models.RuleStats, erro
 	defer rows.Close()
 
 	var totalRequests int64
-	ruleHits := make(map[string]models.HitStat)
+	ruleHits := make(map[int64]models.HitStat)
 
 	for rows.Next() {
+		var id int64
 		var name string
 		var hitCount int64
-		if err := rows.Scan(&name, &hitCount); err != nil {
+		if err := rows.Scan(&id, &name, &hitCount); err != nil {
 			return nil, fmt.Errorf("failed to scan rule stats: %w", err)
 		}
 		totalRequests += hitCount
-		ruleHits[name] = models.HitStat{Count: hitCount}
+		ruleHits[id] = models.HitStat{
+			Name:  name,
+			Count: hitCount,
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -183,9 +187,9 @@ func (r *RoutingRuleRepo) GetStats(ctx context.Context) (*models.RuleStats, erro
 
 	// Calculate percentages
 	if totalRequests > 0 {
-		for name, stat := range ruleHits {
+		for id, stat := range ruleHits {
 			stat.Percentage = float64(stat.Count) / float64(totalRequests) * 100
-			ruleHits[name] = stat
+			ruleHits[id] = stat
 		}
 	}
 

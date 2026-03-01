@@ -35,21 +35,24 @@ type RoutingModelUpdate struct {
 
 // LLMRoutingConfigUpdate represents an LLM routing configuration update.
 type LLMRoutingConfigUpdate struct {
-	Enabled              *bool    `json:"enabled"`
-	PrimaryModelID       *int64   `json:"primary_model_id"`
-	FallbackModelID      *int64   `json:"fallback_model_id"`
-	TimeoutSeconds       *int     `json:"timeout_seconds"`
-	CacheEnabled         *bool    `json:"cache_enabled"`
-	CacheTTLSeconds      *int     `json:"cache_ttl_seconds"`
-	CacheTTLL3Seconds    *int     `json:"cache_ttl_l3_seconds"`
-	MaxTokens            *int     `json:"max_tokens"`
-	Temperature          *float64 `json:"temperature"`
-	RetryCount           *int     `json:"retry_count"`
-	SemanticCacheEnabled *bool    `json:"semantic_cache_enabled"`
-	EmbeddingModelID     *int64   `json:"embedding_model_id"`
-	SimilarityThreshold  *float64 `json:"similarity_threshold"`
-	LocalEmbeddingModel  *string  `json:"local_embedding_model"`
-	ForceSmartRouting    *bool    `json:"force_smart_routing"`
+	Enabled                 *bool    `json:"enabled"`
+	PrimaryModelID          *int64   `json:"primary_model_id"`
+	FallbackModelID         *int64   `json:"fallback_model_id"`
+	TimeoutSeconds          *int     `json:"timeout_seconds"`
+	CacheEnabled            *bool    `json:"cache_enabled"`
+	CacheTTLSeconds         *int     `json:"cache_ttl_seconds"`
+	CacheTTLL3Seconds       *int     `json:"cache_ttl_l3_seconds"`
+	MaxTokens               *int     `json:"max_tokens"`
+	Temperature             *float64 `json:"temperature"`
+	RetryCount              *int     `json:"retry_count"`
+	SemanticCacheEnabled    *bool    `json:"semantic_cache_enabled"`
+	EmbeddingModelID        *int64   `json:"embedding_model_id"`
+	SimilarityThreshold     *float64 `json:"similarity_threshold"`
+	LocalEmbeddingModel     *string  `json:"local_embedding_model"`
+	ForceSmartRouting       *bool    `json:"force_smart_routing"`
+	RuleBasedRoutingEnabled *bool    `json:"rule_based_routing_enabled"`
+	RuleFallbackStrategy    *string  `json:"rule_fallback_strategy"`
+	RuleFallbackTaskType    *string  `json:"rule_fallback_task_type"`
 }
 
 // RoutingHandler handles routing model and LLM config API endpoints.
@@ -201,6 +204,9 @@ func (h *RoutingHandler) UpdateLLMRoutingConfig(c *gin.Context) {
 	if req.SimilarityThreshold != nil { updates["similarity_threshold"] = *req.SimilarityThreshold }
 	if req.LocalEmbeddingModel != nil { updates["local_embedding_model"] = *req.LocalEmbeddingModel }
 	if req.ForceSmartRouting != nil { updates["force_smart_routing"] = *req.ForceSmartRouting }
+	if req.RuleBasedRoutingEnabled != nil { updates["rule_based_routing_enabled"] = *req.RuleBasedRoutingEnabled }
+	if req.RuleFallbackStrategy != nil { updates["rule_fallback_strategy"] = *req.RuleFallbackStrategy }
+	if req.RuleFallbackTaskType != nil { updates["rule_fallback_task_type"] = *req.RuleFallbackTaskType }
 	if err := h.configRepo.UpdateConfig(c.Request.Context(), updates); err != nil {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return

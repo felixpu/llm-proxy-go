@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -174,8 +175,8 @@ func TestProxyService_ProxyRequest_UpstreamError(t *testing.T) {
 	assert.Error(t, err)
 
 	// Should be UpstreamError
-	upErr, ok := err.(*UpstreamError)
-	require.True(t, ok)
+	var upErr *UpstreamError
+	require.True(t, errors.As(err, &upErr))
 	assert.Equal(t, http.StatusBadRequest, upErr.StatusCode)
 }
 
@@ -242,6 +243,7 @@ func TestProxyService_ProxyStreamRequest_NoHealthyEndpoints(t *testing.T) {
 }
 
 func TestProxyService_ProxyStreamRequest_UpstreamError(t *testing.T) {
+	// 401 is now retryable — with only one endpoint, it should exhaust retries
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		w.Write([]byte(`{"type":"error","error":{"type":"authentication_error","message":"Invalid API key"}}`))
@@ -272,8 +274,9 @@ func TestProxyService_ProxyStreamRequest_UpstreamError(t *testing.T) {
 	assert.Nil(t, meta)
 	assert.Error(t, err)
 
-	upErr, ok := err.(*UpstreamError)
-	require.True(t, ok)
+	// 401 is retryable, so with one endpoint it wraps as "all endpoints failed"
+	var upErr *UpstreamError
+	require.True(t, errors.As(err, &upErr), "expected UpstreamError, got: %v", err)
 	assert.Equal(t, http.StatusUnauthorized, upErr.StatusCode)
 }
 
@@ -574,4 +577,468 @@ func registerHealthyEndpoints(hc *HealthChecker, endpoints []*models.Endpoint) {
 			Status: models.EndpointHealthy,
 		}
 	}
+}
+
+// TestIsRetryableStatusCode verifies the status code classification logic.
+func TestIsRetryableStatusCode(t *testing.T) {
+	tests := []struct {
+		code      int
+		retryable bool
+	}{
+		{400, false}, // Bad request
+		{401, true},  // Unauthorized (invalid key)
+		{402, true},  // Payment required (insufficient balance)
+		{403, true},  // Forbidden (quota/permission)
+		{404, false}, // Not found
+		{408, true},  // Request timeout
+		{413, false}, // Payload too large
+		{422, false}, // Unprocessable entity
+		{429, true},  // Too many requests (rate limit)
+		{500, true},  // Internal server error
+		{502, true},  // Bad gateway
+		{503, true},  // Service unavailable
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("status_%d", tt.code), func(t *testing.T) {
+			result := isRetryableStatusCode(tt.code)
+			assert.Equal(t, tt.retryable, result, "status %d retryable=%v", tt.code, tt.retryable)
+		})
+	}
+}
+
+// TestProxyService_ProxyRequest_RetryOn403 verifies that 403 triggers fallback to alternative endpoints.
+func TestProxyService_ProxyRequest_RetryOn403(t *testing.T) {
+	// First provider returns 403 (quota exceeded)
+	provider1Calls := 0
+	upstream1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider1Calls++
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"type":"error","error":{"type":"permission_error","message":"Quota exceeded"}}`))
+	}))
+	defer upstream1.Close()
+
+	// Second provider succeeds
+	provider2Calls := 0
+	upstream2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider2Calls++
+		resp := models.AnthropicResponse{
+			ID:         "msg_123",
+			Type:       "message",
+			Role:       "assistant",
+			Model:      "claude-3-sonnet",
+			Content:    []models.ContentPart{{Type: "text", Text: "Success from provider2"}},
+			StopReason: "end_turn",
+			Usage:      models.Usage{InputTokens: 10, OutputTokens: 20},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer upstream2.Close()
+
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ps := NewProxyService(hc, lb, nil, logger)
+
+	model := &models.Model{
+		ID:                1,
+		Name:              "claude-3-sonnet",
+		Role:              models.ModelRoleDefault,
+		CostPerMtokInput:  3.0,
+		CostPerMtokOutput: 15.0,
+		BillingMultiplier: 1.0,
+		Enabled:           true,
+	}
+
+	ep1 := &models.Endpoint{
+		Provider: &models.Provider{
+			ID:      1,
+			Name:    "provider1",
+			BaseURL: upstream1.URL,
+			APIKey:  "key1",
+			Enabled: true,
+		},
+		Model:  model,
+		Status: models.EndpointHealthy,
+	}
+
+	ep2 := &models.Endpoint{
+		Provider: &models.Provider{
+			ID:      2,
+			Name:    "provider2",
+			BaseURL: upstream2.URL,
+			APIKey:  "key2",
+			Enabled: true,
+		},
+		Model:  model,
+		Status: models.EndpointHealthy,
+	}
+
+	registerHealthyEndpoints(hc, []*models.Endpoint{ep1, ep2})
+
+	req := &models.AnthropicRequest{
+		Model:     "claude-3-sonnet",
+		MaxTokens: 100,
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "Hello"}},
+		},
+	}
+
+	selection := &EndpointSelectionResult{
+		Endpoint: ep1,
+		Model:    model,
+		TaskType: model.Role,
+	}
+
+	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, selection, []*models.Endpoint{ep1, ep2})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, meta)
+
+	assert.Equal(t, 1, provider1Calls, "provider1 should be called once")
+	assert.Equal(t, 1, provider2Calls, "provider2 should be called once after fallback")
+	assert.Equal(t, "provider2", meta.SelectedEndpoint, "should fallback to provider2")
+	assert.Equal(t, "Success from provider2", resp.Content[0].Text)
+}
+
+// TestProxyService_ProxyStreamRequest_RetryOn403 verifies that 403 triggers fallback in streaming requests.
+func TestProxyService_ProxyStreamRequest_RetryOn403(t *testing.T) {
+	provider1Calls := 0
+	upstream1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider1Calls++
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"type":"error","error":{"type":"permission_error","message":"Quota exceeded"}}`))
+	}))
+	defer upstream1.Close()
+
+	provider2Calls := 0
+	upstream2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider2Calls++
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		flusher, ok := w.(http.Flusher)
+		require.True(t, ok)
+
+		w.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_123\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n"))
+		flusher.Flush()
+
+		w.Write([]byte("data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Success\"}}\n\n"))
+		flusher.Flush()
+
+		w.Write([]byte("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n"))
+		flusher.Flush()
+	}))
+	defer upstream2.Close()
+
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ps := NewProxyService(hc, lb, nil, logger)
+
+	model := &models.Model{
+		ID:                1,
+		Name:              "claude-3-sonnet",
+		Role:              models.ModelRoleDefault,
+		CostPerMtokInput:  3.0,
+		CostPerMtokOutput: 15.0,
+		BillingMultiplier: 1.0,
+		Enabled:           true,
+	}
+
+	ep1 := &models.Endpoint{
+		Provider: &models.Provider{ID: 1, Name: "provider1", BaseURL: upstream1.URL, APIKey: "key1", Enabled: true},
+		Model:    model,
+		Status:   models.EndpointHealthy,
+	}
+
+	ep2 := &models.Endpoint{
+		Provider: &models.Provider{ID: 2, Name: "provider2", BaseURL: upstream2.URL, APIKey: "key2", Enabled: true},
+		Model:    model,
+		Status:   models.EndpointHealthy,
+	}
+
+	registerHealthyEndpoints(hc, []*models.Endpoint{ep1, ep2})
+
+	req := &models.AnthropicRequest{
+		Model:     "claude-3-sonnet",
+		MaxTokens: 100,
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "Hello"}},
+		},
+	}
+
+	selection := &EndpointSelectionResult{
+		Endpoint: ep1,
+		Model:    model,
+		TaskType: model.Role,
+	}
+
+	ch, meta, err := ps.ProxyStreamRequest(context.Background(), req, http.Header{}, selection, []*models.Endpoint{ep1, ep2})
+	require.NoError(t, err)
+	require.NotNil(t, ch)
+	require.NotNil(t, meta)
+
+	// Consume stream
+	for chunk := range ch {
+		if chunk.Err != nil {
+			t.Fatalf("stream error: %v", chunk.Err)
+		}
+	}
+
+	assert.Equal(t, 1, provider1Calls, "provider1 should be called once")
+	assert.Equal(t, 1, provider2Calls, "provider2 should be called once after fallback")
+	assert.Equal(t, "provider2", meta.SelectedEndpoint, "should fallback to provider2")
+}
+
+// TestProxyService_ProxyRequest_NoRetryOn400 verifies that 400 does NOT trigger retry.
+func TestProxyService_ProxyRequest_NoRetryOn400(t *testing.T) {
+	provider1Calls := 0
+	upstream1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider1Calls++
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"Bad request"}}`))
+	}))
+	defer upstream1.Close()
+
+	provider2Calls := 0
+	upstream2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provider2Calls++
+		resp := models.AnthropicResponse{
+			ID:         "msg_123",
+			Type:       "message",
+			Role:       "assistant",
+			Model:      "claude-3-sonnet",
+			Content:    []models.ContentPart{{Type: "text", Text: "Should not reach here"}},
+			StopReason: "end_turn",
+			Usage:      models.Usage{InputTokens: 10, OutputTokens: 20},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer upstream2.Close()
+
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ps := NewProxyService(hc, lb, nil, logger)
+
+	model := &models.Model{
+		ID:                1,
+		Name:              "claude-3-sonnet",
+		Role:              models.ModelRoleDefault,
+		CostPerMtokInput:  3.0,
+		CostPerMtokOutput: 15.0,
+		BillingMultiplier: 1.0,
+		Enabled:           true,
+	}
+
+	ep1 := &models.Endpoint{
+		Provider: &models.Provider{ID: 1, Name: "provider1", BaseURL: upstream1.URL, APIKey: "key1", Enabled: true},
+		Model:    model,
+		Status:   models.EndpointHealthy,
+	}
+
+	ep2 := &models.Endpoint{
+		Provider: &models.Provider{ID: 2, Name: "provider2", BaseURL: upstream2.URL, APIKey: "key2", Enabled: true},
+		Model:    model,
+		Status:   models.EndpointHealthy,
+	}
+
+	registerHealthyEndpoints(hc, []*models.Endpoint{ep1, ep2})
+
+	req := &models.AnthropicRequest{
+		Model:     "claude-3-sonnet",
+		MaxTokens: 100,
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "Hello"}},
+		},
+	}
+
+	selection := &EndpointSelectionResult{
+		Endpoint: ep1,
+		Model:    model,
+		TaskType: model.Role,
+	}
+
+	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, selection, []*models.Endpoint{ep1, ep2})
+	assert.Nil(t, resp)
+	assert.Nil(t, meta)
+	assert.Error(t, err)
+
+	// Should be UpstreamError with 400
+	var upErr *UpstreamError
+	require.True(t, errors.As(err, &upErr))
+	assert.Equal(t, http.StatusBadRequest, upErr.StatusCode)
+
+	// Verify no retry happened
+	assert.Equal(t, 1, provider1Calls, "provider1 should be called once")
+	assert.Equal(t, 0, provider2Calls, "provider2 should NOT be called (400 is non-retryable)")
+}
+
+// TestStreamLatency verifies TTFB calculation logic.
+func TestStreamLatency(t *testing.T) {
+	start := time.Now()
+	time.Sleep(10 * time.Millisecond)
+
+	t.Run("with first byte time", func(t *testing.T) {
+		firstByte := start.Add(5 * time.Millisecond)
+		latency := streamLatency(firstByte, start)
+		assert.Equal(t, float64(5), latency, "should use TTFB")
+	})
+
+	t.Run("without first byte time (zero)", func(t *testing.T) {
+		latency := streamLatency(time.Time{}, start)
+		assert.GreaterOrEqual(t, latency, float64(10), "should fallback to msSince(start)")
+	})
+}
+
+// TestBuildStreamMeta verifies metadata construction for stream chunks.
+func TestBuildStreamMeta(t *testing.T) {
+	meta := &ProxyMetadata{
+		RequestID:        "req-123",
+		SelectedModel:    "claude-3-sonnet",
+		SelectedEndpoint: "provider1",
+		Stream:           true,
+		StatusCode:       200,
+	}
+	ep := &models.Endpoint{
+		Model: &models.Model{
+			CostPerMtokInput:  3.0,
+			CostPerMtokOutput: 15.0,
+			BillingMultiplier: 1.0,
+		},
+	}
+
+	result := buildStreamMeta(meta, ep, false, 42.0, 100, 50)
+
+	assert.Equal(t, "req-123", result.RequestID)
+	assert.Equal(t, float64(42), result.LatencyMs)
+	assert.Equal(t, 100, result.InputTokens)
+	assert.Equal(t, 50, result.OutputTokens)
+	assert.False(t, result.Success)
+	assert.Greater(t, result.Cost, float64(0))
+
+	// Verify original meta is not mutated
+	assert.Equal(t, float64(0), meta.LatencyMs)
+	assert.Equal(t, 0, meta.InputTokens)
+}
+
+// TestProxyService_StreamContextCancel verifies stats are updated when context is cancelled.
+func TestProxyService_StreamContextCancel(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+
+		// Send first chunk
+		w.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\n"))
+		flusher.Flush()
+
+		// Block until client disconnects
+		<-r.Context().Done()
+	}))
+	defer upstream.Close()
+
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{Enabled: true}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ps := NewProxyService(hc, lb, nil, logger)
+
+	ep := createProxyTestEndpoint(upstream.URL)
+	registerHealthyEndpoints(hc, []*models.Endpoint{ep})
+
+	req := &models.AnthropicRequest{
+		Model:     "claude-3-sonnet",
+		MaxTokens: 100,
+		Messages:  []models.Message{{Role: "user", Content: models.MessageContent{Text: "Hello"}}},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	selection := &EndpointSelectionResult{Endpoint: ep, Model: ep.Model, TaskType: ep.Model.Role}
+
+	ch, _, err := ps.ProxyStreamRequest(ctx, req, http.Header{}, selection, []*models.Endpoint{ep})
+	require.NoError(t, err)
+
+	// Read first data chunk to ensure stream started
+	chunk := <-ch
+	require.NoError(t, chunk.Err)
+	require.False(t, chunk.Done)
+
+	// Cancel context
+	cancel()
+
+	// Drain remaining chunks and find the final one
+	var finalChunk StreamChunk
+	for c := range ch {
+		finalChunk = c
+	}
+
+	assert.True(t, finalChunk.Done, "final chunk should be Done")
+	assert.Error(t, finalChunk.Err, "final chunk should have context error")
+	assert.NotNil(t, finalChunk.Meta, "final chunk should have metadata")
+	assert.False(t, finalChunk.Meta.Success, "cancelled request should not be successful")
+	assert.GreaterOrEqual(t, finalChunk.Meta.LatencyMs, float64(0), "latency should be set")
+}
+
+// TestProxyService_RetryUsesPerAttemptTiming verifies each retry attempt measures its own latency.
+func TestProxyService_RetryUsesPerAttemptTiming(t *testing.T) {
+	callCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		if callCount == 1 {
+			// First call: slow then fail with retryable error
+			time.Sleep(50 * time.Millisecond)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"type":"error"}`))
+			return
+		}
+		// Second call: fast success
+		resp := models.AnthropicResponse{
+			ID:         "msg_ok",
+			Type:       "message",
+			Role:       "assistant",
+			Model:      "claude-3-sonnet",
+			Content:    []models.ContentPart{{Type: "text", Text: "OK"}},
+			StopReason: "end_turn",
+			Usage:      models.Usage{InputTokens: 5, OutputTokens: 3},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer upstream.Close()
+
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ps := NewProxyService(hc, lb, nil, logger)
+
+	model := &models.Model{
+		ID: 1, Name: "claude-3-sonnet", Role: models.ModelRoleDefault,
+		CostPerMtokInput: 3.0, CostPerMtokOutput: 15.0, BillingMultiplier: 1.0, Enabled: true,
+	}
+	ep1 := &models.Endpoint{
+		Provider: &models.Provider{ID: 1, Name: "p1", BaseURL: upstream.URL, APIKey: "k1", Enabled: true},
+		Model: model, Status: models.EndpointHealthy,
+	}
+	ep2 := &models.Endpoint{
+		Provider: &models.Provider{ID: 2, Name: "p2", BaseURL: upstream.URL, APIKey: "k2", Enabled: true},
+		Model: model, Status: models.EndpointHealthy,
+	}
+	registerHealthyEndpoints(hc, []*models.Endpoint{ep1, ep2})
+
+	req := &models.AnthropicRequest{
+		Model: "claude-3-sonnet", MaxTokens: 100,
+		Messages: []models.Message{{Role: "user", Content: models.MessageContent{Text: "Hi"}}},
+	}
+	selection := &EndpointSelectionResult{Endpoint: ep1, Model: model, TaskType: model.Role}
+
+	_, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, selection, []*models.Endpoint{ep1, ep2})
+	require.NoError(t, err)
+
+	// The successful retry's latency should be less than the first attempt's 50ms sleep
+	// (it measures only the second attempt, not cumulative time)
+	assert.Less(t, meta.LatencyMs, float64(50),
+		"retry latency should measure only the successful attempt, not cumulative time")
 }

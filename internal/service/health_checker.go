@@ -132,11 +132,14 @@ func (hc *HealthChecker) Stop() {
 	}
 }
 
-func (hc *HealthChecker) loop(ctx context.Context, endpoints []*models.Endpoint) {
+func (hc *HealthChecker) loop(ctx context.Context, _ []*models.Endpoint) {
 	defer close(hc.done)
 
 	// Run an initial check immediately.
-	hc.checkAll(ctx, endpoints)
+	hc.mu.RLock()
+	eps := hc.endpoints
+	hc.mu.RUnlock()
+	hc.checkAll(ctx, eps)
 
 	ticker := time.NewTicker(time.Duration(hc.cfg.IntervalSeconds) * time.Second)
 	defer ticker.Stop()
@@ -146,7 +149,10 @@ func (hc *HealthChecker) loop(ctx context.Context, endpoints []*models.Endpoint)
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			hc.checkAll(ctx, endpoints)
+			hc.mu.RLock()
+			eps := hc.endpoints
+			hc.mu.RUnlock()
+			hc.checkAll(ctx, eps)
 		}
 	}
 }
@@ -180,12 +186,14 @@ func (hc *HealthChecker) checkEndpoint(ctx context.Context, ep *models.Endpoint)
 	}
 	defer resp.Body.Close()
 
-	// 401 = invalid key, <500 = healthy, >=500 = unhealthy
+	// 401 = invalid key, 403 = quota/permission, <400 = healthy, >=400 = unhealthy
 	var status models.EndpointStatus
 	switch {
 	case resp.StatusCode == http.StatusUnauthorized:
 		status = models.EndpointUnhealthy
-	case resp.StatusCode < 500:
+	case resp.StatusCode == http.StatusForbidden:
+		status = models.EndpointUnhealthy
+	case resp.StatusCode < 400:
 		status = models.EndpointHealthy
 	default:
 		status = models.EndpointUnhealthy

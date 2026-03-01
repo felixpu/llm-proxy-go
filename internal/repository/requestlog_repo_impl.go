@@ -604,3 +604,93 @@ func (r *RequestLogRepositoryImpl) ListInaccurate(ctx context.Context, limit, of
 	}
 	return logs, total, rows.Err()
 }
+
+// ListForAnalysis returns logs with request_content for routing analysis.
+func (r *RequestLogRepositoryImpl) ListForAnalysis(ctx context.Context, startTime, endTime *time.Time, maxResults int) ([]*models.RequestLog, error) {
+	var conditions []string
+	var params []any
+
+	conditions = append(conditions, "request_logs.routing_method != ''")
+	if startTime != nil {
+		conditions = append(conditions, "request_logs.created_at >= ?")
+		params = append(params, startTime.UTC().Format("2006-01-02 15:04:05"))
+	}
+	if endTime != nil {
+		conditions = append(conditions, "request_logs.created_at <= ?")
+		params = append(params, endTime.UTC().Format("2006-01-02 15:04:05"))
+	}
+
+	whereSQL := strings.Join(conditions, " AND ")
+	params = append(params, maxResults)
+
+	query := fmt.Sprintf(`
+		SELECT
+			request_logs.id, request_logs.request_id, request_logs.user_id,
+			COALESCE(u.username, '') as username,
+			request_logs.api_key_id, request_logs.model_name, request_logs.endpoint_name,
+			request_logs.task_type, request_logs.input_tokens, request_logs.output_tokens,
+			request_logs.latency_ms, request_logs.cost, request_logs.status_code,
+			request_logs.success, request_logs.stream, request_logs.created_at,
+			request_logs.message_preview, request_logs.request_content, '' as response_content,
+			request_logs.routing_method, request_logs.routing_reason,
+			request_logs.matched_rule_id, request_logs.matched_rule_name, request_logs.all_matches,
+			request_logs.is_inaccurate
+		FROM request_logs
+		LEFT JOIN users u ON request_logs.user_id = u.id
+		WHERE %s
+		ORDER BY request_logs.is_inaccurate DESC, request_logs.created_at DESC
+		LIMIT ?
+	`, whereSQL)
+
+	rows, err := r.readDB.QueryContext(ctx, query, params...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query logs for analysis: %w", err)
+	}
+	defer rows.Close()
+
+	logs := make([]*models.RequestLog, 0)
+	for rows.Next() {
+		log, err := r.scanLog(rows)
+		if err != nil {
+			return nil, err
+		}
+		logs = append(logs, log)
+	}
+	return logs, rows.Err()
+}
+
+// EndpointModelStats contains historical per-endpoint-model statistics.
+type EndpointModelStats struct {
+	TotalRequests int64   `json:"total_requests"`
+	TotalErrors   int64   `json:"total_errors"`
+	AvgLatencyMs  float64 `json:"avg_latency_ms"`
+}
+
+// GetEndpointModelStats returns historical stats grouped by endpoint_name/model_name.
+func (r *RequestLogRepositoryImpl) GetEndpointModelStats(ctx context.Context) (map[string]*EndpointModelStats, error) {
+	query := `
+		SELECT endpoint_name, model_name,
+			COUNT(*) AS total_requests,
+			SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS total_errors,
+			COALESCE(AVG(latency_ms), 0) AS avg_latency
+		FROM request_logs
+		GROUP BY endpoint_name, model_name
+	`
+	rows, err := r.readDB.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get endpoint model stats: %w", err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]*EndpointModelStats)
+	for rows.Next() {
+		var epName, modelName string
+		var stats EndpointModelStats
+		if err := rows.Scan(&epName, &modelName, &stats.TotalRequests, &stats.TotalErrors, &stats.AvgLatencyMs); err != nil {
+			return nil, fmt.Errorf("failed to scan endpoint model stats: %w", err)
+		}
+		key := epName + "/" + modelName
+		result[key] = &stats
+	}
+	return result, rows.Err()
+}

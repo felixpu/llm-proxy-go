@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -29,10 +30,11 @@ type StatusResponse struct {
 
 // ModelInfo represents model information in status response.
 type ModelInfo struct {
-	Name             string `json:"name"`
-	Role             string `json:"role"`
-	EndpointsTotal   int    `json:"endpoints_total"`
-	EndpointsHealthy int    `json:"endpoints_healthy"`
+	Name             string    `json:"name"`
+	Role             string    `json:"role"`
+	EndpointsTotal   int       `json:"endpoints_total"`
+	EndpointsHealthy int       `json:"endpoints_healthy"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 // EndpointStateInfo represents endpoint state information.
@@ -100,24 +102,45 @@ func NewStatusHandler(
 func (h *StatusHandler) GetSystemStatus(c *gin.Context) {
 	states := h.healthChecker.GetAllStates()
 
+	// Query historical stats from database
+	var dbStats map[string]*repository.EndpointModelStats
+	if h.logRepo != nil {
+		var err error
+		dbStats, err = h.logRepo.GetEndpointModelStats(c.Request.Context())
+		if err != nil {
+			dbStats = nil // Fall back to memory-only on error
+		}
+	}
+
 	var totalReqs, totalErrs int64
 	epInfos := make([]EndpointStateInfo, 0, len(states))
 	for name, s := range states {
-		totalReqs += int64(s.TotalRequests)
-		totalErrs += int64(s.TotalErrors)
 		var lastCheck string
 		if s.LastCheckTime != nil {
 			lastCheck = s.LastCheckTime.Format(time.RFC3339)
 		}
-		epInfos = append(epInfos, EndpointStateInfo{
-			Name:              name,
-			Status:            string(s.Status),
-			TotalRequests:     int64(s.TotalRequests),
-			TotalErrors:       int64(s.TotalErrors),
-			CurrentConns:      s.CurrentConnections,
-			AvgResponseTimeMs: s.AvgResponseTimeMs,
-			LastCheckTime:     lastCheck,
-		})
+
+		epInfo := EndpointStateInfo{
+			Name:          name,
+			Status:        string(s.Status),
+			CurrentConns:  s.CurrentConnections,
+			LastCheckTime: lastCheck,
+		}
+
+		// Use DB stats for historical data, memory for real-time
+		if db, ok := dbStats[name]; ok {
+			epInfo.TotalRequests = db.TotalRequests
+			epInfo.TotalErrors = db.TotalErrors
+			epInfo.AvgResponseTimeMs = db.AvgLatencyMs
+		} else {
+			epInfo.TotalRequests = int64(s.TotalRequests)
+			epInfo.TotalErrors = int64(s.TotalErrors)
+			epInfo.AvgResponseTimeMs = s.AvgResponseTimeMs
+		}
+
+		totalReqs += epInfo.TotalRequests
+		totalErrs += epInfo.TotalErrors
+		epInfos = append(epInfos, epInfo)
 	}
 
 	// Build model info from endpoints
@@ -126,7 +149,7 @@ func (h *StatusHandler) GetSystemStatus(c *gin.Context) {
 		name := ep.Model.Name
 		mi, ok := modelMap[name]
 		if !ok {
-			mi = &ModelInfo{Name: name, Role: string(ep.Model.Role)}
+			mi = &ModelInfo{Name: name, Role: string(ep.Model.Role), CreatedAt: ep.Model.CreatedAt}
 			modelMap[name] = mi
 		}
 		mi.EndpointsTotal++
@@ -139,6 +162,19 @@ func (h *StatusHandler) GetSystemStatus(c *gin.Context) {
 	for _, mi := range modelMap {
 		modelInfos = append(modelInfos, *mi)
 	}
+
+	// Sort models by creation time ascending, then by name for stable ordering
+	sort.Slice(modelInfos, func(i, j int) bool {
+		if modelInfos[i].CreatedAt.Equal(modelInfos[j].CreatedAt) {
+			return modelInfos[i].Name < modelInfos[j].Name
+		}
+		return modelInfos[i].CreatedAt.Before(modelInfos[j].CreatedAt)
+	})
+
+	// Sort endpoints by name for stable ordering
+	sort.Slice(epInfos, func(i, j int) bool {
+		return epInfos[i].Name < epInfos[j].Name
+	})
 
 	c.JSON(http.StatusOK, StatusResponse{
 		UptimeSeconds: int64(time.Since(startTime).Seconds()),
@@ -159,10 +195,14 @@ func (h *StatusHandler) GetRoutingDebug(c *gin.Context) {
 	infos := make([]ModelInfo, 0, len(modelList))
 	for _, m := range modelList {
 		infos = append(infos, ModelInfo{
-			Name: m.Name,
-			Role: string(m.Role),
+			Name:      m.Name,
+			Role:      string(m.Role),
+			CreatedAt: m.CreatedAt,
 		})
 	}
+	sort.Slice(infos, func(i, j int) bool {
+		return infos[i].CreatedAt.Before(infos[j].CreatedAt)
+	})
 	c.JSON(http.StatusOK, RoutingDebugResponse{
 		DefaultRole:   string(models.ModelRoleDefault),
 		RoutingMethod: "llm",

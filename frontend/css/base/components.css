@@ -802,6 +802,26 @@ label.checkbox-label {
     color: var(--warning-color);
 }
 
+.error-text {
+    font-size: var(--font-size-sm);
+    color: var(--danger-color);
+    margin-top: var(--spacing-xs);
+}
+
+input.error,
+select.error,
+textarea.error {
+    border-color: var(--danger-color);
+    background: rgba(239, 68, 68, 0.05);
+}
+
+input.error:focus,
+select.error:focus,
+textarea.error:focus {
+    border-color: var(--danger-color);
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+}
+
 /* Toast 提示 */
 .toast {
     position: fixed;
@@ -1991,6 +2011,17 @@ label.checkbox-label {
     box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
 }
 
+.custom-select-trigger.error {
+    border-color: var(--danger-color);
+    background: rgba(239, 68, 68, 0.05);
+}
+
+.custom-select-trigger.error:hover,
+.custom-select-trigger.error.open {
+    border-color: var(--danger-color);
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+}
+
 .custom-select-arrow {
     width: 16px;
     height: 16px;
@@ -2050,5 +2081,16 @@ label.checkbox-label {
 @media (max-width: 768px) {
     .custom-select-dropdown {
         max-height: 200px;
+    }
+}
+
+/* 小屏幕下拉菜单定位优化 */
+@media (max-width: 480px) {
+    .custom-select-dropdown {
+        position: fixed;
+        left: var(--spacing-sm);
+        right: var(--spacing-sm);
+        width: auto;
+        max-width: none;
     }
 }

@@ -55,6 +55,10 @@ window.VuePages = window.VuePages || {};
         priority: 1,
         billing_multiplier: 1.0,
       });
+      var modelFormErrors = reactive({
+        model_name: "",
+        provider_id: "",
+      });
 
       // 模型检测
       var detectingModels = ref(false);
@@ -87,28 +91,48 @@ window.VuePages = window.VuePages || {};
         priority: 50,
         enabled: true,
       });
+      var ruleFormErrors = reactive({
+        name: "",
+        task_type: "",
+        pattern: "",
+        condition: "",
+      });
 
       // 规则测试
       var ruleTestMessage = ref("");
       var ruleTestResult = ref(null);
       var ruleTestLoading = ref(false);
 
+      // 分析功能状态
+      var showAnalysisModal = ref(false);
+      var analysisTimeRange = ref("7d");
+      var analysisCustomStart = ref("");
+      var analysisCustomEnd = ref("");
+      var analysisModelId = ref("");
+      var analysisModels = ref([]);
+      var analysisStarting = ref(false);
+      var analysisTask = ref(null);
+      var analysisPolling = ref(false);
+      var analysisReports = ref([]);
+      var analysisReportsTotal = ref(0);
+      var showAnalysisReport = ref(false);
+      var currentReport = ref(null);
+      var analysisPollingTimer = ref(null);
+      var smoothProgress = ref(0);
+      var smoothProgressTimer = ref(null);
+
       // 规则视图状态（统一管理内置和自定义规则）
       var ruleSearchQuery = ref("");
+      var debouncedSearchQuery = ref("");
       var ruleFilterTaskType = ref("");
       var ruleFilterSource = ref("");
       var ruleSortBy = ref("priority-desc");
-      var expandedRuleId = ref(null);
+      // 规则卡片展开状态（支持多选）
+      var expandedRuleIds = ref(new Set());
 
       // 下拉菜单
+      // 统一的下拉菜单状态管理（只允许一个菜单打开）
       var openDropdown = ref(null);
-
-      // 自定义 select 开关状态
-      var fallbackStrategyOpen = ref(false);
-      var fallbackTaskTypeOpen = ref(false);
-      var primaryModelOpen = ref(false);
-      var fallbackModelOpen = ref(false);
-      var modalProviderOpen = ref(false);
 
       // ========== 计算属性 ==========
 
@@ -137,9 +161,9 @@ window.VuePages = window.VuePages || {};
           });
         }
 
-        // 搜索
-        if (ruleSearchQuery.value) {
-          var q = ruleSearchQuery.value.toLowerCase();
+        // 搜索（使用防抖后的查询）
+        if (debouncedSearchQuery.value) {
+          var q = debouncedSearchQuery.value.toLowerCase();
           rules = rules.filter(function (r) {
             return (
               r.name.toLowerCase().indexOf(q) !== -1 ||
@@ -159,14 +183,34 @@ window.VuePages = window.VuePages || {};
         }
 
         // 排序
-        var parts = ruleSortBy.value.split("-");
-        var field = parts[0];
-        var order = parts[1];
         rules.sort(function (a, b) {
-          var cmp = 0;
-          if (field === "priority") cmp = (a.priority || 0) - (b.priority || 0);
-          else if (field === "name") cmp = a.name.localeCompare(b.name);
-          return order === "desc" ? -cmp : cmp;
+          // 先按来源分组（内置在前）
+          if (a._source !== b._source) {
+            return a._source === "builtin" ? -1 : 1;
+          }
+
+          // 同组内按选择的排序方式
+          switch (ruleSortBy.value) {
+            case "priority-desc":
+              return b.priority - a.priority;
+            case "priority-asc":
+              return a.priority - b.priority;
+            case "hits-desc":
+              var hitA = getRuleHit(a.id)?.count || 0;
+              var hitB = getRuleHit(b.id)?.count || 0;
+              return hitB - hitA;
+            case "hits-asc":
+              var hitA = getRuleHit(a.id)?.count || 0;
+              var hitB = getRuleHit(b.id)?.count || 0;
+              return hitA - hitB;
+            case "name-asc":
+              return a.name.localeCompare(b.name);
+            case "name-desc":
+              return b.name.localeCompare(a.name);
+            default:
+              // 默认按优先级降序
+              return b.priority - a.priority;
+          }
         });
         return rules;
       });
@@ -477,6 +521,9 @@ window.VuePages = window.VuePages || {};
           modelForm.priority = 1;
           modelForm.billing_multiplier = 1.0;
         }
+        // 清空错误信息
+        modelFormErrors.model_name = "";
+        modelFormErrors.provider_id = "";
         showModelForm.value = true;
         if (model && model.provider_id) {
           var provider = providers.value.find(function (p) {
@@ -486,7 +533,32 @@ window.VuePages = window.VuePages || {};
         }
       }
 
+      function validateModelForm() {
+        var isValid = true;
+
+        // 验证模型名称
+        if (!modelForm.model_name.trim()) {
+          modelFormErrors.model_name = "请输入或选择模型名称";
+          isValid = false;
+        } else {
+          modelFormErrors.model_name = "";
+        }
+
+        // 验证提供商
+        if (!modelForm.provider_id) {
+          modelFormErrors.provider_id = "请选择提供商";
+          isValid = false;
+        } else {
+          modelFormErrors.provider_id = "";
+        }
+
+        return isValid;
+      }
+
       function saveModel() {
+        if (!validateModelForm()) {
+          return;
+        }
         saving.value = true;
         var data = {
           model_name: modelForm.model_name,
@@ -551,16 +623,67 @@ window.VuePages = window.VuePages || {};
           ruleForm.priority = 50;
           ruleForm.enabled = true;
         }
+        // 清空错误信息
+        ruleFormErrors.name = "";
+        ruleFormErrors.task_type = "";
+        ruleFormErrors.pattern = "";
+        ruleFormErrors.condition = "";
         showRuleForm.value = true;
       }
 
-      function saveRule() {
+      function validateRuleForm() {
+        var isValid = true;
+
+        // 验证规则名称
         if (!ruleForm.name.trim()) {
-          toastStore.error("请输入规则名称");
-          return;
+          ruleFormErrors.name = "请输入规则名称";
+          isValid = false;
+        } else {
+          ruleFormErrors.name = "";
         }
+
+        // 验证任务类型
         if (!ruleForm.task_type) {
-          toastStore.error("请选择任务类型");
+          ruleFormErrors.task_type = "请选择任务类型";
+          isValid = false;
+        } else {
+          ruleFormErrors.task_type = "";
+        }
+
+        // 验证 pattern（如果填写了，检查是否为有效正则）
+        if (ruleForm.pattern.trim()) {
+          try {
+            // Strip Go-style inline flags (?i), (?s), (?m), (?U) etc. before JS validation
+            var patternForTest = ruleForm.pattern.replace(/^\(\?[ismUu]+\)/, '');
+            new RegExp(patternForTest);
+            ruleFormErrors.pattern = "";
+          } catch (e) {
+            ruleFormErrors.pattern = "正则表达式格式无效";
+            isValid = false;
+          }
+        } else {
+          ruleFormErrors.pattern = "";
+        }
+
+        // 验证 condition（如果填写了，检查基本语法）
+        if (ruleForm.condition.trim()) {
+          var cond = ruleForm.condition.trim();
+          // 简单检查：必须包含操作符
+          if (!/[=<>!]/.test(cond)) {
+            ruleFormErrors.condition = "条件表达式需要包含比较操作符（=, <, >, !=）";
+            isValid = false;
+          } else {
+            ruleFormErrors.condition = "";
+          }
+        } else {
+          ruleFormErrors.condition = "";
+        }
+
+        return isValid;
+      }
+
+      function saveRule() {
+        if (!validateRuleForm()) {
           return;
         }
         savingRule.value = true;
@@ -678,6 +801,11 @@ window.VuePages = window.VuePages || {};
           });
       }
 
+      function getRuleHit(ruleId) {
+        if (!ruleStats.value || !ruleStats.value.rule_hits) return null;
+        return ruleStats.value.rule_hits[ruleId] || null;
+      }
+
       function copyRuleConfig(rule) {
         var copy = Object.assign({}, rule);
         delete copy._source;
@@ -692,6 +820,222 @@ window.VuePages = window.VuePages || {};
           });
       }
 
+      // ========== 分析功能 ==========
+
+      function openAnalysisModal() {
+        analysisTask.value = null;
+        showAnalysisReport.value = false;
+        currentReport.value = null;
+        analysisTimeRange.value = "7d";
+        analysisCustomStart.value = "";
+        analysisCustomEnd.value = "";
+        analysisModelId.value = "";
+        showAnalysisModal.value = true;
+        loadAnalysisModels();
+        loadAnalysisReports();
+      }
+
+      function loadAnalysisModels() {
+        VueApi.get("/api/config/routing/models")
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            analysisModels.value = data.models || [];
+            if (analysisModels.value.length > 0 && !analysisModelId.value) {
+              analysisModelId.value = analysisModels.value[0].id;
+            }
+          })
+          .catch(function () {});
+      }
+
+      function loadAnalysisReports() {
+        VueApi.get("/api/routing/analysis/reports?limit=10&offset=0")
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            analysisReports.value = data.reports || [];
+            analysisReportsTotal.value = data.total || 0;
+          })
+          .catch(function () {});
+      }
+
+      function getAnalysisTimeRange() {
+        var now = new Date();
+        var start = null;
+        var end = now.toISOString();
+        switch (analysisTimeRange.value) {
+          case "1d":
+            start = new Date(now.getTime() - 86400000).toISOString();
+            break;
+          case "7d":
+            start = new Date(now.getTime() - 7 * 86400000).toISOString();
+            break;
+          case "30d":
+            start = new Date(now.getTime() - 30 * 86400000).toISOString();
+            break;
+          case "custom":
+            start = analysisCustomStart.value || null;
+            end = analysisCustomEnd.value || end;
+            break;
+          default:
+            start = new Date(now.getTime() - 7 * 86400000).toISOString();
+        }
+        return { start: start, end: end };
+      }
+
+      function startAnalysis() {
+        if (!analysisModelId.value) {
+          toastStore.error("请选择分析模型");
+          return;
+        }
+        analysisStarting.value = true;
+        analysisTask.value = null;
+        var timeRange = getAnalysisTimeRange();
+        var payload = {
+          model_id: parseInt(analysisModelId.value),
+          start_time: timeRange.start,
+          end_time: timeRange.end,
+        };
+        VueApi.post("/api/routing/analysis/analyze", payload)
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.task_id) {
+              analysisTask.value = { id: data.task_id, status: "pending", progress: 0, stage: "initializing" };
+              startPollingTask(data.task_id);
+            }
+          })
+          .catch(function (error) {
+            toastStore.error("启动分析失败: " + error.message);
+          })
+          .finally(function () {
+            analysisStarting.value = false;
+          });
+      }
+
+      function startPollingTask(taskId) {
+        stopPollingTask();
+        analysisPolling.value = true;
+        startSmoothProgress();
+        analysisPollingTimer.value = setInterval(function () {
+          VueApi.get("/api/routing/analysis/task/" + taskId)
+            .then(function (r) { return r.json(); })
+            .then(function (task) {
+              analysisTask.value = task;
+              if (task.status === "completed" || task.status === "failed") {
+                stopPollingTask();
+                smoothProgress.value = 100;
+                if (task.status === "completed" && task.report) {
+                  currentReport.value = task.report;
+                  showAnalysisReport.value = true;
+                  loadAnalysisReports();
+                } else if (task.status === "failed") {
+                  toastStore.error("分析失败: " + (task.error || "未知错误"));
+                }
+              }
+            })
+            .catch(function () {
+              stopPollingTask();
+            });
+        }, 2000);
+      }
+
+      function stopPollingTask() {
+        analysisPolling.value = false;
+        stopSmoothProgress();
+        if (analysisPollingTimer.value) {
+          clearInterval(analysisPollingTimer.value);
+          analysisPollingTimer.value = null;
+        }
+      }
+
+      function startSmoothProgress() {
+        stopSmoothProgress();
+        smoothProgress.value = 0;
+        smoothProgressTimer.value = setInterval(function () {
+          var task = analysisTask.value;
+          if (!task) return;
+          var target = task.progress || 0;
+          var current = smoothProgress.value;
+          if (current < target) {
+            // Ease toward target: close gap by 20% each tick
+            var step = Math.max(0.5, (target - current) * 0.2);
+            smoothProgress.value = Math.min(target, current + step);
+          } else if (task.stage === "calling_llm" && current < 84) {
+            // During LLM call, slowly creep forward (+0.3%/tick, cap at 84)
+            smoothProgress.value = Math.min(84, current + 0.3);
+          }
+        }, 100);
+      }
+
+      function stopSmoothProgress() {
+        if (smoothProgressTimer.value) {
+          clearInterval(smoothProgressTimer.value);
+          smoothProgressTimer.value = null;
+        }
+      }
+
+      function viewReport(report) {
+        currentReport.value = report;
+        showAnalysisReport.value = true;
+      }
+
+      function loadReportDetail(id) {
+        VueApi.get("/api/routing/analysis/reports/" + id)
+          .then(function (r) { return r.json(); })
+          .then(function (report) {
+            currentReport.value = report;
+            showAnalysisReport.value = true;
+          })
+          .catch(function (error) {
+            toastStore.error("加载报告失败: " + error.message);
+          });
+      }
+
+      function closeAnalysisReport() {
+        showAnalysisReport.value = false;
+        currentReport.value = null;
+      }
+
+      function getAnalysisStageLabel(stage) {
+        var map = {
+          initializing: "初始化",
+          collecting_logs: "收集日志",
+          extracting_messages: "提取消息",
+          loading_rules: "加载规则",
+          building_prompt: "构建提示词",
+          calling_llm: "调用 LLM 分析",
+          parsing_result: "解析结果",
+          done: "完成",
+        };
+        return map[stage] || stage;
+      }
+
+      var stageOrder = ["collecting_logs", "extracting_messages", "loading_rules", "building_prompt", "calling_llm", "parsing_result", "done"];
+      function isStageCompleted(currentStage, checkStage) {
+        var ci = stageOrder.indexOf(currentStage);
+        var si = stageOrder.indexOf(checkStage);
+        if (ci === -1 || si === -1) return false;
+        return ci > si;
+      }
+
+      function getSeverityClass(severity) {
+        var map = { high: "severity-high", medium: "severity-medium", low: "severity-low" };
+        return map[severity] || "";
+      }
+
+      function getSeverityLabel(severity) {
+        var map = { high: "高", medium: "中", low: "低" };
+        return map[severity] || severity;
+      }
+
+      function formatReportDate(dateStr) {
+        if (!dateStr) return "-";
+        var d = new Date(dateStr);
+        var month = String(d.getMonth() + 1).padStart(2, "0");
+        var day = String(d.getDate()).padStart(2, "0");
+        var hours = String(d.getHours()).padStart(2, "0");
+        var minutes = String(d.getMinutes()).padStart(2, "0");
+        return d.getFullYear() + "-" + month + "-" + day + " " + hours + ":" + minutes;
+      }
+
       // ========== 下拉菜单 ==========
 
       function toggleDropdown(id) {
@@ -700,17 +1044,187 @@ window.VuePages = window.VuePages || {};
 
       function closeDropdowns() {
         openDropdown.value = null;
-        fallbackStrategyOpen.value = false;
-        fallbackTaskTypeOpen.value = false;
-        primaryModelOpen.value = false;
-        fallbackModelOpen.value = false;
-        modalProviderOpen.value = false;
       }
+
+      // 键盘导航处理（简化版：只处理打开/关闭）
+      function handleSelectKeydown(event, dropdownId) {
+        switch (event.key) {
+          case "Enter":
+          case " ": // Space
+            event.preventDefault();
+            openDropdown.value = openDropdown.value === dropdownId ? null : dropdownId;
+            break;
+          case "Escape":
+            event.preventDefault();
+            closeDropdowns();
+            break;
+        }
+      }
+
+      // 切换规则卡片展开状态
+      function toggleRuleExpand(ruleId) {
+        var newSet = new Set(expandedRuleIds.value);
+        if (newSet.has(ruleId)) {
+          newSet.delete(ruleId);
+        } else {
+          newSet.add(ruleId);
+        }
+        expandedRuleIds.value = newSet;
+      }
+
+      // 快速切换规则启用/禁用（仅自定义规则）
+      async function toggleRuleEnabled(rule) {
+        if (rule._source === "builtin") return;
+        var newEnabled = !rule.enabled;
+        rule.enabled = newEnabled;
+        try {
+          var response = await VueApi.request("/api/config/routing/rules/" + rule.id, {
+            method: "PUT",
+            body: JSON.stringify({ enabled: newEnabled }),
+          });
+          if (!response.ok) {
+            rule.enabled = !newEnabled;
+            var err = await response.json();
+            toastStore.error(err.detail || "切换失败");
+          }
+        } catch (error) {
+          rule.enabled = !newEnabled;
+          toastStore.error("切换失败: " + error.message);
+        }
+      }
+
+      // ========== 一键应用建议 ==========
+
+      function findRuleByName(name) {
+        var custom = customRules.value.find(function (r) { return r.name === name; });
+        if (custom) return { rule: custom, source: "custom" };
+        var builtin = builtinRules.value.find(function (r) { return r.name === name; });
+        if (builtin) return { rule: builtin, source: "builtin" };
+        return null;
+      }
+
+      function isRecActionable(rec) {
+        if (rec.action === "add") return !!rec.rule_spec;
+        if (rec.action === "delete") {
+          var found = findRuleByName(rec.rule_name);
+          return found && found.source === "custom";
+        }
+        return !!rec.rule_spec && !!findRuleByName(rec.rule_name);
+      }
+
+      function applyRuleSpec(spec) {
+        if (spec.keywords && spec.keywords.length > 0) {
+          ruleForm.keywords = spec.keywords.join(", ");
+        }
+        if (spec.pattern) ruleForm.pattern = spec.pattern;
+        if (spec.condition) ruleForm.condition = spec.condition;
+        if (spec.task_type) ruleForm.task_type = spec.task_type;
+        if (spec.priority != null) ruleForm.priority = spec.priority;
+        if (spec.enabled != null) ruleForm.enabled = spec.enabled;
+      }
+
+      function applyRecommendation(rec) {
+        if (!rec.rule_spec && rec.action !== "delete") {
+          toastStore.error("该建议无结构化参数，请手动操作");
+          return;
+        }
+
+        var found;
+        switch (rec.action) {
+          case "add":
+            showRuleModal(null);
+            ruleForm.name = rec.rule_name || "";
+            ruleForm.description = rec.description || "";
+            applyRuleSpec(rec.rule_spec);
+            showAnalysisReport.value = false;
+            activeTab.value = "routing-config";
+            break;
+
+          case "modify":
+            found = findRuleByName(rec.rule_name);
+            if (!found) { toastStore.error("未找到规则: " + rec.rule_name); return; }
+            if (found.source === "custom") {
+              showRuleModal(found.rule);
+              applyRuleSpec(rec.rule_spec);
+            } else {
+              showRuleModal(null);
+              ruleForm.name = found.rule.name;
+              ruleForm.description = found.rule.description || "";
+              ruleForm.keywords = (found.rule.keywords || []).join(", ");
+              ruleForm.pattern = found.rule.pattern || "";
+              ruleForm.condition = found.rule.condition || "";
+              ruleForm.task_type = found.rule.task_type || "default";
+              ruleForm.priority = found.rule.priority != null ? found.rule.priority : 50;
+              ruleForm.enabled = found.rule.enabled !== false;
+              applyRuleSpec(rec.rule_spec);
+              toastStore.info("将创建自定义规则覆盖内置规则");
+            }
+            showAnalysisReport.value = false;
+            activeTab.value = "routing-config";
+            break;
+
+          case "delete":
+            found = findRuleByName(rec.rule_name);
+            if (!found) { toastStore.error("未找到规则: " + rec.rule_name); return; }
+            if (found.source === "builtin") { toastStore.error("内置规则不可删除"); return; }
+            deleteRule(found.rule);
+            break;
+
+          case "reorder":
+            found = findRuleByName(rec.rule_name);
+            if (!found) { toastStore.error("未找到规则: " + rec.rule_name); return; }
+            if (found.source === "custom") {
+              var newPriority = rec.rule_spec.priority;
+              if (newPriority == null) { toastStore.error("建议未指定优先级"); return; }
+              VueApi.request("/api/config/routing/rules/" + found.rule.id, {
+                method: "PUT",
+                body: JSON.stringify(Object.assign({}, found.rule, { priority: newPriority })),
+              })
+                .then(function () {
+                  toastStore.success("优先级已更新");
+                  return loadRules();
+                })
+                .catch(function (error) { toastStore.error(error.message); });
+            } else {
+              showRuleModal(null);
+              ruleForm.name = found.rule.name;
+              ruleForm.description = found.rule.description || "";
+              ruleForm.keywords = (found.rule.keywords || []).join(", ");
+              ruleForm.pattern = found.rule.pattern || "";
+              ruleForm.condition = found.rule.condition || "";
+              ruleForm.task_type = found.rule.task_type || "default";
+              ruleForm.priority = rec.rule_spec.priority != null ? rec.rule_spec.priority : 50;
+              ruleForm.enabled = found.rule.enabled !== false;
+              toastStore.info("将创建自定义规则覆盖内置规则");
+              showAnalysisReport.value = false;
+              activeTab.value = "routing-config";
+            }
+            break;
+        }
+      }
+
+      // ========== 搜索防抖 ==========
+
+      var searchDebounceTimer = null;
+      watch(ruleSearchQuery, function (newVal) {
+        if (searchDebounceTimer) {
+          clearTimeout(searchDebounceTimer);
+        }
+        searchDebounceTimer = setTimeout(function () {
+          debouncedSearchQuery.value = newVal;
+        }, 300);
+      });
 
       // ========== 生命周期 ==========
 
       onMounted(function () {
         document.addEventListener("click", closeDropdowns);
+        // 全局 ESC 键监听
+        document.addEventListener("keydown", function (e) {
+          if (e.key === "Escape" && openDropdown.value) {
+            closeDropdowns();
+          }
+        });
         loadData().then(function () {
           if (activeTab.value === "routing-config") {
             loadRules();
@@ -720,6 +1234,7 @@ window.VuePages = window.VuePages || {};
 
       onUnmounted(function () {
         document.removeEventListener("click", closeDropdowns);
+        stopPollingTask();
       });
 
       // ========== 返回 ==========
@@ -735,6 +1250,7 @@ window.VuePages = window.VuePages || {};
         showModelForm: showModelForm,
         editingModel: editingModel,
         modelForm: modelForm,
+        modelFormErrors: modelFormErrors,
         detectingModels: detectingModels,
         providerModels: providerModels,
         providerModelSearch: providerModelSearch,
@@ -757,13 +1273,8 @@ window.VuePages = window.VuePages || {};
         ruleFilterTaskType: ruleFilterTaskType,
         ruleFilterSource: ruleFilterSource,
         ruleSortBy: ruleSortBy,
-        expandedRuleId: expandedRuleId,
+        expandedRuleIds: expandedRuleIds,
         openDropdown: openDropdown,
-        fallbackStrategyOpen: fallbackStrategyOpen,
-        fallbackTaskTypeOpen: fallbackTaskTypeOpen,
-        primaryModelOpen: primaryModelOpen,
-        fallbackModelOpen: fallbackModelOpen,
-        modalProviderOpen: modalProviderOpen,
         filteredAllRules: filteredAllRules,
         groupedProviderModels: groupedProviderModels,
         filteredProviderModelCount: filteredProviderModelCount,
@@ -790,10 +1301,42 @@ window.VuePages = window.VuePages || {};
         showRuleModal: showRuleModal,
         saveRule: saveRule,
         deleteRule: deleteRule,
+        ruleFormErrors: ruleFormErrors,
         testRouting: testRouting,
         testRuleMessage: testRuleMessage,
         copyRuleConfig: copyRuleConfig,
+        getRuleHit: getRuleHit,
         toggleDropdown: toggleDropdown,
+        handleSelectKeydown: handleSelectKeydown,
+        toggleRuleExpand: toggleRuleExpand,
+        toggleRuleEnabled: toggleRuleEnabled,
+        showAnalysisModal: showAnalysisModal,
+        analysisTimeRange: analysisTimeRange,
+        analysisCustomStart: analysisCustomStart,
+        analysisCustomEnd: analysisCustomEnd,
+        analysisModelId: analysisModelId,
+        analysisModels: analysisModels,
+        analysisStarting: analysisStarting,
+        analysisTask: analysisTask,
+        analysisPolling: analysisPolling,
+        smoothProgress: smoothProgress,
+        analysisReports: analysisReports,
+        analysisReportsTotal: analysisReportsTotal,
+        showAnalysisReport: showAnalysisReport,
+        currentReport: currentReport,
+        openAnalysisModal: openAnalysisModal,
+        startAnalysis: startAnalysis,
+        viewReport: viewReport,
+        loadReportDetail: loadReportDetail,
+        closeAnalysisReport: closeAnalysisReport,
+        getAnalysisStageLabel: getAnalysisStageLabel,
+        isStageCompleted: isStageCompleted,
+        getSeverityClass: getSeverityClass,
+        getSeverityLabel: getSeverityLabel,
+        formatReportDate: formatReportDate,
+        findRuleByName: findRuleByName,
+        isRecActionable: isRecActionable,
+        applyRecommendation: applyRecommendation,
       };
     },
     template:
@@ -826,16 +1369,16 @@ window.VuePages = window.VuePages || {};
                         <div class="form-group">\
                             <label>Fallback 策略</label>\
                             <div class="custom-select">\
-                                <button type="button" class="custom-select-trigger" :class="{ \'open\': fallbackStrategyOpen }" @click.stop="fallbackStrategyOpen = !fallbackStrategyOpen">\
+                                <button type="button" class="custom-select-trigger" :class="{ \'open\': openDropdown === \'fallback-strategy\' }" @click.stop="openDropdown = openDropdown === \'fallback-strategy\' ? null : \'fallback-strategy\'" @keydown="handleSelectKeydown($event, \'fallback-strategy\')" tabindex="0">\
                                     <span>{{ fallbackStrategyLabel }}</span>\
                                     <svg class="custom-select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">\
                                         <polyline points="6 9 12 15 18 9"></polyline>\
                                     </svg>\
                                 </button>\
-                                <div class="custom-select-dropdown" v-show="fallbackStrategyOpen" v-cloak>\
-                                    <button type="button" class="custom-select-option" :class="{ \'selected\': config.rule_fallback_strategy === \'default\' }" @click="config.rule_fallback_strategy = \'default\'; fallbackStrategyOpen = false">使用默认任务类型</button>\
-                                    <button type="button" class="custom-select-option" :class="{ \'selected\': config.rule_fallback_strategy === \'llm\' }" @click="config.rule_fallback_strategy = \'llm\'; fallbackStrategyOpen = false">调用 LLM 路由</button>\
-                                    <button type="button" class="custom-select-option" :class="{ \'selected\': config.rule_fallback_strategy === \'user\' }" @click="config.rule_fallback_strategy = \'user\'; fallbackStrategyOpen = false">使用指定任务类型</button>\
+                                <div class="custom-select-dropdown" v-show="openDropdown === \'fallback-strategy\'" v-cloak>\
+                                    <button type="button" class="custom-select-option" :class="{ \'selected\': config.rule_fallback_strategy === \'default\' }" @click="config.rule_fallback_strategy = \'default\'; openDropdown = null">使用默认任务类型</button>\
+                                    <button type="button" class="custom-select-option" :class="{ \'selected\': config.rule_fallback_strategy === \'llm\' }" @click="config.rule_fallback_strategy = \'llm\'; openDropdown = null">调用 LLM 路由</button>\
+                                    <button type="button" class="custom-select-option" :class="{ \'selected\': config.rule_fallback_strategy === \'user\' }" @click="config.rule_fallback_strategy = \'user\'; openDropdown = null">使用指定任务类型</button>\
                                 </div>\
                             </div>\
                             <p class="help-text">规则无匹配时的处理策略</p>\
@@ -843,22 +1386,20 @@ window.VuePages = window.VuePages || {};
                         <div class="form-group" v-show="config.rule_fallback_strategy === \'user\'" v-cloak>\
                             <label>指定任务类型</label>\
                             <div class="custom-select">\
-                                <button type="button" class="custom-select-trigger" :class="{ \'open\': fallbackTaskTypeOpen }" @click.stop="fallbackTaskTypeOpen = !fallbackTaskTypeOpen">\
+                                <button type="button" class="custom-select-trigger" :class="{ \'open\': openDropdown === \'fallback-task-type\' }" @click.stop="openDropdown = openDropdown === \'fallback-task-type\' ? null : \'fallback-task-type\'" @keydown="handleSelectKeydown($event, \'fallback-task-type\')" tabindex="0">\
                                     <span>{{ fallbackTaskTypeLabel }}</span>\
                                     <svg class="custom-select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">\
                                         <polyline points="6 9 12 15 18 9"></polyline>\
                                     </svg>\
                                 </button>\
-                                <div class="custom-select-dropdown" v-show="fallbackTaskTypeOpen" v-cloak>\
-                                    <button type="button" class="custom-select-option" :class="{ \'selected\': config.rule_fallback_task_type === \'simple\' }" @click="config.rule_fallback_task_type = \'simple\'; fallbackTaskTypeOpen = false">simple (轻量)</button>\
-                                    <button type="button" class="custom-select-option" :class="{ \'selected\': config.rule_fallback_task_type === \'default\' }" @click="config.rule_fallback_task_type = \'default\'; fallbackTaskTypeOpen = false">default (平衡)</button>\
-                                    <button type="button" class="custom-select-option" :class="{ \'selected\': config.rule_fallback_task_type === \'complex\' }" @click="config.rule_fallback_task_type = \'complex\'; fallbackTaskTypeOpen = false">complex (高能)</button>\
+                                <div class="custom-select-dropdown" v-show="openDropdown === \'fallback-task-type\'" v-cloak>\
+                                    <button type="button" class="custom-select-option" :class="{ \'selected\': config.rule_fallback_task_type === \'simple\' }" @click="config.rule_fallback_task_type = \'simple\'; openDropdown = null">simple (轻量)</button>\
+                                    <button type="button" class="custom-select-option" :class="{ \'selected\': config.rule_fallback_task_type === \'default\' }" @click="config.rule_fallback_task_type = \'default\'; openDropdown = null">default (平衡)</button>\
+                                    <button type="button" class="custom-select-option" :class="{ \'selected\': config.rule_fallback_task_type === \'complex\' }" @click="config.rule_fallback_task_type = \'complex\'; openDropdown = null">complex (高能)</button>\
                                 </div>\
                             </div>\
                         </div>\
                     </div>\
-                </div>\
-            </div>\
             <div class="collapsible-section" v-show="config.rule_based_routing_enabled && config.rule_fallback_strategy === \'llm\'" v-cloak>\
                 <button class="collapsible-header" @click="llmConfigExpanded = !llmConfigExpanded">\
                     <div class="collapsible-header-left">\
@@ -875,30 +1416,30 @@ window.VuePages = window.VuePages || {};
                             <div class="form-group">\
                                 <label>主路由模型</label>\
                                 <div class="custom-select">\
-                                    <button type="button" class="custom-select-trigger" :class="{ \'open\': primaryModelOpen }" @click.stop="primaryModelOpen = !primaryModelOpen">\
+                                    <button type="button" class="custom-select-trigger" :class="{ \'open\': openDropdown === \'primary-model\' }" @click.stop="openDropdown = openDropdown === \'primary-model\' ? null : \'primary-model\'" @keydown="handleSelectKeydown($event, \'primary-model\')" tabindex="0">\
                                         <span>{{ primaryModelLabel }}</span>\
                                         <svg class="custom-select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">\
                                             <polyline points="6 9 12 15 18 9"></polyline>\
                                         </svg>\
                                     </button>\
-                                    <div class="custom-select-dropdown" v-show="primaryModelOpen" v-cloak>\
-                                        <button type="button" class="custom-select-option" :class="{ \'selected\': config.primary_model_id === \'\' }" @click="config.primary_model_id = \'\'; primaryModelOpen = false">-- 请先添加路由模型 --</button>\
-                                        <button type="button" v-for="m in models" :key="m.id" class="custom-select-option" :class="{ \'selected\': config.primary_model_id === m.id }" @click="config.primary_model_id = m.id; primaryModelOpen = false">{{ m.model_name }}</button>\
+                                    <div class="custom-select-dropdown" v-show="openDropdown === \'primary-model\'" v-cloak>\
+                                        <button type="button" class="custom-select-option" :class="{ \'selected\': config.primary_model_id === \'\' }" @click="config.primary_model_id = \'\'; openDropdown = null">-- 请先添加路由模型 --</button>\
+                                        <button type="button" v-for="m in models" :key="m.id" class="custom-select-option" :class="{ \'selected\': config.primary_model_id === m.id }" @click="config.primary_model_id = m.id; openDropdown = null">{{ m.model_name }}</button>\
                                     </div>\
                                 </div>\
                             </div>\
                             <div class="form-group">\
                                 <label>备用模型</label>\
                                 <div class="custom-select">\
-                                    <button type="button" class="custom-select-trigger" :class="{ \'open\': fallbackModelOpen }" @click.stop="fallbackModelOpen = !fallbackModelOpen">\
+                                    <button type="button" class="custom-select-trigger" :class="{ \'open\': openDropdown === \'fallback-model\' }" @click.stop="openDropdown = openDropdown === \'fallback-model\' ? null : \'fallback-model\'" @keydown="handleSelectKeydown($event, \'fallback-model\')" tabindex="0">\
                                         <span>{{ fallbackModelLabel }}</span>\
                                         <svg class="custom-select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">\
                                             <polyline points="6 9 12 15 18 9"></polyline>\
                                         </svg>\
                                     </button>\
-                                    <div class="custom-select-dropdown" v-show="fallbackModelOpen" v-cloak>\
-                                        <button type="button" class="custom-select-option" :class="{ \'selected\': config.fallback_model_id === \'\' }" @click="config.fallback_model_id = \'\'; fallbackModelOpen = false">-- 无 --</button>\
-                                        <button type="button" v-for="m in models" :key="m.id" class="custom-select-option" :class="{ \'selected\': config.fallback_model_id === m.id }" @click="config.fallback_model_id = m.id; fallbackModelOpen = false">{{ m.model_name }}</button>\
+                                    <div class="custom-select-dropdown" v-show="openDropdown === \'fallback-model\'" v-cloak>\
+                                        <button type="button" class="custom-select-option" :class="{ \'selected\': config.fallback_model_id === \'\' }" @click="config.fallback_model_id = \'\'; openDropdown = null">-- 无 --</button>\
+                                        <button type="button" v-for="m in models" :key="m.id" class="custom-select-option" :class="{ \'selected\': config.fallback_model_id === m.id }" @click="config.fallback_model_id = m.id; openDropdown = null">{{ m.model_name }}</button>\
                                     </div>\
                                 </div>\
                             </div>\
@@ -1002,43 +1543,25 @@ window.VuePages = window.VuePages || {};
                     </div>\
                 </div>\
             </div>\
-\
-            <div class="config-single-column" v-show="ruleStats" v-cloak>\
-                <div class="config-card">\
-                    <h4>规则统计</h4>\
-                    <div class="rule-stats-panel">\
-                        <div class="rule-stats-summary">\
-                            <span class="rule-stats-summary-label">总命中</span>\
-                            <span class="rule-stats-summary-divider"></span>\
-                            <span class="rule-stats-summary-value">{{ (ruleStats ? ruleStats.total_requests || 0 : 0) + \' 次\' }}</span>\
-                        </div>\
-                        <div class="rule-stats-bars" v-show="ruleStats && Object.keys(ruleStats.rule_hits || {}).length > 0">\
-                            <template v-for="(hit, name) in (ruleStats ? ruleStats.rule_hits || {} : {})" :key="name">\
-                                <div class="rule-stats-bar-item" :class="{ \'rule-stats-bar-item--zero\': !hit.count }">\
-                                    <div class="rule-stats-bar-header">\
-                                        <code class="rule-stats-bar-name">{{ name }}</code>\
-                                        <span class="rule-stats-bar-meta">\
-                                            <span class="rule-stats-bar-count">{{ hit.count }}</span>\
-                                            <span class="rule-stats-bar-unit">次</span>\
-                                            <span class="rule-stats-bar-pct">{{ hit.percentage ? hit.percentage.toFixed(1) + \'%\' : \'0%\' }}</span>\
-                                        </span>\
-                                    </div>\
-                                    <div class="rule-stats-bar-track">\
-                                        <div class="rule-stats-bar-fill" :class="{ \'rule-stats-bar-fill--muted\': (hit.percentage || 0) < 10 }" :style="\'width:\' + Math.max(hit.percentage || 0, 0.5) + \'%\'"></div>\
-                                    </div>\
-                                </div>\
-                            </template>\
-                        </div>\
-                        <div class="rule-stats-empty" v-show="!ruleStats || Object.keys(ruleStats.rule_hits || {}).length === 0">\
-                            <span>暂无命中数据</span>\
-                        </div>\
-                    </div>\
+            <div class="form-actions">\
+                <button class="btn btn-primary" @click="saveConfig()" :disabled="saving">\
+                    <span v-show="!saving">保存配置</span>\
+                    <span v-show="saving">保存中...</span>\
+                </button>\
+            </div>\
                 </div>\
             </div>\
+\
             <div class="resource-section">\
                 <div class="resource-header">\
                     <h4>路由规则</h4>\
-                    <button class="btn btn-primary" @click="showRuleModal()">+ 添加规则</button>\
+                    <div class="resource-header-actions">\
+                        <button class="btn btn-outline" @click="openAnalysisModal()">\
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;margin-right:4px;vertical-align:-2px;"><path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.66 0 3-4.03 3-9s-1.34-9-3-9m0 18c-1.66 0-3-4.03-3-9s1.34-9 3-9m-9 9a9 9 0 019-9"/></svg>\
+                            分析规则\
+                        </button>\
+                        <button class="btn btn-primary" @click="showRuleModal()">+ 添加规则</button>\
+                    </div>\
                 </div>\
                 <div class="rules-stats-mini" v-show="allRulesCount > 0" v-cloak>\
                     <div class="rules-stat-chip"><span class="stat-dot dot-total"></span> 总计 <span class="stat-num">{{ allRulesCount }}</span></div>\
@@ -1048,6 +1571,7 @@ window.VuePages = window.VuePages || {};
                     <div class="rules-stat-chip" v-show="allSimpleCount"><span class="stat-dot dot-simple"></span> simple <span class="stat-num">{{ allSimpleCount }}</span></div>\
                     <div class="rules-stat-chip" v-show="allDefaultCount"><span class="stat-dot dot-default"></span> default <span class="stat-num">{{ allDefaultCount }}</span></div>\
                     <div class="rules-stat-chip" v-show="allComplexCount"><span class="stat-dot dot-complex"></span> complex <span class="stat-num">{{ allComplexCount }}</span></div>\
+                    <div class="rules-stat-chip" v-show="ruleStats && ruleStats.total_requests" style="margin-left:auto;"><span class="stat-dot dot-hits"></span> 总命中 <span class="stat-num">{{ ruleStats ? ruleStats.total_requests || 0 : 0 }}</span></div>\
                 </div>\
                 <div class="rules-toolbar" v-show="allRulesCount > 0" v-cloak>\
                     <div class="rules-search-box">\
@@ -1069,6 +1593,8 @@ window.VuePages = window.VuePages || {};
                     <select class="rules-sort-select" v-model="ruleSortBy">\
                         <option value="priority-desc">优先级 高→低</option>\
                         <option value="priority-asc">优先级 低→高</option>\
+                        <option value="hits-desc">命中数 高→低</option>\
+                        <option value="hits-asc">命中数 低→高</option>\
                         <option value="name-asc">名称 A→Z</option>\
                         <option value="name-desc">名称 Z→A</option>\
                     </select>\
@@ -1097,8 +1623,10 @@ window.VuePages = window.VuePages || {};
                             <div class="rule-card-meta">\
                                 <span class="rule-card-meta-item">优先级: <span class="meta-value">{{ r.priority }}</span></span>\
                                 <span class="rule-card-meta-item meta-sep">|</span>\
-                                <span class="rule-card-meta-item" v-show="r.enabled"><span class="status-pill status-enabled" style="padding:2px 6px;font-size:10px;">启用</span></span>\
-                                <span class="rule-card-meta-item" v-show="!r.enabled"><span class="status-pill status-disabled" style="padding:2px 6px;font-size:10px;">禁用</span></span>\
+                                <span class="rule-card-meta-item" v-show="getRuleHit(r.id)">命中: <span class="meta-value">{{ getRuleHit(r.id) ? getRuleHit(r.id).count : 0 }}</span> <span class="text-muted" style="font-size:10px">{{ getRuleHit(r.id) && getRuleHit(r.id).percentage ? \'(\' + getRuleHit(r.id).percentage.toFixed(1) + \'%)\' : \'\' }}</span></span>\
+                                <span class="rule-card-meta-item meta-sep" v-show="getRuleHit(r.id)">|</span>\
+                                <span class="rule-card-meta-item" v-show="r._source === \'builtin\'"><span class="status-pill" :class="r.enabled ? \'status-enabled\' : \'status-disabled\'" style="padding:2px 6px;font-size:10px;">{{ r.enabled ? \'启用\' : \'禁用\' }}</span></span>\
+                                <span class="rule-card-meta-item" v-show="r._source !== \'builtin\'"><label class="toggle-switch" @click.stop><input type="checkbox" :checked="r.enabled" @change="toggleRuleEnabled(r)"><span class="toggle-slider"></span></label></span>\
                             </div>\
                             <div class="rule-card-keywords" v-show="r.keywords && r.keywords.length > 0">\
                                 <span v-for="kw in (r.keywords || []).slice(0, 8)" :key="kw" class="rule-keyword-tag">{{ kw }}</span>\
@@ -1106,7 +1634,7 @@ window.VuePages = window.VuePages || {};
                             </div>\
                             <div v-show="!r.keywords || r.keywords.length === 0" class="text-muted" style="font-size:var(--font-size-xs);">无关键词匹配</div>\
                         </div>\
-                        <div class="rule-card-expand" v-show="expandedRuleId === (r._source + \'-\' + r.id)" v-cloak>\
+                        <div class="rule-card-expand" v-show="expandedRuleIds.has(r._source + \'-\' + r.id)" v-cloak>\
                             <div class="rule-card-detail">\
                                 <div class="rule-card-detail-row" v-show="r.pattern">\
                                     <span class="rule-card-detail-label">正则:</span>\
@@ -1123,9 +1651,9 @@ window.VuePages = window.VuePages || {};
                             </div>\
                         </div>\
                         <div class="rule-card-footer">\
-                            <button class="rule-card-action" :class="{\'expanded\': expandedRuleId === (r._source + \'-\' + r.id)}" @click="expandedRuleId = expandedRuleId === (r._source + \'-\' + r.id) ? null : (r._source + \'-\' + r.id)" v-show="r.pattern || r.condition || (r.keywords && r.keywords.length > 8)">\
+                            <button class="rule-card-action" :class="{\'expanded\': expandedRuleIds.has(r._source + \'-\' + r.id)}" @click="toggleRuleExpand(r._source + \'-\' + r.id)" v-show="r.pattern || r.condition || (r.keywords && r.keywords.length > 8)">\
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>\
-                                <span>{{ expandedRuleId === (r._source + \'-\' + r.id) ? \'收起\' : \'详情\' }}</span>\
+                                <span>{{ expandedRuleIds.has(r._source + \'-\' + r.id) ? \'收起\' : \'详情\' }}</span>\
                             </button>\
                             <button class="rule-card-action" @click="showRuleModal(r)">\
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>\
@@ -1169,12 +1697,6 @@ window.VuePages = window.VuePages || {};
                         </div>\
                     </div>\
                 </div>\
-            </div>\
-            <div class="form-actions">\
-                <button class="btn btn-primary" @click="saveConfig()" :disabled="saving">\
-                    <span v-show="!saving">保存配置</span>\
-                    <span v-show="saving">保存中...</span>\
-                </button>\
             </div>\
         </div>\
         <div class="tab-pane" :class="{\'active\': activeTab === \'cache\'}">\
@@ -1242,21 +1764,23 @@ window.VuePages = window.VuePages || {};
                             <span>暂无服务商，请先在 <a href="/providers">模型管理</a> 页面添加服务商</span>\
                         </div>\
                         <div v-if="providers.length > 0" class="custom-select">\
-                            <button type="button" class="custom-select-trigger" :class="{ \'open\': modalProviderOpen }" @click.stop="modalProviderOpen = !modalProviderOpen">\
+                            <button type="button" class="custom-select-trigger" :class="{ \'open\': openDropdown === \'modal-provider\', \'error\': modelFormErrors.provider_id }" @click.stop="openDropdown = openDropdown === \'modal-provider\' ? null : \'modal-provider\'" @keydown="handleSelectKeydown($event, \'modal-provider\')" tabindex="0">\
                                 <span>{{ modalProviderLabel }}</span>\
                                 <svg class="custom-select-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">\
                                     <polyline points="6 9 12 15 18 9"></polyline>\
                                 </svg>\
                             </button>\
-                            <div class="custom-select-dropdown" v-show="modalProviderOpen" v-cloak>\
-                                <button type="button" class="custom-select-option" :class="{ \'selected\': !modelForm.provider_id }" @click="modelForm.provider_id = \'\'; modalProviderOpen = false">-- 请选择服务商 --</button>\
-                                <button type="button" v-for="p in providers" :key="p.id" class="custom-select-option" :class="{ \'selected\': modelForm.provider_id === p.id }" @click="selectProvider(p.id); modalProviderOpen = false">{{ p.name }}</button>\
+                            <div class="custom-select-dropdown" v-show="openDropdown === \'modal-provider\'" v-cloak>\
+                                <button type="button" class="custom-select-option" :class="{ \'selected\': !modelForm.provider_id }" @click="modelForm.provider_id = \'\'; openDropdown = null">-- 请选择服务商 --</button>\
+                                <button type="button" v-for="p in providers" :key="p.id" class="custom-select-option" :class="{ \'selected\': modelForm.provider_id === p.id }" @click="selectProvider(p.id); openDropdown = null">{{ p.name }}</button>\
                             </div>\
                         </div>\
+                        <p class="error-text" v-if="modelFormErrors.provider_id">{{ modelFormErrors.provider_id }}</p>\
                     </div>\
                     <div class="form-group" v-show="modelForm.provider_id" v-cloak>\
                         <label>模型 ID *</label>\
-                        <input type="text" v-model="modelForm.model_name" placeholder="选择下方检测到的模型，或手动输入模型 ID" required>\
+                        <input type="text" v-model="modelForm.model_name" placeholder="选择下方检测到的模型，或手动输入模型 ID" required :class="{ \'error\': modelFormErrors.model_name }">\
+                        <p class="error-text" v-if="modelFormErrors.model_name">{{ modelFormErrors.model_name }}</p>\
                         <div class="detected-models-panel" v-show="detectingModels" v-cloak>\
                             <div class="detected-models-skeleton">\
                                 <div class="skeleton-group">\
@@ -1337,7 +1861,7 @@ window.VuePages = window.VuePages || {};
         </div>\
     </div>\
 \
-    <div class="modal" v-show="showRuleForm" v-cloak @keydown.escape="showRuleForm = false">\
+    <div class="modal modal-top" v-show="showRuleForm" v-cloak @keydown.escape="showRuleForm = false">\
         <div class="modal-content" @click.stop>\
             <div class="modal-header">\
                 <h3>{{ editingRule ? \'编辑路由规则\' : \'添加路由规则\' }}</h3>\
@@ -1347,7 +1871,8 @@ window.VuePages = window.VuePages || {};
                 <form @submit.prevent="saveRule">\
                     <div class="form-group">\
                         <label>规则名称 *</label>\
-                        <input type="text" v-model="ruleForm.name" placeholder="如: my_custom_rule" required>\
+                        <input type="text" v-model="ruleForm.name" placeholder="如: my_custom_rule" required :class="{ \'error\': ruleFormErrors.name }">\
+                        <p class="error-text" v-if="ruleFormErrors.name">{{ ruleFormErrors.name }}</p>\
                     </div>\
                     <div class="form-group">\
                         <label>描述</label>\
@@ -1360,22 +1885,25 @@ window.VuePages = window.VuePages || {};
                     </div>\
                     <div class="form-group">\
                         <label>正则表达式</label>\
-                        <input type="text" v-model="ruleForm.pattern" placeholder="如: (?i)(设计|规划).*(系统|架构)">\
-                        <p class="help-text">Go 正则语法，留空则不使用正则匹配</p>\
+                        <input type="text" v-model="ruleForm.pattern" placeholder="如: (?i)(设计|规划).*(系统|架构)" :class="{ \'error\': ruleFormErrors.pattern }">\
+                        <p class="error-text" v-if="ruleFormErrors.pattern">{{ ruleFormErrors.pattern }}</p>\
+                        <p class="help-text" v-else>Go 正则语法，留空则不使用正则匹配</p>\
                     </div>\
                     <div class="form-group">\
                         <label>条件表达式</label>\
-                        <input type="text" v-model="ruleForm.condition" placeholder="如: len(message) > 2000 AND contains(message, \'分析\')">\
-                        <p class="help-text">支持: len(), contains(), has_code_block(), count(), matches(), AND/OR/NOT</p>\
+                        <input type="text" v-model="ruleForm.condition" placeholder="如: len(message) > 2000 AND contains(message, \'分析\')" :class="{ \'error\': ruleFormErrors.condition }">\
+                        <p class="error-text" v-if="ruleFormErrors.condition">{{ ruleFormErrors.condition }}</p>\
+                        <p class="help-text" v-else>支持: len(), contains(), has_code_block(), count(), matches(), AND/OR/NOT</p>\
                     </div>\
                     <div class="form-row">\
                         <div class="form-group">\
                             <label>任务类型 *</label>\
-                            <select v-model="ruleForm.task_type">\
+                            <select v-model="ruleForm.task_type" :class="{ \'error\': ruleFormErrors.task_type }">\
                                 <option value="simple">simple</option>\
                                 <option value="default">default</option>\
                                 <option value="complex">complex</option>\
                             </select>\
+                            <p class="error-text" v-if="ruleFormErrors.task_type">{{ ruleFormErrors.task_type }}</p>\
                         </div>\
                         <div class="form-group">\
                             <label>优先级</label>\
@@ -1397,6 +1925,142 @@ window.VuePages = window.VuePages || {};
                     <span v-show="!savingRule">保存</span>\
                     <span v-show="savingRule">保存中...</span>\
                 </button>\
+            </div>\
+        </div>\
+    </div>\
+\
+    <div class="modal" v-show="showAnalysisModal" v-cloak @keydown.escape="showAnalysisModal = false">\
+        <div class="modal-content modal-lg" @click.stop>\
+            <div class="modal-header">\
+                <h3>路由规则分析</h3>\
+                <button class="modal-close" @click="showAnalysisModal = false">&times;</button>\
+            </div>\
+            <div class="modal-body">\
+                <div v-show="!showAnalysisReport && (!analysisTask || analysisTask.status === \'failed\')">\
+                    <div class="form-group">\
+                        <label>分析时间范围</label>\
+                        <div class="rules-filter-group">\
+                            <button class="rules-filter-btn" :class="{\'active\': analysisTimeRange === \'1d\'}" @click="analysisTimeRange = \'1d\'">1 天</button>\
+                            <button class="rules-filter-btn" :class="{\'active\': analysisTimeRange === \'7d\'}" @click="analysisTimeRange = \'7d\'">7 天</button>\
+                            <button class="rules-filter-btn" :class="{\'active\': analysisTimeRange === \'30d\'}" @click="analysisTimeRange = \'30d\'">30 天</button>\
+                            <button class="rules-filter-btn" :class="{\'active\': analysisTimeRange === \'custom\'}" @click="analysisTimeRange = \'custom\'">自定义</button>\
+                        </div>\
+                    </div>\
+                    <div class="form-row" v-show="analysisTimeRange === \'custom\'" v-cloak>\
+                        <div class="form-group">\
+                            <label>开始时间</label>\
+                            <input type="datetime-local" v-model="analysisCustomStart">\
+                        </div>\
+                        <div class="form-group">\
+                            <label>结束时间</label>\
+                            <input type="datetime-local" v-model="analysisCustomEnd">\
+                        </div>\
+                    </div>\
+                    <div class="form-group">\
+                        <label>分析模型</label>\
+                        <select v-model="analysisModelId">\
+                            <option value="" disabled>-- 请选择模型 --</option>\
+                            <option v-for="m in analysisModels" :key="m.id" :value="m.id">{{ m.model_name }}</option>\
+                        </select>\
+                        <p class="help-text">选择用于分析的 LLM 模型，建议使用高能模型获得更准确的分析结果</p>\
+                    </div>\
+                    <div class="form-group" v-show="analysisModels.length === 0" v-cloak>\
+                        <p class="help-text" style="color: var(--danger-color)">暂无可用模型，请先在 LLM 路由配置中添加路由模型</p>\
+                    </div>\
+                    <button class="btn btn-primary" @click="startAnalysis()" :disabled="analysisStarting || analysisModels.length === 0" style="margin-top: var(--spacing-sm)">\
+                        <span v-show="!analysisStarting">开始分析</span>\
+                        <span v-show="analysisStarting">启动中...</span>\
+                    </button>\
+                </div>\
+\
+                <div v-show="analysisTask && (analysisTask.status === \'pending\' || analysisTask.status === \'running\')" v-cloak class="analysis-progress">\
+                    <div class="analysis-progress-header">\
+                        <h4>分析进行中</h4>\
+                        <span class="analysis-progress-pct">{{ Math.round(smoothProgress) }}%</span>\
+                    </div>\
+                    <div class="progress-bar-container">\
+                        <div class="progress-bar-fill" :style="\'width:\' + Math.round(smoothProgress) + \'%\'"></div>\
+                    </div>\
+                    <div class="analysis-steps">\
+                        <div v-for="s in [{key:\'collecting_logs\',label:\'收集日志\'},{key:\'extracting_messages\',label:\'提取消息\'},{key:\'loading_rules\',label:\'加载规则\'},{key:\'building_prompt\',label:\'构建提示词\'},{key:\'calling_llm\',label:\'LLM 分析\'},{key:\'parsing_result\',label:\'解析结果\'}]" :key="s.key" class="analysis-step" :class="{\'step-active\': analysisTask && analysisTask.stage === s.key, \'step-done\': isStageCompleted(analysisTask ? analysisTask.stage : \'\', s.key)}">\
+                            <span class="step-dot"></span>\
+                            <span class="step-label">{{ s.label }}</span>\
+                        </div>\
+                    </div>\
+                </div>\
+\
+                <div v-show="showAnalysisReport && currentReport" v-cloak class="analysis-report">\
+                    <div class="analysis-report-header">\
+                        <button class="btn btn-sm" @click="closeAnalysisReport()" style="margin-bottom:var(--spacing-sm)">&larr; 返回</button>\
+                        <div class="analysis-report-meta">\
+                            <span v-show="currentReport && currentReport.model_used">模型: <code>{{ currentReport ? currentReport.model_used : \'\' }}</code></span>\
+                            <span v-show="currentReport && currentReport.total_logs">日志: {{ (currentReport ? currentReport.analyzed_logs : 0) + \'/\' + (currentReport ? currentReport.total_logs : 0) }}</span>\
+                        </div>\
+                    </div>\
+\
+                    <div class="analysis-summary-cards" v-show="currentReport && currentReport.summary" v-cloak>\
+                        <div class="analysis-summary-card">\
+                            <div class="analysis-summary-label">规则匹配率</div>\
+                            <div class="analysis-summary-value">{{ currentReport && currentReport.summary ? ((currentReport.summary.rule_match_rate * 100).toFixed(1) + \'%\') : \'-\' }}</div>\
+                        </div>\
+                        <div class="analysis-summary-card">\
+                            <div class="analysis-summary-label">LLM 回退率</div>\
+                            <div class="analysis-summary-value">{{ currentReport && currentReport.summary ? ((currentReport.summary.llm_fallback_rate * 100).toFixed(1) + \'%\') : \'-\' }}</div>\
+                        </div>\
+                        <div class="analysis-summary-card">\
+                            <div class="analysis-summary-label">不准确率</div>\
+                            <div class="analysis-summary-value">{{ currentReport && currentReport.summary ? ((currentReport.summary.inaccurate_rate * 100).toFixed(1) + \'%\') : \'-\' }}</div>\
+                        </div>\
+                    </div>\
+\
+                    <div class="analysis-section" v-show="currentReport && currentReport.issues && currentReport.issues.length > 0" v-cloak>\
+                        <h4>发现问题 ({{ currentReport ? currentReport.issues.length : 0 }})</h4>\
+                        <div v-for="(issue, idx) in (currentReport ? currentReport.issues : [])" :key="idx" class="analysis-issue-card" :class="getSeverityClass(issue.severity)">\
+                            <div class="analysis-issue-header">\
+                                <span class="analysis-issue-type">{{ issue.type }}</span>\
+                                <span class="analysis-severity-badge" :class="getSeverityClass(issue.severity)">{{ getSeverityLabel(issue.severity) }}</span>\
+                            </div>\
+                            <div class="analysis-issue-rule" v-show="issue.rule_name">规则: <code>{{ issue.rule_name }}</code></div>\
+                            <div class="analysis-issue-desc">{{ issue.description }}</div>\
+                            <div class="analysis-issue-examples" v-show="issue.examples && issue.examples.length > 0">\
+                                <div class="analysis-example" v-for="(ex, eidx) in (issue.examples || []).slice(0, 3)" :key="eidx">{{ ex }}</div>\
+                            </div>\
+                        </div>\
+                    </div>\
+\
+                    <div class="analysis-section" v-show="currentReport && currentReport.recommendations && currentReport.recommendations.length > 0" v-cloak>\
+                        <h4>优化建议 ({{ currentReport ? currentReport.recommendations.length : 0 }})</h4>\
+                        <div v-for="(rec, idx) in (currentReport ? currentReport.recommendations : [])" :key="idx" class="analysis-rec-card">\
+                            <div class="analysis-rec-header">\
+                                <span class="analysis-rec-action" :class="\'action-\' + rec.action">{{ rec.action }}</span>\
+                                <span class="analysis-rec-rule" v-show="rec.rule_name"><code>{{ rec.rule_name }}</code></span>\
+                            </div>\
+                            <div class="analysis-rec-desc">{{ rec.description }}</div>\
+                            <div class="analysis-rec-details" v-show="rec.details">{{ rec.details }}</div>\
+                            <button class="rec-apply-btn" v-show="isRecActionable(rec)" @click="applyRecommendation(rec)">应用建议</button>\
+                        </div>\
+                    </div>\
+\
+                    <div class="analysis-section" v-show="currentReport && currentReport.conclusion" v-cloak>\
+                        <h4>总结</h4>\
+                        <div class="analysis-conclusion">{{ currentReport ? currentReport.conclusion : \'\' }}</div>\
+                    </div>\
+                </div>\
+\
+                <div class="analysis-section" v-show="!showAnalysisReport && analysisReports.length > 0" v-cloak style="margin-top: var(--spacing-lg);">\
+                    <h4>历史报告 ({{ analysisReportsTotal }})</h4>\
+                    <div class="analysis-reports-list">\
+                        <div v-for="r in analysisReports" :key="r.id" class="analysis-report-item" @click="loadReportDetail(r.id)">\
+                            <div class="analysis-report-item-info">\
+                                <span class="analysis-report-item-date">{{ formatReportDate(r.created_at) }}</span>\
+                                <span class="analysis-report-item-model"><code>{{ r.model_used }}</code></span>\
+                            </div>\
+                            <div class="analysis-report-item-stats">\
+                                <span>{{ r.analyzed_logs + \'/\' + r.total_logs + \' 条日志\' }}</span>\
+                            </div>\
+                        </div>\
+                    </div>\
+                </div>\
             </div>\
         </div>\
     </div>\

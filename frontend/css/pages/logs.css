@@ -267,27 +267,42 @@
     white-space: nowrap;
 }
 
+/* 直接指定 - 蓝色 */
+.routing-method-badge.method-direct {
+    background: rgba(59, 130, 246, 0.1);
+    color: #1976d2;
+}
+
+/* 智能路由 (规则匹配 + LLM路由) - 绿色 */
+.routing-method-badge.method-smart,
 .routing-method-badge.method-rule {
-    background: var(--color-info-bg, rgba(59, 130, 246, 0.1));
-    color: var(--color-info, #3b82f6);
+    background: rgba(16, 185, 129, 0.1);
+    color: #388e3c;
 }
 
+/* 缓存命中 - 紫色 */
+.routing-method-badge.method-cache,
 .routing-method-badge.method-cache_l1,
-.routing-method-badge.method-cache_l2 {
-    background: var(--color-success-bg, rgba(16, 185, 129, 0.1));
-    color: var(--color-success, #10b981);
+.routing-method-badge.method-cache_l2,
+.routing-method-badge.method-cache_l3 {
+    background: rgba(139, 92, 246, 0.1);
+    color: #7b1fa2;
 }
 
+/* LLM路由 - 绿色 (与规则匹配相同) */
 .routing-method-badge.method-llm {
-    background: var(--color-warning-bg, rgba(245, 158, 11, 0.1));
-    color: var(--color-warning, #f59e0b);
+    background: rgba(16, 185, 129, 0.1);
+    color: #388e3c;
 }
 
-.routing-method-badge.method-fallback {
-    background: var(--gray-100, #f3f4f6);
-    color: var(--gray-600, #4b5563);
+/* 回退 - 橙色 */
+.routing-method-badge.method-fallback,
+.routing-method-badge.method-fallback_same_role {
+    background: rgba(245, 158, 11, 0.1);
+    color: #f57c00;
 }
 
+/* 未知 - 灰色 */
 .routing-method-badge.method-unknown {
     background: var(--gray-100, #f3f4f6);
     color: var(--text-muted);

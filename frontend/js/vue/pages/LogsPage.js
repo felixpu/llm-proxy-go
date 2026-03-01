@@ -17,11 +17,14 @@ window.VuePages = window.VuePages || {};
 
   // 路由方式映射
   var ROUTING_METHOD_MAP = {
+    "": "Direct",
     rule: "规则",
     cache_l1: "L1缓存",
     cache_l2: "L2缓存",
-    llm: "LLM",
+    cache_l3: "L3缓存",
+    llm: "LLM路由",
     fallback: "回退",
+    fallback_same_role: "同角色回退",
     unknown: "未知",
   };
 
@@ -152,7 +155,27 @@ window.VuePages = window.VuePages || {};
 
       // 格式化路由方式
       function formatRoutingMethod(method) {
+        if (method === "" || method === null || method === undefined) {
+          return ROUTING_METHOD_MAP[""];
+        }
         return ROUTING_METHOD_MAP[method] || method || "-";
+      }
+
+      // 获取路由方式的 CSS 类名
+      function getRoutingMethodClass(method) {
+        if (method === "" || method === null || method === undefined) {
+          return "method-direct";
+        }
+        if (method === "rule" || method === "llm") {
+          return "method-smart";
+        }
+        if (method && method.startsWith("cache_")) {
+          return "method-cache";
+        }
+        if (method && method.includes("fallback")) {
+          return "method-fallback";
+        }
+        return "method-" + (method || "unknown");
       }
 
       // 构建查询参数
@@ -598,6 +621,7 @@ window.VuePages = window.VuePages || {};
         // 方法
         formatDateTime: formatDateTime,
         formatRoutingMethod: formatRoutingMethod,
+        getRoutingMethodClass: getRoutingMethodClass,
         loadLogs: loadLogs,
         loadStats: loadStats,
         applyFilters: applyFilters,
@@ -797,7 +821,7 @@ window.VuePages = window.VuePages || {};
                         <td><span class="model-tag">{{ log.model_name }}</span></td>\
                         <td>{{ log.endpoint_name }}</td>\
                         <td><span class="task-type-badge" :class="\'type-\' + (log.task_type || \'default\')">{{ log.task_type || "-" }}</span></td>\
-                        <td><span class="routing-method-badge" :class="\'method-\' + (log.routing_method || \'unknown\')">{{ formatRoutingMethod(log.routing_method) }}</span></td>\
+                        <td><span class="routing-method-badge" :class="getRoutingMethodClass(log.routing_method)">{{ formatRoutingMethod(log.routing_method) }}</span></td>\
                         <td>{{ log.matched_rule_name || "-" }}</td>\
                         <td>{{ (log.latency_ms || 0).toFixed(0) + " ms" }}</td>\
                         <td>{{ "$" + (log.cost || 0).toFixed(6) }}</td>\
@@ -885,7 +909,7 @@ window.VuePages = window.VuePages || {};
                             </div>\
                             <div class="detail-item">\
                                 <span class="detail-label">路由方式</span>\
-                                <span class="routing-method-badge" :class="\'method-\' + (logDetail.routing_method || \'unknown\')">{{ formatRoutingMethod(logDetail.routing_method) }}</span>\
+                                <span class="routing-method-badge" :class="getRoutingMethodClass(logDetail.routing_method)">{{ formatRoutingMethod(logDetail.routing_method) }}</span>\
                             </div>\
                             <div class="detail-item">\
                                 <span class="detail-label">匹配规则</span>\

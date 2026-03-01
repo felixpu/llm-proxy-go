@@ -41,6 +41,7 @@ type APIKeyRepository interface {
 	Insert(ctx context.Context, key *models.APIKey) (int64, error)
 	UpdateLastUsed(ctx context.Context, id int64) error
 	Revoke(ctx context.Context, id int64, userID *int64) error
+	SetActive(ctx context.Context, id int64, userID *int64, active bool) error
 	Delete(ctx context.Context, id int64, userID *int64) error
 	CleanupExpired(ctx context.Context) (int64, error)
 }
@@ -84,4 +85,8 @@ type RequestLogRepository interface {
 	GetRoutingAggregation(ctx context.Context, startTime, endTime *time.Time) (*RoutingAggregation, error)
 	// ListInaccurate returns inaccurate logs with pagination (SQL-level filtering).
 	ListInaccurate(ctx context.Context, limit, offset int) ([]*models.RequestLog, int64, error)
+	// ListForAnalysis returns logs with request_content for routing analysis.
+	ListForAnalysis(ctx context.Context, startTime, endTime *time.Time, maxResults int) ([]*models.RequestLog, error)
+	// GetEndpointModelStats returns historical stats grouped by endpoint_name/model_name.
+	GetEndpointModelStats(ctx context.Context) (map[string]*EndpointModelStats, error)
 }

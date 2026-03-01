@@ -18,6 +18,11 @@
     backdrop-filter: blur(4px);
 }
 
+/* Stacked modal: appears above other modals */
+.modal.modal-top {
+    z-index: 1050;
+}
+
 .modal.hidden {
     display: none;
 }

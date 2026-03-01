@@ -181,14 +181,23 @@ func (r *SQLAPIKeyRepository) UpdateLastUsed(ctx context.Context, id int64) erro
 }
 
 func (r *SQLAPIKeyRepository) Revoke(ctx context.Context, id int64, userID *int64) error {
+	return r.SetActive(ctx, id, userID, false)
+}
+
+// SetActive sets the is_active flag for an API key.
+func (r *SQLAPIKeyRepository) SetActive(ctx context.Context, id int64, userID *int64, active bool) error {
+	val := 0
+	if active {
+		val = 1
+	}
 	if userID != nil {
 		_, err := r.db.ExecContext(ctx,
-			`UPDATE api_keys SET is_active = 0 WHERE id = ? AND user_id = ?`,
-			id, *userID)
+			`UPDATE api_keys SET is_active = ? WHERE id = ? AND user_id = ?`,
+			val, id, *userID)
 		return err
 	}
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE api_keys SET is_active = 0 WHERE id = ?`, id)
+		`UPDATE api_keys SET is_active = ? WHERE id = ?`, val, id)
 	return err
 }
 

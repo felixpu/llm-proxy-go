@@ -332,12 +332,22 @@ func (h *ProxyHandler) handleStreamRequest(c *gin.Context, req *models.Anthropic
 				h.logger.Error("stream error",
 					zap.String("request_id", meta.RequestID),
 					zap.Error(chunk.Err))
+				if chunk.Meta != nil {
+					chunk.Meta.RoutingDecision = meta.RoutingDecision
+					chunk.Meta.RuleMatchResult = meta.RuleMatchResult
+					chunk.Meta.RequestContent = meta.RequestContent
+					h.proxyService.SaveRequestLog(c.Request.Context(), chunk.Meta, user.UserID, user.APIKeyID)
+				}
 				return
 			}
 
 			if chunk.Done {
 				// Final chunk with metadata
 				if chunk.Meta != nil {
+					// Propagate routing fields set by handler
+					chunk.Meta.RoutingDecision = meta.RoutingDecision
+					chunk.Meta.RuleMatchResult = meta.RuleMatchResult
+					chunk.Meta.RequestContent = meta.RequestContent
 					// Save request log
 					h.proxyService.SaveRequestLog(c.Request.Context(), chunk.Meta, user.UserID, user.APIKeyID)
 

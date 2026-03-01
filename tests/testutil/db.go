@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS providers (
     max_concurrent INTEGER DEFAULT 10,
     enabled INTEGER DEFAULT 1,
     description TEXT,
+    custom_headers TEXT DEFAULT '' NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
