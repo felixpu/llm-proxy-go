@@ -97,7 +97,7 @@ func DefaultConfig() *Config {
 			ProxyHeaders:      true,
 			ForwardedAllowIPs: "*",
 			Reload:            false,
-			LogLevel:          "INFO",
+			LogLevel:          "DEBUG",
 		},
 		Security: SecurityConfig{
 			SecretKey:          "change-this-to-a-random-secret-key",

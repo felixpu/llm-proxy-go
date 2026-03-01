@@ -26,7 +26,7 @@ window.VuePages = window.VuePages || {};
 
       const logs = ref([]);
       const autoScroll = ref(true);
-      const levelFilter = ref("INFO");
+      const levelFilter = ref("ALL");
       const searchKeyword = ref("");
       const streaming = ref(true);
       const userScrolling = ref(false);
