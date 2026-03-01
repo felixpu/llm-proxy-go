@@ -8,7 +8,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/user/llm-proxy-go/internal/api/middleware"
+	"github.com/user/llm-proxy-go/internal/models"
 	"github.com/user/llm-proxy-go/internal/repository"
+	"github.com/user/llm-proxy-go/internal/service"
 	"go.uber.org/zap"
 )
 
@@ -19,9 +21,11 @@ const (
 
 // RoutingAnalysisHandler handles routing analysis endpoints.
 type RoutingAnalysisHandler struct {
-	logRepo  repository.RequestLogRepository
-	ruleRepo repository.RoutingRuleRepository
-	logger   *zap.Logger
+	logRepo    repository.RequestLogRepository
+	ruleRepo   repository.RoutingRuleRepository
+	analyzer   *service.RoutingAnalyzer
+	reportRepo *repository.AnalysisReportRepository
+	logger     *zap.Logger
 }
 
 // NewRoutingAnalysisHandler creates a new RoutingAnalysisHandler.
@@ -35,6 +39,12 @@ func NewRoutingAnalysisHandler(
 		ruleRepo: ruleRepo,
 		logger:   logger,
 	}
+}
+
+// SetAnalyzer sets the routing analyzer (called after initialization).
+func (h *RoutingAnalysisHandler) SetAnalyzer(analyzer *service.RoutingAnalyzer, reportRepo *repository.AnalysisReportRepository) {
+	h.analyzer = analyzer
+	h.reportRepo = reportRepo
 }
 
 // RoutingStats represents routing statistics.
@@ -307,4 +317,131 @@ func roundToPlaces(val float64, places int) float64 {
 		multiplier *= 10
 	}
 	return float64(int(val*multiplier+0.5)) / multiplier
+}
+
+// StartAnalysis starts an async routing analysis task.
+// POST /api/routing/analysis/analyze
+func (h *RoutingAnalysisHandler) StartAnalysis(c *gin.Context) {
+	currentUser := middleware.GetCurrentUser(c)
+	if currentUser == nil || currentUser.Role != "admin" {
+		errorResponse(c, http.StatusForbidden, "Admin access required")
+		return
+	}
+
+	if h.analyzer == nil {
+		errorResponse(c, http.StatusServiceUnavailable, "Analyzer not initialized")
+		return
+	}
+
+	var req models.AnalysisRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		errorResponse(c, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if req.ModelID == 0 {
+		errorResponse(c, http.StatusBadRequest, "model_id is required")
+		return
+	}
+
+	taskID, err := h.analyzer.StartAnalysis(c.Request.Context(), &req)
+	if err != nil {
+		h.logger.Error("failed to start analysis", zap.Error(err))
+		errorResponse(c, http.StatusConflict, err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"task_id": taskID})
+}
+
+// GetAnalysisTask returns the status/progress of an analysis task.
+// GET /api/routing/analysis/task/:task_id
+func (h *RoutingAnalysisHandler) GetAnalysisTask(c *gin.Context) {
+	currentUser := middleware.GetCurrentUser(c)
+	if currentUser == nil || currentUser.Role != "admin" {
+		errorResponse(c, http.StatusForbidden, "Admin access required")
+		return
+	}
+
+	if h.analyzer == nil {
+		errorResponse(c, http.StatusServiceUnavailable, "Analyzer not initialized")
+		return
+	}
+
+	taskID := c.Param("task_id")
+	task := h.analyzer.GetTask(taskID)
+	if task == nil {
+		errorResponse(c, http.StatusNotFound, "Task not found")
+		return
+	}
+
+	c.JSON(http.StatusOK, task)
+}
+
+// ListAnalysisReports returns paginated historical analysis reports.
+// GET /api/routing/analysis/reports?limit=20&offset=0
+func (h *RoutingAnalysisHandler) ListAnalysisReports(c *gin.Context) {
+	currentUser := middleware.GetCurrentUser(c)
+	if currentUser == nil || currentUser.Role != "admin" {
+		errorResponse(c, http.StatusForbidden, "Admin access required")
+		return
+	}
+
+	if h.reportRepo == nil {
+		errorResponse(c, http.StatusServiceUnavailable, "Report repository not initialized")
+		return
+	}
+
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), routingQueryTimeout)
+	defer cancel()
+
+	reports, total, err := h.reportRepo.List(ctx, limit, offset)
+	if err != nil {
+		h.logger.Error("failed to list analysis reports", zap.Error(err))
+		errorResponse(c, http.StatusInternalServerError, "Failed to list reports")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"reports": reports,
+		"total":   total,
+		"limit":   limit,
+		"offset":  offset,
+	})
+}
+
+// GetAnalysisReport returns a single historical analysis report.
+// GET /api/routing/analysis/reports/:id
+func (h *RoutingAnalysisHandler) GetAnalysisReport(c *gin.Context) {
+	currentUser := middleware.GetCurrentUser(c)
+	if currentUser == nil || currentUser.Role != "admin" {
+		errorResponse(c, http.StatusForbidden, "Admin access required")
+		return
+	}
+
+	if h.reportRepo == nil {
+		errorResponse(c, http.StatusServiceUnavailable, "Report repository not initialized")
+		return
+	}
+
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		errorResponse(c, http.StatusBadRequest, "Invalid report ID")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), routingQueryTimeout)
+	defer cancel()
+
+	report, err := h.reportRepo.GetByID(ctx, id)
+	if err != nil {
+		h.logger.Error("failed to get analysis report", zap.Error(err), zap.Int64("id", id))
+		errorResponse(c, http.StatusNotFound, "Report not found")
+		return
+	}
+
+	c.JSON(http.StatusOK, report)
 }

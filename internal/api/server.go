@@ -25,6 +25,7 @@ type ServerDeps struct {
 	HealthChecker    *service.HealthChecker
 	RoutingCache     *service.RoutingCache
 	LLMRouter        *service.LLMRouter
+	RoutingAnalyzer  *service.RoutingAnalyzer
 	UserRepo         repository.UserRepository
 	KeyRepo          repository.APIKeyRepository
 	LogRepo          repository.RequestLogRepository
@@ -36,6 +37,7 @@ type ServerDeps struct {
 	RoutingRuleRepo   *repository.RoutingRuleRepo
 	EmbeddingCacheRepo *repository.EmbeddingCacheRepository
 	SystemConfigRepo *repository.SystemConfigRepository
+	AnalysisReportRepo *repository.AnalysisReportRepository
 	EndpointStore    *service.EndpointStore
 	RateLimit        *middleware.RateLimitConfig
 	DB               *sql.DB
@@ -127,6 +129,7 @@ func NewServer(deps ServerDeps) *Server {
 		keyGroup.POST("", keyHandler.CreateAPIKey)
 		keyGroup.GET("/:id", keyHandler.GetAPIKey)
 		keyGroup.POST("/:id/revoke", keyHandler.RevokeAPIKey)
+		keyGroup.POST("/:id/toggle", keyHandler.ToggleAPIKey)
 		keyGroup.DELETE("/:id", keyHandler.DeleteAPIKey)
 	}
 
@@ -152,6 +155,15 @@ func NewServer(deps ServerDeps) *Server {
 		routingAnalysisGroup.GET("/stats", routingAnalysisHandler.GetRoutingStats)
 		routingAnalysisGroup.GET("/inaccurate", routingAnalysisHandler.GetInaccurateLogs)
 		routingAnalysisGroup.GET("/export", routingAnalysisHandler.ExportRoutingData)
+		routingAnalysisGroup.POST("/analyze", routingAnalysisHandler.StartAnalysis)
+		routingAnalysisGroup.GET("/task/:task_id", routingAnalysisHandler.GetAnalysisTask)
+		routingAnalysisGroup.GET("/reports", routingAnalysisHandler.ListAnalysisReports)
+		routingAnalysisGroup.GET("/reports/:id", routingAnalysisHandler.GetAnalysisReport)
+	}
+
+	// Set analyzer on handler after route registration.
+	if deps.RoutingAnalyzer != nil {
+		routingAnalysisHandler.SetAnalyzer(deps.RoutingAnalyzer, deps.AnalysisReportRepo)
 	}
 
 	// System logs endpoints.

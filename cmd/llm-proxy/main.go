@@ -163,6 +163,10 @@ func run() error {
 	// Initialize LLM router for intelligent routing.
 	llmRouter := service.NewLLMRouter(db, nil, logger)
 
+	// Initialize routing analyzer for rule optimization.
+	analysisReportRepo := repository.NewAnalysisReportRepository(db, logger, readDB)
+	routingAnalyzer := service.NewRoutingAnalyzer(logRepo, routingRuleRepo, routingModelRepo, analysisReportRepo, logger)
+
 	// Create HTTP server.
 	server := api.NewServer(api.ServerDeps{
 		ProxyService:       proxyService,
@@ -170,6 +174,7 @@ func run() error {
 		HealthChecker:      healthChecker,
 		RoutingCache:       routingCache,
 		LLMRouter:          llmRouter,
+		RoutingAnalyzer:    routingAnalyzer,
 		UserRepo:           userRepo,
 		KeyRepo:            keyRepo,
 		LogRepo:            logRepo,
@@ -181,6 +186,7 @@ func run() error {
 		RoutingRuleRepo:    routingRuleRepo,
 		EmbeddingCacheRepo: embeddingCacheRepo,
 		SystemConfigRepo:   systemConfigRepo,
+		AnalysisReportRepo: analysisReportRepo,
 		EndpointStore:      endpointStore,
 		RateLimit: &middleware.RateLimitConfig{
 			Enabled:       cfg.RateLimit.Enabled,
