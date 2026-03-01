@@ -16,6 +16,8 @@ dist/
 data/*.db
 data/*.db-shm
 data/*.db-wal
+*.db
+*.sqlite
 
 # IDE / local config
 .claude/
