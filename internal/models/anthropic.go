@@ -33,9 +33,10 @@ type Message struct {
 // ContentPart represents a part of message content.
 // Supports text, image, tool_use, tool_result, and thinking types.
 type ContentPart struct {
-	Type   string       `json:"type"`
-	Text   string       `json:"text,omitempty"`
-	Source *ImageSource `json:"source,omitempty"`
+	Type         string        `json:"type"`
+	Text         string        `json:"text,omitempty"`
+	Source       *ImageSource  `json:"source,omitempty"`
+	CacheControl *CacheControl `json:"cache_control,omitempty"`
 	// tool_use fields
 	ID    string      `json:"id,omitempty"`
 	Name  string      `json:"name,omitempty"`
@@ -119,11 +120,17 @@ type ImageSource struct {
 	Data      string `json:"data"`
 }
 
+// CacheControl represents Anthropic Prompt Caching control.
+type CacheControl struct {
+	Type string `json:"type"` // "ephemeral"
+}
+
 // Tool represents a tool definition.
 type Tool struct {
-	Name        string      `json:"name"`
-	Description string      `json:"description,omitempty"`
-	InputSchema interface{} `json:"input_schema"`
+	Name         string        `json:"name"`
+	Description  string        `json:"description,omitempty"`
+	InputSchema  interface{}   `json:"input_schema"`
+	CacheControl *CacheControl `json:"cache_control,omitempty"`
 }
 
 // ToolChoice represents tool choice configuration.
@@ -152,8 +159,10 @@ type AnthropicResponse struct {
 
 // Usage represents token usage statistics.
 type Usage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 
 // StreamEvent represents a Server-Sent Event for streaming responses.

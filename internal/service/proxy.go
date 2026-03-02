@@ -32,6 +32,10 @@ type ProxyMetadata struct {
 	StatusCode       int
 	Success          bool
 
+	// Cache statistics (Anthropic Prompt Caching)
+	CacheCreationInputTokens int
+	CacheReadInputTokens     int
+
 	// Routing decision info
 	RoutingDecision *models.RoutingDecision
 	RuleMatchResult *ClassifyResult
@@ -161,16 +165,29 @@ func (s *ProxyService) proxyToEndpoint(
 		return nil, nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	upstreamURL := fmt.Sprintf("%s/v1/messages", ep.Provider.BaseURL)
+	// Determine API type for this provider
+	apiType := APIType(ep.Provider.APIType)
+	if apiType == "" || apiType == APITypeAuto {
+		// Use default Anthropic Messages API for backward compatibility
+		apiType = APITypeAnthropicMessages
+	}
+	adapter := GetAdapter(apiType)
+
+	upstreamURL := fmt.Sprintf("%s%s", ep.Provider.BaseURL, adapter.GetEndpoint())
 	upReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, fmt.Errorf("create upstream request: %w", err)
 	}
 
 	upReq.Header.Set("Content-Type", "application/json")
-	upReq.Header.Set("x-api-key", ep.Provider.APIKey)
-	upReq.Header.Set("anthropic-version", headerOrDefault(originalHeaders, "Anthropic-Version", "2023-06-01"))
-	copyAnthropicHeaders(originalHeaders, upReq.Header)
+	adapter.SetAuthHeaders(upReq, ep.Provider.APIKey)
+
+	// For Anthropic APIs, also set version header if present
+	if apiType == APITypeAnthropicMessages || apiType == APITypeAnthropicResponses {
+		upReq.Header.Set("anthropic-version", headerOrDefault(originalHeaders, "Anthropic-Version", "2023-06-01"))
+		copyAnthropicHeaders(originalHeaders, upReq.Header)
+	}
+
 	// Forward client User-Agent if present
 	if ua := originalHeaders.Get("User-Agent"); ua != "" {
 		upReq.Header.Set("User-Agent", ua)
@@ -180,7 +197,12 @@ func (s *ProxyService) proxyToEndpoint(
 
 	resp, err := s.client.Do(upReq)
 	if err != nil {
-		s.healthChecker.UpdateRequestStats(epName, false, msSince(start))
+		s.healthChecker.UpdateRequestStatsV2(RequestResult{
+			EndpointName: epName,
+			Success:      false,
+			LatencyMs:    msSince(start),
+			Err:          err,
+		})
 		return nil, nil, fmt.Errorf("upstream request failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -190,11 +212,23 @@ func (s *ProxyService) proxyToEndpoint(
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		s.healthChecker.UpdateRequestStats(epName, false, latencyMs)
+		s.healthChecker.UpdateRequestStatsV2(RequestResult{
+			EndpointName: epName,
+			Success:      false,
+			LatencyMs:    latencyMs,
+			StatusCode:   resp.StatusCode,
+			Err:          err,
+		})
 		return nil, nil, fmt.Errorf("read upstream response: %w", err)
 	}
 
-	s.healthChecker.UpdateRequestStats(epName, success, latencyMs)
+	s.healthChecker.UpdateRequestStatsV2(RequestResult{
+		EndpointName: epName,
+		Success:      success,
+		LatencyMs:    latencyMs,
+		StatusCode:   resp.StatusCode,
+		ResponseBody: respBody,
+	})
 
 	if resp.StatusCode >= 400 {
 		return nil, nil, &UpstreamError{StatusCode: resp.StatusCode, Body: respBody}
@@ -206,14 +240,16 @@ func (s *ProxyService) proxyToEndpoint(
 	}
 
 	meta := &ProxyMetadata{
-		RequestID:        requestID,
-		SelectedModel:    ep.Model.Name,
-		SelectedEndpoint: ep.Provider.Name,
-		InferredTaskType: string(ep.Model.Role),
-		LatencyMs:        latencyMs,
-		InputTokens:      anthropicResp.Usage.InputTokens,
-		OutputTokens:     anthropicResp.Usage.OutputTokens,
-		Cost:             calculateCost(ep.Model, anthropicResp.Usage),
+		RequestID:                requestID,
+		SelectedModel:            ep.Model.Name,
+		SelectedEndpoint:         ep.Provider.Name,
+		InferredTaskType:         string(ep.Model.Role),
+		LatencyMs:                latencyMs,
+		InputTokens:              anthropicResp.Usage.InputTokens,
+		OutputTokens:             anthropicResp.Usage.OutputTokens,
+		CacheCreationInputTokens: anthropicResp.Usage.CacheCreationInputTokens,
+		CacheReadInputTokens:     anthropicResp.Usage.CacheReadInputTokens,
+		Cost:                     calculateCost(ep.Model, anthropicResp.Usage),
 	}
 
 	return &anthropicResp, meta, nil
@@ -305,15 +341,38 @@ func msSince(start time.Time) float64 {
 }
 
 func calculateCost(model *models.Model, usage models.Usage) float64 {
-	inputCost := float64(usage.InputTokens) / 1_000_000 * model.CostPerMtokInput
+	// Normal input tokens (excluding cache read tokens)
+	normalInputTokens := usage.InputTokens - usage.CacheReadInputTokens
+	if normalInputTokens < 0 {
+		normalInputTokens = 0
+	}
+	inputCost := float64(normalInputTokens) / 1_000_000 * model.CostPerMtokInput
+
+	// Cache read tokens cost 10% of normal input token price
+	cacheReadCost := float64(usage.CacheReadInputTokens) / 1_000_000 * model.CostPerMtokInput * 0.1
+
+	// Output tokens
 	outputCost := float64(usage.OutputTokens) / 1_000_000 * model.CostPerMtokOutput * model.BillingMultiplier
-	return inputCost + outputCost
+
+	return inputCost + cacheReadCost + outputCost
 }
 
 func calculateCostFromTokens(model *models.Model, inputTokens, outputTokens int) float64 {
 	inputCost := float64(inputTokens) / 1_000_000 * model.CostPerMtokInput
 	outputCost := float64(outputTokens) / 1_000_000 * model.CostPerMtokOutput * model.BillingMultiplier
 	return inputCost + outputCost
+}
+
+// calculateCostFromTokensWithCache calculates cost considering cache read tokens.
+func calculateCostFromTokensWithCache(model *models.Model, inputTokens, outputTokens, cacheReadTokens int) float64 {
+	normalInputTokens := inputTokens - cacheReadTokens
+	if normalInputTokens < 0 {
+		normalInputTokens = 0
+	}
+	inputCost := float64(normalInputTokens) / 1_000_000 * model.CostPerMtokInput
+	cacheReadCost := float64(cacheReadTokens) / 1_000_000 * model.CostPerMtokInput * 0.1
+	outputCost := float64(outputTokens) / 1_000_000 * model.CostPerMtokOutput * model.BillingMultiplier
+	return inputCost + cacheReadCost + outputCost
 }
 
 // SaveRequestLog persists a request log entry to the database asynchronously.
@@ -324,21 +383,23 @@ func (s *ProxyService) SaveRequestLog(ctx context.Context, meta *ProxyMetadata, 
 	}
 	statusCode := meta.StatusCode
 	entry := &models.RequestLogEntry{
-		RequestID:    meta.RequestID,
-		UserID:       userID,
-		APIKeyID:     apiKeyID,
-		ModelName:    meta.SelectedModel,
-		EndpointName: meta.SelectedEndpoint,
-		TaskType:     meta.InferredTaskType,
-		InputTokens:  meta.InputTokens,
-		OutputTokens: meta.OutputTokens,
-		LatencyMs:    meta.LatencyMs,
-		Cost:         meta.Cost,
-		StatusCode:   &statusCode,
-		Success:      meta.Success,
-		Stream:       meta.Stream,
-		RequestContent:  meta.RequestContent,
-		ResponseContent: meta.ResponseContent,
+		RequestID:                meta.RequestID,
+		UserID:                   userID,
+		APIKeyID:                 apiKeyID,
+		ModelName:                meta.SelectedModel,
+		EndpointName:             meta.SelectedEndpoint,
+		TaskType:                 meta.InferredTaskType,
+		InputTokens:              meta.InputTokens,
+		OutputTokens:             meta.OutputTokens,
+		CacheCreationInputTokens: meta.CacheCreationInputTokens,
+		CacheReadInputTokens:     meta.CacheReadInputTokens,
+		LatencyMs:                meta.LatencyMs,
+		Cost:                     meta.Cost,
+		StatusCode:               &statusCode,
+		Success:                  meta.Success,
+		Stream:                   meta.Stream,
+		RequestContent:           meta.RequestContent,
+		ResponseContent:          meta.ResponseContent,
 	}
 
 	// Populate routing decision fields
@@ -487,6 +548,13 @@ func (s *ProxyService) connectStreamEndpoint(
 ) (*http.Response, error) {
 	epName := EndpointName(ep)
 
+	// Determine API type for this provider
+	apiType := APIType(ep.Provider.APIType)
+	if apiType == "" || apiType == APITypeAuto {
+		apiType = APITypeAnthropicMessages
+	}
+	adapter := GetAdapter(apiType)
+
 	streamReq := *req
 	streamReq.Model = ep.Model.Name
 	streamReq.Stream = true
@@ -496,7 +564,7 @@ func (s *ProxyService) connectStreamEndpoint(
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	upstreamURL := fmt.Sprintf("%s/v1/messages", ep.Provider.BaseURL)
+	upstreamURL := fmt.Sprintf("%s%s", ep.Provider.BaseURL, adapter.GetEndpoint())
 	upReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create upstream request: %w", err)
@@ -504,9 +572,14 @@ func (s *ProxyService) connectStreamEndpoint(
 
 	upReq.Header.Set("Content-Type", "application/json")
 	upReq.Header.Set("Accept", "text/event-stream")
-	upReq.Header.Set("x-api-key", ep.Provider.APIKey)
-	upReq.Header.Set("anthropic-version", headerOrDefault(originalHeaders, "Anthropic-Version", "2023-06-01"))
-	copyAnthropicHeaders(originalHeaders, upReq.Header)
+	adapter.SetAuthHeaders(upReq, ep.Provider.APIKey)
+
+	// For Anthropic APIs, also set version header if present
+	if apiType == APITypeAnthropicMessages || apiType == APITypeAnthropicResponses {
+		upReq.Header.Set("anthropic-version", headerOrDefault(originalHeaders, "Anthropic-Version", "2023-06-01"))
+		copyAnthropicHeaders(originalHeaders, upReq.Header)
+	}
+
 	if ua := originalHeaders.Get("User-Agent"); ua != "" {
 		upReq.Header.Set("User-Agent", ua)
 	}
@@ -514,14 +587,26 @@ func (s *ProxyService) connectStreamEndpoint(
 
 	resp, err := s.streamClient.Do(upReq)
 	if err != nil {
-		s.healthChecker.UpdateRequestStats(epName, false, msSince(start))
+		s.healthChecker.UpdateRequestStatsV2(RequestResult{
+			EndpointName: epName,
+			Success:      false,
+			LatencyMs:    msSince(start),
+			Err:          err,
+		})
 		return nil, fmt.Errorf("upstream request failed: %w", err)
 	}
 
 	if resp.StatusCode >= 400 {
 		respBody, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		s.healthChecker.UpdateRequestStats(epName, false, msSince(start))
+		s.healthChecker.UpdateRequestStatsV2(RequestResult{
+			EndpointName: epName,
+			Success:      false,
+			LatencyMs:    msSince(start),
+			StatusCode:   resp.StatusCode,
+			ResponseBody: respBody,
+			Err:          readErr,
+		})
 		if readErr != nil {
 			return nil, fmt.Errorf("read upstream error response (status %d): %w", resp.StatusCode, readErr)
 		}
@@ -545,7 +630,7 @@ func (s *ProxyService) readSSEStream(
 	defer resp.Body.Close()
 	defer s.healthChecker.DecrementConnections(epName)
 
-	var inputTokens, outputTokens int
+	var inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int
 	var firstByteTime time.Time
 	reader := bufio.NewReader(resp.Body)
 
@@ -553,8 +638,13 @@ func (s *ProxyService) readSSEStream(
 		select {
 		case <-ctx.Done():
 			latencyMs := streamLatency(firstByteTime, start)
-			s.healthChecker.UpdateRequestStats(epName, false, latencyMs)
-			finalMeta := buildStreamMeta(meta, ep, false, latencyMs, inputTokens, outputTokens)
+			s.healthChecker.UpdateRequestStatsV2(RequestResult{
+				EndpointName: epName,
+				Success:      false,
+				LatencyMs:    latencyMs,
+				Err:          ctx.Err(),
+			})
+			finalMeta := buildStreamMeta(meta, ep, false, latencyMs, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
 			chunkChan <- StreamChunk{Err: ctx.Err(), Done: true, Meta: &finalMeta}
 			return
 		default:
@@ -566,14 +656,19 @@ func (s *ProxyService) readSSEStream(
 				// EOF may carry remaining data — send it before finishing
 				if len(line) > 0 {
 					chunkChan <- StreamChunk{Data: line}
-					s.parseSSEUsage(line, &inputTokens, &outputTokens)
+					s.parseSSEUsage(line, &inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens)
 				}
 				break
 			}
 			s.logger.Error("error reading stream", zap.Error(err))
 			latencyMs := streamLatency(firstByteTime, start)
-			s.healthChecker.UpdateRequestStats(epName, false, latencyMs)
-			finalMeta := buildStreamMeta(meta, ep, false, latencyMs, inputTokens, outputTokens)
+			s.healthChecker.UpdateRequestStatsV2(RequestResult{
+				EndpointName: epName,
+				Success:      false,
+				LatencyMs:    latencyMs,
+				Err:          err,
+			})
+			finalMeta := buildStreamMeta(meta, ep, false, latencyMs, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
 			chunkChan <- StreamChunk{Err: err, Done: true, Meta: &finalMeta}
 			return
 		}
@@ -587,18 +682,23 @@ func (s *ProxyService) readSSEStream(
 		}
 
 		// Parse SSE event for token counting
-		s.parseSSEUsage(line, &inputTokens, &outputTokens)
+		s.parseSSEUsage(line, &inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens)
 	}
 
 	// Calculate final metrics using TTFB
 	latencyMs := streamLatency(firstByteTime, start)
-	finalMeta := buildStreamMeta(meta, ep, true, latencyMs, inputTokens, outputTokens)
+	finalMeta := buildStreamMeta(meta, ep, true, latencyMs, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
 
 	// Send final chunk with completed metadata
 	chunkChan <- StreamChunk{Done: true, Meta: &finalMeta}
 
 	// Update health stats
-	s.healthChecker.UpdateRequestStats(epName, true, latencyMs)
+	s.healthChecker.UpdateRequestStatsV2(RequestResult{
+		EndpointName: epName,
+		Success:      true,
+		LatencyMs:    latencyMs,
+		StatusCode:   200,
+	})
 
 	s.logger.Debug("stream completed",
 		zap.String("request_id", meta.RequestID),
@@ -609,7 +709,7 @@ func (s *ProxyService) readSSEStream(
 }
 
 // parseSSEUsage extracts token usage from an SSE data line.
-func (s *ProxyService) parseSSEUsage(line []byte, inputTokens, outputTokens *int) {
+func (s *ProxyService) parseSSEUsage(line []byte, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens *int) {
 	lineStr := string(line)
 	if !strings.HasPrefix(lineStr, "data: ") {
 		return
@@ -632,6 +732,12 @@ func (s *ProxyService) parseSSEUsage(line []byte, inputTokens, outputTokens *int
 	if ot, ok := usage["output_tokens"].(float64); ok {
 		*outputTokens = int(ot)
 	}
+	if crt, ok := usage["cache_read_input_tokens"].(float64); ok {
+		*cacheReadTokens = int(crt)
+	}
+	if cct, ok := usage["cache_creation_input_tokens"].(float64); ok {
+		*cacheCreationTokens = int(cct)
+	}
 }
 
 // streamLatency returns TTFB if available, otherwise falls back to time since start.
@@ -643,12 +749,14 @@ func streamLatency(firstByteTime, start time.Time) float64 {
 }
 
 // buildStreamMeta creates a copy of metadata with final streaming values.
-func buildStreamMeta(meta *ProxyMetadata, ep *models.Endpoint, success bool, latencyMs float64, inputTokens, outputTokens int) ProxyMetadata {
+func buildStreamMeta(meta *ProxyMetadata, ep *models.Endpoint, success bool, latencyMs float64, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int) ProxyMetadata {
 	finalMeta := *meta
 	finalMeta.LatencyMs = latencyMs
 	finalMeta.InputTokens = inputTokens
 	finalMeta.OutputTokens = outputTokens
-	finalMeta.Cost = calculateCostFromTokens(ep.Model, inputTokens, outputTokens)
+	finalMeta.CacheReadInputTokens = cacheReadTokens
+	finalMeta.CacheCreationInputTokens = cacheCreationTokens
+	finalMeta.Cost = calculateCostFromTokensWithCache(ep.Model, inputTokens, outputTokens, cacheReadTokens)
 	finalMeta.Success = success
 	return finalMeta
 }

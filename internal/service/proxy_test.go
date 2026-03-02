@@ -468,6 +468,42 @@ func TestCalculateCostFromTokens(t *testing.T) {
 	assert.InDelta(t, 0.018, cost, 0.0001)
 }
 
+func TestProxy_CalculateCost_WithCacheReadTokens(t *testing.T) {
+	model := &models.Model{
+		CostPerMtokInput:  3.0,  // $3 per million input tokens
+		CostPerMtokOutput: 15.0, // $15 per million output tokens
+		BillingMultiplier: 1.0,
+	}
+
+	usage := models.Usage{
+		InputTokens:          1000, // Total input tokens
+		OutputTokens:         500,
+		CacheReadInputTokens: 400, // 400 tokens read from cache
+	}
+
+	cost := calculateCost(model, usage)
+	// Normal input: (1000-400)/1M * 3 = 600/1M * 3 = 0.0018
+	// Cache read: 400/1M * 3 * 0.1 = 0.00012
+	// Output: 500/1M * 15 * 1 = 0.0075
+	// Total: 0.0018 + 0.00012 + 0.0075 = 0.00942
+	assert.InDelta(t, 0.00942, cost, 0.00001)
+}
+
+func TestCalculateCostFromTokensWithCache(t *testing.T) {
+	model := &models.Model{
+		CostPerMtokInput:  3.0,
+		CostPerMtokOutput: 15.0,
+		BillingMultiplier: 1.0,
+	}
+
+	cost := calculateCostFromTokensWithCache(model, 1000, 500, 400)
+	// Normal input: (1000-400)/1M * 3 = 0.0018
+	// Cache read: 400/1M * 3 * 0.1 = 0.00012
+	// Output: 500/1M * 15 * 1 = 0.0075
+	// Total: 0.00942
+	assert.InDelta(t, 0.00942, cost, 0.00001)
+}
+
 func TestProxyService_ModelNameMapping(t *testing.T) {
 	// Test that the proxy correctly maps client's model name to endpoint's model name
 	var receivedModel string
@@ -572,10 +608,7 @@ func registerHealthyEndpoints(hc *HealthChecker, endpoints []*models.Endpoint) {
 	defer hc.mu.Unlock()
 	for _, ep := range endpoints {
 		name := EndpointName(ep)
-		hc.states[name] = &EndpointState{
-			Name:   name,
-			Status: models.EndpointHealthy,
-		}
+		hc.states[name] = NewEndpointState(name)
 	}
 }
 
@@ -911,7 +944,7 @@ func TestBuildStreamMeta(t *testing.T) {
 		},
 	}
 
-	result := buildStreamMeta(meta, ep, false, 42.0, 100, 50)
+	result := buildStreamMeta(meta, ep, false, 42.0, 100, 50, 0, 0)
 
 	assert.Equal(t, "req-123", result.RequestID)
 	assert.Equal(t, float64(42), result.LatencyMs)
@@ -923,6 +956,57 @@ func TestBuildStreamMeta(t *testing.T) {
 	// Verify original meta is not mutated
 	assert.Equal(t, float64(0), meta.LatencyMs)
 	assert.Equal(t, 0, meta.InputTokens)
+}
+
+func TestBuildStreamMeta_WithCacheReadTokens(t *testing.T) {
+	meta := &ProxyMetadata{
+		RequestID:        "req-456",
+		SelectedModel:    "claude-3-sonnet",
+		SelectedEndpoint: "provider1",
+		Stream:           true,
+		StatusCode:       200,
+	}
+	ep := &models.Endpoint{
+		Model: &models.Model{
+			CostPerMtokInput:  3.0,
+			CostPerMtokOutput: 15.0,
+			BillingMultiplier: 1.0,
+		},
+	}
+
+	// 1000 input tokens, 400 from cache, 200 cache creation
+	result := buildStreamMeta(meta, ep, true, 50.0, 1000, 500, 400, 200)
+
+	assert.Equal(t, "req-456", result.RequestID)
+	assert.Equal(t, float64(50), result.LatencyMs)
+	assert.Equal(t, 1000, result.InputTokens)
+	assert.Equal(t, 500, result.OutputTokens)
+	assert.Equal(t, 400, result.CacheReadInputTokens)
+	assert.Equal(t, 200, result.CacheCreationInputTokens)
+	assert.True(t, result.Success)
+
+	// Verify cost calculation with cache discount
+	// Normal input: (1000-400)/1M * 3 = 0.0018
+	// Cache read: 400/1M * 3 * 0.1 = 0.00012
+	// Output: 500/1M * 15 * 1 = 0.0075
+	// Total: 0.00942
+	assert.InDelta(t, 0.00942, result.Cost, 0.00001)
+}
+
+func TestParseSSEUsage_WithCacheTokens(t *testing.T) {
+	ps := NewProxyService(nil, nil, nil, zap.NewNop())
+
+	var inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int
+
+	// Simulate SSE event with cache tokens
+	line := []byte(`data: {"type":"message_delta","usage":{"input_tokens":1000,"output_tokens":500,"cache_read_input_tokens":400,"cache_creation_input_tokens":200}}` + "\n")
+
+	ps.parseSSEUsage(line, &inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens)
+
+	assert.Equal(t, 1000, inputTokens)
+	assert.Equal(t, 500, outputTokens)
+	assert.Equal(t, 400, cacheReadTokens)
+	assert.Equal(t, 200, cacheCreationTokens)
 }
 
 // TestProxyService_StreamContextCancel verifies stats are updated when context is cancelled.

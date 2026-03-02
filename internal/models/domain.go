@@ -64,6 +64,7 @@ type Provider struct {
 	Enabled       bool              `json:"enabled"`
 	Description   string            `json:"description,omitempty"`
 	CustomHeaders map[string]string `json:"custom_headers,omitempty"`
+	APIType       string            `json:"api_type"` // 'auto', 'anthropic_messages', 'anthropic_responses', 'openai_chat'
 	CreatedAt     time.Time         `json:"created_at"`
 	UpdatedAt     time.Time         `json:"updated_at"`
 }
@@ -116,6 +117,10 @@ type RequestLogEntry struct {
 	Success      bool
 	Stream       bool
 
+	// Cache statistics (Anthropic Prompt Caching)
+	CacheCreationInputTokens int
+	CacheReadInputTokens     int
+
 	// Routing decision fields
 	MessagePreview  string     // Truncated to 200 chars for display
 	RequestContent  string     // Full request content (optional)
@@ -146,6 +151,10 @@ type RequestLog struct {
 	Success      bool       `json:"success"`
 	Stream       bool       `json:"stream"`
 	CreatedAt    time.Time  `json:"created_at"`
+
+	// Cache statistics (Anthropic Prompt Caching)
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 
 	// Routing decision fields
 	MessagePreview  string     `json:"message_preview,omitempty"`
@@ -222,6 +231,7 @@ type RoutingModel struct {
 	CostPerMtokOutput float64   `json:"cost_per_mtok_output"`
 	BillingMultiplier float64   `json:"billing_multiplier"`
 	Description       string    `json:"description,omitempty"`
+	APIType           string    `json:"api_type"` // '', 'auto', 'anthropic_messages', 'anthropic_responses', 'openai_chat'
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }
@@ -229,8 +239,9 @@ type RoutingModel struct {
 // RoutingModelWithProvider includes provider details for API calls.
 type RoutingModelWithProvider struct {
 	RoutingModel
-	BaseURL string `json:"base_url"`
-	APIKey  string `json:"-"`
+	BaseURL         string `json:"base_url"`
+	APIKey          string `json:"-"`
+	ProviderAPIType string `json:"provider_api_type"` // Provider's api_type
 }
 
 // EmbeddingModel represents an embedding model configuration.

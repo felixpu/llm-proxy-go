@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS providers (
     max_concurrent INTEGER DEFAULT 10,
     enabled INTEGER DEFAULT 1,
     description TEXT,
+    custom_headers TEXT,
+    api_type TEXT DEFAULT 'auto' NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -189,6 +191,7 @@ CREATE TABLE IF NOT EXISTS routing_models (
     cost_per_mtok_output REAL DEFAULT 0,
     billing_multiplier REAL DEFAULT 1.0,
     description TEXT,
+    api_type TEXT DEFAULT '' NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
@@ -252,6 +255,8 @@ CREATE TABLE IF NOT EXISTS request_logs (
     matched_rule_name TEXT DEFAULT '',
     all_matches TEXT DEFAULT '[]',
     is_inaccurate INTEGER DEFAULT 0,
+    cache_creation_input_tokens INTEGER DEFAULT 0,
+    cache_read_input_tokens INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE SET NULL

@@ -142,3 +142,144 @@ func TestAnthropicRequest_UnmarshalJSON_WithNullSystem(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, req.System)
 }
+
+func TestCacheControl_MarshalJSON(t *testing.T) {
+	cc := &CacheControl{Type: "ephemeral"}
+	data, err := json.Marshal(cc)
+
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"type":"ephemeral"}`, string(data))
+}
+
+func TestContentPart_WithCacheControl_MarshalJSON(t *testing.T) {
+	part := ContentPart{
+		Type:         "text",
+		Text:         "Hello",
+		CacheControl: &CacheControl{Type: "ephemeral"},
+	}
+	data, err := json.Marshal(part)
+
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"type":"text","text":"Hello","cache_control":{"type":"ephemeral"}}`, string(data))
+}
+
+func TestContentPart_WithCacheControl_UnmarshalJSON(t *testing.T) {
+	input := `{"type":"text","text":"Hello","cache_control":{"type":"ephemeral"}}`
+	var part ContentPart
+	err := json.Unmarshal([]byte(input), &part)
+
+	require.NoError(t, err)
+	assert.Equal(t, "text", part.Type)
+	assert.Equal(t, "Hello", part.Text)
+	require.NotNil(t, part.CacheControl)
+	assert.Equal(t, "ephemeral", part.CacheControl.Type)
+}
+
+func TestTool_WithCacheControl_MarshalJSON(t *testing.T) {
+	tool := Tool{
+		Name:         "get_weather",
+		Description:  "Get weather info",
+		InputSchema:  map[string]interface{}{"type": "object"},
+		CacheControl: &CacheControl{Type: "ephemeral"},
+	}
+	data, err := json.Marshal(tool)
+
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"name":"get_weather","description":"Get weather info","input_schema":{"type":"object"},"cache_control":{"type":"ephemeral"}}`, string(data))
+}
+
+func TestTool_WithCacheControl_UnmarshalJSON(t *testing.T) {
+	input := `{"name":"get_weather","description":"Get weather info","input_schema":{"type":"object"},"cache_control":{"type":"ephemeral"}}`
+	var tool Tool
+	err := json.Unmarshal([]byte(input), &tool)
+
+	require.NoError(t, err)
+	assert.Equal(t, "get_weather", tool.Name)
+	require.NotNil(t, tool.CacheControl)
+	assert.Equal(t, "ephemeral", tool.CacheControl.Type)
+}
+
+func TestUsage_WithCacheTokens_MarshalJSON(t *testing.T) {
+	usage := Usage{
+		InputTokens:              100,
+		OutputTokens:             50,
+		CacheCreationInputTokens: 20,
+		CacheReadInputTokens:     30,
+	}
+	data, err := json.Marshal(usage)
+
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":20,"cache_read_input_tokens":30}`, string(data))
+}
+
+func TestUsage_WithCacheTokens_UnmarshalJSON(t *testing.T) {
+	input := `{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":20,"cache_read_input_tokens":30}`
+	var usage Usage
+	err := json.Unmarshal([]byte(input), &usage)
+
+	require.NoError(t, err)
+	assert.Equal(t, 100, usage.InputTokens)
+	assert.Equal(t, 50, usage.OutputTokens)
+	assert.Equal(t, 20, usage.CacheCreationInputTokens)
+	assert.Equal(t, 30, usage.CacheReadInputTokens)
+}
+
+func TestAnthropicRequest_WithCacheControl_RoundTrip(t *testing.T) {
+	// Test that a full request with cache_control preserves all fields through marshal/unmarshal
+	req := AnthropicRequest{
+		Model:     "claude-3-sonnet",
+		MaxTokens: 100,
+		Messages: []Message{
+			{
+				Role: "user",
+				Content: MessageContent{
+					Parts: []ContentPart{
+						{
+							Type:         "text",
+							Text:         "Hello",
+							CacheControl: &CacheControl{Type: "ephemeral"},
+						},
+					},
+					IsArray: true,
+				},
+			},
+		},
+		System: &SystemPrompt{
+			Blocks: []ContentPart{
+				{
+					Type:         "text",
+					Text:         "You are helpful",
+					CacheControl: &CacheControl{Type: "ephemeral"},
+				},
+			},
+			IsArray: true,
+		},
+		Tools: []Tool{
+			{
+				Name:         "get_weather",
+				InputSchema:  map[string]interface{}{"type": "object"},
+				CacheControl: &CacheControl{Type: "ephemeral"},
+			},
+		},
+	}
+
+	// Marshal to JSON
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+
+	// Unmarshal back
+	var req2 AnthropicRequest
+	err = json.Unmarshal(data, &req2)
+	require.NoError(t, err)
+
+	// Verify cache_control is preserved
+	require.NotNil(t, req2.Messages[0].Content.Parts[0].CacheControl)
+	assert.Equal(t, "ephemeral", req2.Messages[0].Content.Parts[0].CacheControl.Type)
+
+	require.NotNil(t, req2.System)
+	require.NotNil(t, req2.System.Blocks[0].CacheControl)
+	assert.Equal(t, "ephemeral", req2.System.Blocks[0].CacheControl.Type)
+
+	require.NotNil(t, req2.Tools[0].CacheControl)
+	assert.Equal(t, "ephemeral", req2.Tools[0].CacheControl.Type)
+}

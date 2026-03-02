@@ -45,14 +45,16 @@ func (r *RequestLogRepositoryImpl) Insert(ctx context.Context, entry *models.Req
 			request_id, user_id, api_key_id, model_name, endpoint_name,
 			task_type, input_tokens, output_tokens, latency_ms, cost,
 			status_code, success, stream,
+			cache_creation_input_tokens, cache_read_input_tokens,
 			message_preview, request_content, response_content,
 			routing_method, routing_reason,
 			matched_rule_id, matched_rule_name, all_matches,
 			is_inaccurate, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.RequestID, entry.UserID, entry.APIKeyID, entry.ModelName, entry.EndpointName,
 		entry.TaskType, entry.InputTokens, entry.OutputTokens, entry.LatencyMs, entry.Cost,
 		entry.StatusCode, boolToInt(entry.Success), boolToInt(entry.Stream),
+		entry.CacheCreationInputTokens, entry.CacheReadInputTokens,
 		entry.MessagePreview, entry.RequestContent, entry.ResponseContent,
 		entry.RoutingMethod, entry.RoutingReason,
 		entry.MatchedRuleID, entry.MatchedRuleName, string(allMatchesJSON),
@@ -90,6 +92,8 @@ func (r *RequestLogRepositoryImpl) List(
 			request_logs.task_type, request_logs.input_tokens, request_logs.output_tokens,
 			request_logs.latency_ms, request_logs.cost, request_logs.status_code,
 			request_logs.success, request_logs.stream, request_logs.created_at,
+			COALESCE(request_logs.cache_creation_input_tokens, 0),
+			COALESCE(request_logs.cache_read_input_tokens, 0),
 			'' as message_preview, '' as request_content, '' as response_content,
 			request_logs.routing_method, request_logs.routing_reason,
 			request_logs.matched_rule_id, request_logs.matched_rule_name, request_logs.all_matches,
@@ -314,6 +318,9 @@ func (r *RequestLogRepositoryImpl) scanLog(rows *sql.Rows) (*models.RequestLog, 
 	var success, stream int
 	var createdAt string
 
+	// Cache statistics
+	var cacheCreationInputTokens, cacheReadInputTokens int
+
 	// New fields
 	var messagePreview, requestContent, responseContent sql.NullString
 	var routingMethod, routingReason sql.NullString
@@ -327,6 +334,7 @@ func (r *RequestLogRepositoryImpl) scanLog(rows *sql.Rows) (*models.RequestLog, 
 		&apiKeyID, &log.ModelName, &log.EndpointName, &taskType,
 		&log.InputTokens, &log.OutputTokens, &log.LatencyMs, &log.Cost,
 		&statusCode, &success, &stream, &createdAt,
+		&cacheCreationInputTokens, &cacheReadInputTokens,
 		&messagePreview, &requestContent, &responseContent,
 		&routingMethod, &routingReason,
 		&matchedRuleID, &matchedRuleName, &allMatchesJSON,
@@ -349,6 +357,8 @@ func (r *RequestLogRepositoryImpl) scanLog(rows *sql.Rows) (*models.RequestLog, 
 	log.Success = success == 1
 	log.Stream = stream == 1
 	log.CreatedAt = parseFlexibleTime(createdAt)
+	log.CacheCreationInputTokens = cacheCreationInputTokens
+	log.CacheReadInputTokens = cacheReadInputTokens
 
 	// Populate new fields
 	if messagePreview.Valid {
@@ -394,6 +404,8 @@ func (r *RequestLogRepositoryImpl) GetByID(ctx context.Context, id int64) (*mode
 			request_logs.task_type, request_logs.input_tokens, request_logs.output_tokens,
 			request_logs.latency_ms, request_logs.cost, request_logs.status_code,
 			request_logs.success, request_logs.stream, request_logs.created_at,
+			COALESCE(request_logs.cache_creation_input_tokens, 0),
+			COALESCE(request_logs.cache_read_input_tokens, 0),
 			request_logs.message_preview, request_logs.request_content, request_logs.response_content,
 			request_logs.routing_method, request_logs.routing_reason,
 			request_logs.matched_rule_id, request_logs.matched_rule_name, request_logs.all_matches,
@@ -578,6 +590,8 @@ func (r *RequestLogRepositoryImpl) ListInaccurate(ctx context.Context, limit, of
 			request_logs.task_type, request_logs.input_tokens, request_logs.output_tokens,
 			request_logs.latency_ms, request_logs.cost, request_logs.status_code,
 			request_logs.success, request_logs.stream, request_logs.created_at,
+			COALESCE(request_logs.cache_creation_input_tokens, 0),
+			COALESCE(request_logs.cache_read_input_tokens, 0),
 			'' as message_preview, '' as request_content, '' as response_content,
 			request_logs.routing_method, request_logs.routing_reason,
 			request_logs.matched_rule_id, request_logs.matched_rule_name, request_logs.all_matches,
@@ -631,6 +645,8 @@ func (r *RequestLogRepositoryImpl) ListForAnalysis(ctx context.Context, startTim
 			request_logs.task_type, request_logs.input_tokens, request_logs.output_tokens,
 			request_logs.latency_ms, request_logs.cost, request_logs.status_code,
 			request_logs.success, request_logs.stream, request_logs.created_at,
+			COALESCE(request_logs.cache_creation_input_tokens, 0),
+			COALESCE(request_logs.cache_read_input_tokens, 0),
 			request_logs.message_preview, request_logs.request_content, '' as response_content,
 			request_logs.routing_method, request_logs.routing_reason,
 			request_logs.matched_rule_id, request_logs.matched_rule_name, request_logs.all_matches,
