@@ -70,6 +70,16 @@ type HealthCheckConfig struct {
 	Enabled         bool
 	IntervalSeconds int
 	TimeoutSeconds  int
+	CircuitBreaker  CircuitBreakerConfig
+}
+
+// CircuitBreakerConfig holds circuit breaker configuration.
+type CircuitBreakerConfig struct {
+	Enabled                  bool
+	ConsecutiveFailures      int
+	PermanentErrorThreshold  int
+	CooldownSeconds          int
+	HalfOpenMaxRequests      int
 }
 
 // LoadBalanceConfig holds load balancing configuration.
@@ -111,6 +121,13 @@ func DefaultConfig() *Config {
 			Enabled:         true,
 			IntervalSeconds: 60,
 			TimeoutSeconds:  10,
+			CircuitBreaker: CircuitBreakerConfig{
+				Enabled:                  true,
+				ConsecutiveFailures:      5,
+				PermanentErrorThreshold:  3,
+				CooldownSeconds:          60,
+				HalfOpenMaxRequests:      3,
+			},
 		},
 		LoadBalance: LoadBalanceConfig{
 			Strategy: "weighted",

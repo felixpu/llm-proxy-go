@@ -4,6 +4,7 @@
 package service
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,12 +17,29 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestNewHealthChecker(t *testing.T) {
-	cfg := config.HealthCheckConfig{
+// defaultCircuitBreakerConfig returns a default circuit breaker config for testing
+func defaultCircuitBreakerConfig() config.CircuitBreakerConfig {
+	return config.CircuitBreakerConfig{
+		Enabled:                  true,
+		ConsecutiveFailures:      5,
+		PermanentErrorThreshold:  3,
+		CooldownSeconds:          60,
+		HalfOpenMaxRequests:      3,
+	}
+}
+
+// defaultHealthCheckConfig returns a default health check config for testing
+func defaultHealthCheckConfig() config.HealthCheckConfig {
+	return config.HealthCheckConfig{
 		Enabled:         true,
 		IntervalSeconds: 60,
 		TimeoutSeconds:  10,
+		CircuitBreaker:  defaultCircuitBreakerConfig(),
 	}
+}
+
+func TestNewHealthChecker(t *testing.T) {
+	cfg := defaultHealthCheckConfig()
 
 	hc := NewHealthChecker(cfg, zap.NewNop())
 	require.NotNil(t, hc)
@@ -31,16 +49,12 @@ func TestNewHealthChecker(t *testing.T) {
 }
 
 func TestHealthChecker_IsHealthy_Unknown(t *testing.T) {
-	cfg := config.HealthCheckConfig{
-		Enabled:         true,
-		IntervalSeconds: 60,
-		TimeoutSeconds:  10,
-	}
+	cfg := defaultHealthCheckConfig()
 
 	hc := NewHealthChecker(cfg, zap.NewNop())
 
-	// Unknown endpoint should return false
-	assert.False(t, hc.IsHealthy("unknown/endpoint"))
+	// Unknown endpoint should return true (backward compatibility - assume healthy if not tracked)
+	assert.True(t, hc.IsHealthy("unknown/endpoint"))
 }
 
 func TestHealthChecker_GetState_Unknown(t *testing.T) {
@@ -403,4 +417,726 @@ func createHealthTestEndpoint(providerName, modelName string) *models.Endpoint {
 		},
 		Status: models.EndpointHealthy,
 	}
+}
+
+// TestClassifyHTTPError tests HTTP error classification
+func TestClassifyHTTPError(t *testing.T) {
+	tests := []struct {
+		name         string
+		statusCode   int
+		responseBody []byte
+		expected     ErrorType
+	}{
+		{
+			name:         "400 with model error",
+			statusCode:   400,
+			responseBody: []byte(`{"error": "model not found"}`),
+			expected:     ErrorTypePermanent,
+		},
+		{
+			name:         "400 without model error",
+			statusCode:   400,
+			responseBody: []byte(`{"error": "invalid request"}`),
+			expected:     ErrorTypeTemporary,
+		},
+		{
+			name:         "401 unauthorized",
+			statusCode:   401,
+			responseBody: []byte(`{"error": "unauthorized"}`),
+			expected:     ErrorTypeAuth,
+		},
+		{
+			name:         "403 forbidden",
+			statusCode:   403,
+			responseBody: []byte(`{"error": "forbidden"}`),
+			expected:     ErrorTypeAuth,
+		},
+		{
+			name:         "404 not found",
+			statusCode:   404,
+			responseBody: []byte(`{"error": "not found"}`),
+			expected:     ErrorTypePermanent,
+		},
+		{
+			name:         "422 with model error",
+			statusCode:   422,
+			responseBody: []byte(`{"error": "invalid model specified"}`),
+			expected:     ErrorTypePermanent,
+		},
+		{
+			name:         "422 without model error",
+			statusCode:   422,
+			responseBody: []byte(`{"error": "validation failed"}`),
+			expected:     ErrorTypeTemporary,
+		},
+		{
+			name:         "429 rate limit",
+			statusCode:   429,
+			responseBody: []byte(`{"error": "rate limit exceeded"}`),
+			expected:     ErrorTypeRateLimit,
+		},
+		{
+			name:         "408 timeout",
+			statusCode:   408,
+			responseBody: []byte(`{"error": "timeout"}`),
+			expected:     ErrorTypeTemporary,
+		},
+		{
+			name:         "502 bad gateway",
+			statusCode:   502,
+			responseBody: []byte(`{"error": "bad gateway"}`),
+			expected:     ErrorTypeTemporary,
+		},
+		{
+			name:         "503 service unavailable",
+			statusCode:   503,
+			responseBody: []byte(`{"error": "service unavailable"}`),
+			expected:     ErrorTypeTemporary,
+		},
+		{
+			name:         "504 gateway timeout",
+			statusCode:   504,
+			responseBody: []byte(`{"error": "gateway timeout"}`),
+			expected:     ErrorTypeTemporary,
+		},
+		{
+			name:         "500 internal server error",
+			statusCode:   500,
+			responseBody: []byte(`{"error": "internal server error"}`),
+			expected:     ErrorTypeTemporary,
+		},
+		{
+			name:         "200 success",
+			statusCode:   200,
+			responseBody: []byte(`{"result": "ok"}`),
+			expected:     ErrorTypeUnknown,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := classifyHTTPError(tt.statusCode, tt.responseBody)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestContainsModelError tests model error detection in response body
+func TestContainsModelError(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     []byte
+		expected bool
+	}{
+		{
+			name:     "model not found",
+			body:     []byte(`{"error": "model not found"}`),
+			expected: true,
+		},
+		{
+			name:     "model does not exist",
+			body:     []byte(`{"error": "The model does not exist"}`),
+			expected: true,
+		},
+		{
+			name:     "invalid model",
+			body:     []byte(`{"error": "invalid model specified"}`),
+			expected: true,
+		},
+		{
+			name:     "unsupported model",
+			body:     []byte(`{"error": "unsupported model type"}`),
+			expected: true,
+		},
+		{
+			name:     "model is not available",
+			body:     []byte(`{"error": "model is not available"}`),
+			expected: true,
+		},
+		{
+			name:     "case insensitive - MODEL NOT FOUND",
+			body:     []byte(`{"error": "MODEL NOT FOUND"}`),
+			expected: true,
+		},
+		{
+			name:     "no model error",
+			body:     []byte(`{"error": "invalid request"}`),
+			expected: false,
+		},
+		{
+			name:     "empty body",
+			body:     []byte(``),
+			expected: false,
+		},
+		{
+			name:     "nil body",
+			body:     nil,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := containsModelError(tt.body)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestClassifyError tests general error classification
+func TestClassifyError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected ErrorType
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: ErrorTypeUnknown,
+		},
+		{
+			name:     "timeout error",
+			err:      fmt.Errorf("request timeout"),
+			expected: ErrorTypeTemporary,
+		},
+		{
+			name:     "connection refused",
+			err:      fmt.Errorf("connection refused"),
+			expected: ErrorTypeTemporary,
+		},
+		{
+			name:     "no such host",
+			err:      fmt.Errorf("no such host"),
+			expected: ErrorTypeTemporary,
+		},
+		{
+			name:     "case insensitive - TIMEOUT",
+			err:      fmt.Errorf("REQUEST TIMEOUT"),
+			expected: ErrorTypeTemporary,
+		},
+		{
+			name:     "unknown error",
+			err:      fmt.Errorf("some other error"),
+			expected: ErrorTypeUnknown,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := classifyError(tt.err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestExtractErrorMessage tests error message extraction
+func TestExtractErrorMessage(t *testing.T) {
+	tests := []struct {
+		name         string
+		err          error
+		responseBody []byte
+		expected     string
+	}{
+		{
+			name:         "error with message",
+			err:          fmt.Errorf("connection failed"),
+			responseBody: nil,
+			expected:     "connection failed",
+		},
+		{
+			name:         "response body only",
+			err:          nil,
+			responseBody: []byte(`{"error": "model not found"}`),
+			expected:     `{"error": "model not found"}`,
+		},
+		{
+			name:         "error takes precedence",
+			err:          fmt.Errorf("network error"),
+			responseBody: []byte(`{"error": "server error"}`),
+			expected:     "network error",
+		},
+		{
+			name:         "long response body truncated",
+			err:          nil,
+			responseBody: []byte(string(make([]byte, 600))),
+			expected:     string(make([]byte, 500)) + "...",
+		},
+		{
+			name:         "both nil",
+			err:          nil,
+			responseBody: nil,
+			expected:     "unknown error",
+		},
+		{
+			name:         "empty response body",
+			err:          nil,
+			responseBody: []byte(``),
+			expected:     "unknown error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractErrorMessage(tt.err, tt.responseBody)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestShouldTransitionToOpen tests circuit breaker open transition logic
+func TestShouldTransitionToOpen(t *testing.T) {
+	tests := []struct {
+		name                 string
+		state                *EndpointState
+		expected             bool
+		expectedReason       string
+	}{
+		{
+			name: "5 consecutive failures",
+			state: &EndpointState{
+				CircuitState:        CircuitClosed,
+				ConsecutiveFailures: 5,
+			},
+			expected:       true,
+			expectedReason: "consecutive failures",
+		},
+		{
+			name: "3 consecutive permanent errors",
+			state: &EndpointState{
+				CircuitState:         CircuitClosed,
+				ConsecutiveFailures:  2,
+				ConsecutivePermanent: 3,
+			},
+			expected:       true,
+			expectedReason: "consecutive permanent errors",
+		},
+		{
+			name: "4 consecutive failures - not enough",
+			state: &EndpointState{
+				CircuitState:        CircuitClosed,
+				ConsecutiveFailures: 4,
+			},
+			expected: false,
+		},
+		{
+			name: "2 consecutive permanent - not enough",
+			state: &EndpointState{
+				CircuitState:         CircuitClosed,
+				ConsecutivePermanent: 2,
+			},
+			expected: false,
+		},
+		{
+			name: "already open",
+			state: &EndpointState{
+				CircuitState:        CircuitOpen,
+				ConsecutiveFailures: 10,
+			},
+			expected: false,
+		},
+		{
+			name: "half-open state",
+			state: &EndpointState{
+				CircuitState:        CircuitHalfOpen,
+				ConsecutiveFailures: 5,
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, reason := shouldTransitionToOpen(tt.state, defaultCircuitBreakerConfig())
+			assert.Equal(t, tt.expected, result)
+			if tt.expected && tt.expectedReason != "" {
+				assert.Contains(t, reason, tt.expectedReason)
+			}
+		})
+	}
+}
+
+// TestShouldTransitionToHalfOpen tests circuit breaker half-open transition logic
+func TestShouldTransitionToHalfOpen(t *testing.T) {
+	now := time.Now()
+
+	tests := []struct {
+		name     string
+		state    *EndpointState
+		expected bool
+	}{
+		{
+			name: "cooldown period passed",
+			state: &EndpointState{
+				CircuitState:    CircuitOpen,
+				CircuitOpenedAt: timePtr(now.Add(-61 * time.Second)),
+			},
+			expected: true,
+		},
+		{
+			name: "cooldown period not passed",
+			state: &EndpointState{
+				CircuitState:    CircuitOpen,
+				CircuitOpenedAt: timePtr(now.Add(-30 * time.Second)),
+			},
+			expected: false,
+		},
+		{
+			name: "no opened time",
+			state: &EndpointState{
+				CircuitState:    CircuitOpen,
+				CircuitOpenedAt: nil,
+			},
+			expected: false,
+		},
+		{
+			name: "not in open state",
+			state: &EndpointState{
+				CircuitState:    CircuitClosed,
+				CircuitOpenedAt: timePtr(now.Add(-61 * time.Second)),
+			},
+			expected: false,
+		},
+		{
+			name: "already half-open",
+			state: &EndpointState{
+				CircuitState:    CircuitHalfOpen,
+				CircuitOpenedAt: timePtr(now.Add(-61 * time.Second)),
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := shouldTransitionToHalfOpen(tt.state, defaultCircuitBreakerConfig())
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestShouldAllowRequest tests request allowance logic based on circuit state
+func TestShouldAllowRequest(t *testing.T) {
+	tests := []struct {
+		name     string
+		state    *EndpointState
+		expected bool
+	}{
+		{
+			name: "closed state - allow",
+			state: &EndpointState{
+				CircuitState: CircuitClosed,
+			},
+			expected: true,
+		},
+		{
+			name: "open state - deny",
+			state: &EndpointState{
+				CircuitState: CircuitOpen,
+			},
+			expected: false,
+		},
+		{
+			name: "half-open with room for more requests",
+			state: &EndpointState{
+				CircuitState:      CircuitHalfOpen,
+				HalfOpenSuccesses: 1,
+				HalfOpenFailures:  1,
+			},
+			expected: true,
+		},
+		{
+			name: "half-open at max requests",
+			state: &EndpointState{
+				CircuitState:      CircuitHalfOpen,
+				HalfOpenSuccesses: 3,
+				HalfOpenFailures:  2,
+			},
+			expected: false,
+		},
+		{
+			name: "half-open all successes",
+			state: &EndpointState{
+				CircuitState:      CircuitHalfOpen,
+				HalfOpenSuccesses: 5,
+				HalfOpenFailures:  0,
+			},
+			expected: false,
+		},
+		{
+			name: "half-open all failures",
+			state: &EndpointState{
+				CircuitState:      CircuitHalfOpen,
+				HalfOpenSuccesses: 0,
+				HalfOpenFailures:  5,
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := shouldAllowRequest(tt.state, defaultCircuitBreakerConfig())
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// Helper function to create time pointer
+func timePtr(t time.Time) *time.Time {
+	return &t
+}
+
+// TestUpdateRequestStatsWithCircuitBreaker tests the integration of UpdateRequestStats with circuit breaker logic
+func TestUpdateRequestStatsWithCircuitBreaker(t *testing.T) {
+	cfg := defaultHealthCheckConfig()
+
+	hc := NewHealthChecker(cfg, zap.NewNop())
+	name := "test-provider/test-model"
+
+	// Initialize state
+	hc.mu.Lock()
+	hc.states[name] = NewEndpointState(name)
+	hc.mu.Unlock()
+
+	t.Run("successful requests keep circuit closed", func(t *testing.T) {
+		for i := 0; i < 10; i++ {
+			result := RequestResult{
+				EndpointName: name,
+				Success:      true,
+				LatencyMs:    100.0,
+				StatusCode:   200,
+			}
+			hc.UpdateRequestStatsV2(result)
+		}
+
+		hc.mu.RLock()
+		state := hc.states[name]
+		assert.Equal(t, CircuitClosed, state.CircuitState)
+		assert.Equal(t, 0, state.ConsecutiveFailures)
+		hc.mu.RUnlock()
+	})
+
+	t.Run("5 consecutive failures open circuit", func(t *testing.T) {
+		// Reset state
+		hc.mu.Lock()
+		hc.states[name] = NewEndpointState(name)
+		hc.mu.Unlock()
+
+		// Send 5 consecutive failures
+		for i := 0; i < 5; i++ {
+			result := RequestResult{
+				EndpointName: name,
+				Success:      false,
+				LatencyMs:    100.0,
+				StatusCode:   500,
+				Err:          fmt.Errorf("internal server error"),
+			}
+			hc.UpdateRequestStatsV2(result)
+		}
+
+		hc.mu.RLock()
+		state := hc.states[name]
+		assert.Equal(t, CircuitOpen, state.CircuitState)
+		assert.Equal(t, 5, state.ConsecutiveFailures)
+		assert.NotNil(t, state.CircuitOpenedAt)
+		hc.mu.RUnlock()
+	})
+
+	t.Run("3 consecutive permanent errors open circuit", func(t *testing.T) {
+		// Reset state
+		hc.mu.Lock()
+		hc.states[name] = NewEndpointState(name)
+		hc.mu.Unlock()
+
+		// Send 3 consecutive permanent errors
+		for i := 0; i < 3; i++ {
+			result := RequestResult{
+				EndpointName: name,
+				Success:      false,
+				LatencyMs:    100.0,
+				StatusCode:   404,
+				ResponseBody: []byte(`{"error": "model not found"}`),
+			}
+			hc.UpdateRequestStatsV2(result)
+		}
+
+		hc.mu.RLock()
+		state := hc.states[name]
+		assert.Equal(t, CircuitOpen, state.CircuitState)
+		assert.Equal(t, 3, state.ConsecutivePermanent)
+		hc.mu.RUnlock()
+	})
+
+	t.Run("success resets consecutive failures", func(t *testing.T) {
+		// Reset state
+		hc.mu.Lock()
+		hc.states[name] = NewEndpointState(name)
+		hc.mu.Unlock()
+
+		// Send 4 failures
+		for i := 0; i < 4; i++ {
+			result := RequestResult{
+				EndpointName: name,
+				Success:      false,
+				LatencyMs:    100.0,
+				StatusCode:   500,
+			}
+			hc.UpdateRequestStatsV2(result)
+		}
+
+		// Send 1 success
+		result := RequestResult{
+			EndpointName: name,
+			Success:      true,
+			LatencyMs:    100.0,
+			StatusCode:   200,
+		}
+		hc.UpdateRequestStatsV2(result)
+
+		hc.mu.RLock()
+		state := hc.states[name]
+		assert.Equal(t, CircuitClosed, state.CircuitState)
+		assert.Equal(t, 0, state.ConsecutiveFailures)
+		hc.mu.RUnlock()
+	})
+}
+
+// TestCircuitBreakerFullFlow tests the complete circuit breaker state transitions
+func TestCircuitBreakerFullFlow(t *testing.T) {
+	cfg := defaultHealthCheckConfig()
+
+	hc := NewHealthChecker(cfg, zap.NewNop())
+	name := "test-provider/test-model"
+
+	// Initialize state
+	hc.mu.Lock()
+	hc.states[name] = NewEndpointState(name)
+	hc.mu.Unlock()
+
+	// Step 1: Circuit starts closed
+	hc.mu.RLock()
+	assert.Equal(t, CircuitClosed, hc.states[name].CircuitState)
+	hc.mu.RUnlock()
+	assert.True(t, hc.IsHealthy(name))
+
+	// Step 2: 5 failures -> circuit opens
+	for i := 0; i < 5; i++ {
+		result := RequestResult{
+			EndpointName: name,
+			Success:      false,
+			LatencyMs:    100.0,
+			StatusCode:   500,
+		}
+		hc.UpdateRequestStatsV2(result)
+	}
+
+	hc.mu.RLock()
+	assert.Equal(t, CircuitOpen, hc.states[name].CircuitState)
+	hc.mu.RUnlock()
+	assert.False(t, hc.IsHealthy(name))
+
+	// Step 3: Simulate cooldown period passing
+	hc.mu.Lock()
+	openedAt := time.Now().Add(-61 * time.Second)
+	hc.states[name].CircuitOpenedAt = &openedAt
+	hc.mu.Unlock()
+
+	// Step 4: Check if should transition to half-open
+	hc.mu.RLock()
+	shouldTransition := shouldTransitionToHalfOpen(hc.states[name], hc.cfg.CircuitBreaker)
+	hc.mu.RUnlock()
+	assert.True(t, shouldTransition)
+
+	// Step 5: Manually transition to half-open (in real code, this happens in IsHealthy)
+	hc.mu.Lock()
+	hc.states[name].CircuitState = CircuitHalfOpen
+	hc.states[name].HalfOpenSuccesses = 0
+	hc.states[name].HalfOpenFailures = 0
+	hc.mu.Unlock()
+
+	// Step 6: Send 5 successful test requests -> circuit closes
+	for i := 0; i < 5; i++ {
+		result := RequestResult{
+			EndpointName: name,
+			Success:      true,
+			LatencyMs:    100.0,
+			StatusCode:   200,
+		}
+		hc.UpdateRequestStatsV2(result)
+	}
+
+	hc.mu.RLock()
+	assert.Equal(t, CircuitClosed, hc.states[name].CircuitState)
+	// After closing, counters are reset
+	assert.Equal(t, 0, hc.states[name].HalfOpenSuccesses)
+	assert.Equal(t, 0, hc.states[name].HalfOpenFailures)
+	hc.mu.RUnlock()
+	assert.True(t, hc.IsHealthy(name))
+}
+
+// TestIsHealthyWithCircuitBreaker tests IsHealthy method with circuit breaker integration
+func TestIsHealthyWithCircuitBreaker(t *testing.T) {
+	cfg := defaultHealthCheckConfig()
+
+	hc := NewHealthChecker(cfg, zap.NewNop())
+	name := "test-provider/test-model"
+
+	t.Run("closed circuit is healthy", func(t *testing.T) {
+		hc.mu.Lock()
+		hc.states[name] = NewEndpointState(name)
+		hc.states[name].CircuitState = CircuitClosed
+		hc.mu.Unlock()
+
+		assert.True(t, hc.IsHealthy(name))
+	})
+
+	t.Run("open circuit is unhealthy", func(t *testing.T) {
+		hc.mu.Lock()
+		hc.states[name].CircuitState = CircuitOpen
+		now := time.Now()
+		hc.states[name].CircuitOpenedAt = &now
+		hc.mu.Unlock()
+
+		assert.False(t, hc.IsHealthy(name))
+	})
+
+	t.Run("half-open with available slots is healthy", func(t *testing.T) {
+		hc.mu.Lock()
+		hc.states[name].CircuitState = CircuitHalfOpen
+		hc.states[name].HalfOpenSuccesses = 1
+		hc.states[name].HalfOpenFailures = 1
+		hc.mu.Unlock()
+
+		assert.True(t, hc.IsHealthy(name))
+	})
+
+	t.Run("half-open at max requests is unhealthy", func(t *testing.T) {
+		hc.mu.Lock()
+		hc.states[name].CircuitState = CircuitHalfOpen
+		hc.states[name].HalfOpenSuccesses = 3
+		hc.states[name].HalfOpenFailures = 2
+		hc.mu.Unlock()
+
+		assert.False(t, hc.IsHealthy(name))
+	})
+
+	t.Run("open circuit transitions to half-open after cooldown", func(t *testing.T) {
+		hc.mu.Lock()
+		hc.states[name].CircuitState = CircuitOpen
+		openedAt := time.Now().Add(-61 * time.Second)
+		hc.states[name].CircuitOpenedAt = &openedAt
+		hc.mu.Unlock()
+
+		// First call should transition to half-open
+		result := hc.IsHealthy(name)
+
+		hc.mu.RLock()
+		state := hc.states[name]
+		hc.mu.RUnlock()
+
+		// Should transition to half-open and allow request
+		assert.Equal(t, CircuitHalfOpen, state.CircuitState)
+		assert.True(t, result)
+	})
 }

@@ -88,13 +88,24 @@ func loadFromDatabase(cfg *Config) error {
 	}
 
 	// Load health check config
-	row = db.QueryRow("SELECT enabled, interval_seconds, timeout_seconds FROM health_check_config WHERE id = 1")
+	row = db.QueryRow(`
+		SELECT enabled, interval_seconds, timeout_seconds,
+		       cb_enabled, cb_consecutive_failures, cb_permanent_error_threshold,
+		       cb_cooldown_seconds, cb_half_open_max_requests
+		FROM health_check_config WHERE id = 1
+	`)
 	var enabled int
 	var interval, timeout int
-	if err := row.Scan(&enabled, &interval, &timeout); err == nil {
+	var cbEnabled, cbConsecutiveFailures, cbPermanentErrorThreshold, cbCooldownSeconds, cbHalfOpenMaxRequests int
+	if err := row.Scan(&enabled, &interval, &timeout, &cbEnabled, &cbConsecutiveFailures, &cbPermanentErrorThreshold, &cbCooldownSeconds, &cbHalfOpenMaxRequests); err == nil {
 		cfg.HealthCheck.Enabled = enabled == 1
 		cfg.HealthCheck.IntervalSeconds = interval
 		cfg.HealthCheck.TimeoutSeconds = timeout
+		cfg.HealthCheck.CircuitBreaker.Enabled = cbEnabled == 1
+		cfg.HealthCheck.CircuitBreaker.ConsecutiveFailures = cbConsecutiveFailures
+		cfg.HealthCheck.CircuitBreaker.PermanentErrorThreshold = cbPermanentErrorThreshold
+		cfg.HealthCheck.CircuitBreaker.CooldownSeconds = cbCooldownSeconds
+		cfg.HealthCheck.CircuitBreaker.HalfOpenMaxRequests = cbHalfOpenMaxRequests
 	}
 
 	// Load load balance config
@@ -147,6 +158,13 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.RateLimit.Enabled = getEnvBool("LLM_PROXY_RATE_LIMIT_ENABLED", cfg.RateLimit.Enabled)
 	cfg.RateLimit.MaxRequests = getEnvInt("LLM_PROXY_RATE_LIMIT_MAX_REQUESTS", cfg.RateLimit.MaxRequests)
 	cfg.RateLimit.WindowSeconds = getEnvInt("LLM_PROXY_RATE_LIMIT_WINDOW_SECONDS", cfg.RateLimit.WindowSeconds)
+
+	// Circuit breaker config
+	cfg.HealthCheck.CircuitBreaker.Enabled = getEnvBool("LLM_PROXY_CB_ENABLED", cfg.HealthCheck.CircuitBreaker.Enabled)
+	cfg.HealthCheck.CircuitBreaker.ConsecutiveFailures = getEnvInt("LLM_PROXY_CB_CONSECUTIVE_FAILURES", cfg.HealthCheck.CircuitBreaker.ConsecutiveFailures)
+	cfg.HealthCheck.CircuitBreaker.PermanentErrorThreshold = getEnvInt("LLM_PROXY_CB_PERMANENT_ERROR_THRESHOLD", cfg.HealthCheck.CircuitBreaker.PermanentErrorThreshold)
+	cfg.HealthCheck.CircuitBreaker.CooldownSeconds = getEnvInt("LLM_PROXY_CB_COOLDOWN_SECONDS", cfg.HealthCheck.CircuitBreaker.CooldownSeconds)
+	cfg.HealthCheck.CircuitBreaker.HalfOpenMaxRequests = getEnvInt("LLM_PROXY_CB_HALF_OPEN_MAX_REQUESTS", cfg.HealthCheck.CircuitBreaker.HalfOpenMaxRequests)
 }
 
 // String utility functions (avoiding external dependencies).

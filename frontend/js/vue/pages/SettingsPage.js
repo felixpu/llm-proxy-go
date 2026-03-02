@@ -23,6 +23,12 @@ window.VuePages = window.VuePages || {};
         enabled: false,
         interval_seconds: 60,
         timeout_seconds: 10,
+        // Circuit Breaker configuration
+        cb_enabled: true,
+        cb_consecutive_failures: 5,
+        cb_permanent_error_threshold: 3,
+        cb_cooldown_seconds: 60,
+        cb_half_open_max_requests: 3,
       });
       var uiConfig = reactive({
         dashboard_refresh_seconds: 30,
@@ -63,6 +69,12 @@ window.VuePages = window.VuePages || {};
           healthCheck.enabled = !!hc.enabled;
           healthCheck.interval_seconds = hc.interval_seconds;
           healthCheck.timeout_seconds = hc.timeout_seconds;
+          // Load circuit breaker configuration with defaults
+          healthCheck.cb_enabled = hc.cb_enabled !== undefined ? !!hc.cb_enabled : true;
+          healthCheck.cb_consecutive_failures = hc.cb_consecutive_failures || 5;
+          healthCheck.cb_permanent_error_threshold = hc.cb_permanent_error_threshold || 3;
+          healthCheck.cb_cooldown_seconds = hc.cb_cooldown_seconds || 60;
+          healthCheck.cb_half_open_max_requests = hc.cb_half_open_max_requests || 3;
           uiConfig.dashboard_refresh_seconds = ui.dashboard_refresh_seconds;
           uiConfig.logs_refresh_seconds = ui.logs_refresh_seconds;
         } catch (error) {
@@ -89,6 +101,12 @@ window.VuePages = window.VuePages || {};
             enabled: !!healthCheck.enabled,
             interval_seconds: healthCheck.interval_seconds,
             timeout_seconds: healthCheck.timeout_seconds,
+            // Save circuit breaker configuration
+            cb_enabled: !!healthCheck.cb_enabled,
+            cb_consecutive_failures: healthCheck.cb_consecutive_failures,
+            cb_permanent_error_threshold: healthCheck.cb_permanent_error_threshold,
+            cb_cooldown_seconds: healthCheck.cb_cooldown_seconds,
+            cb_half_open_max_requests: healthCheck.cb_half_open_max_requests,
           });
           if (!response.ok) throw new Error("更新失败");
           toastStore.success("健康检查设置已更新");
@@ -244,6 +262,38 @@ window.VuePages = window.VuePages || {};
                 <div class="form-group">\
                     <label>超时时间（秒）</label>\
                     <input type="number" v-model.number="healthCheck.timeout_seconds" min="1" max="60">\
+                </div>\
+            </div>\
+            <h4 style="margin-top: 20px; margin-bottom: 10px;">熔断器配置</h4>\
+            <div class="form-group">\
+                <label class="checkbox-label">\
+                    <input type="checkbox" v-model="healthCheck.cb_enabled">\
+                    启用熔断器\
+                </label>\
+                <span class="help-text">熔断器可以快速隔离故障端点，防止级联失败</span>\
+            </div>\
+            <div class="form-row">\
+                <div class="form-group">\
+                    <label>连续失败次数阈值</label>\
+                    <input type="number" v-model.number="healthCheck.cb_consecutive_failures" min="1" max="100">\
+                    <span class="help-text">达到此阈值后熔断器打开（默认: 5）</span>\
+                </div>\
+                <div class="form-group">\
+                    <label>连续永久性错误阈值</label>\
+                    <input type="number" v-model.number="healthCheck.cb_permanent_error_threshold" min="1" max="100">\
+                    <span class="help-text">如 404、模型不存在等（默认: 3）</span>\
+                </div>\
+            </div>\
+            <div class="form-row">\
+                <div class="form-group">\
+                    <label>冷却时间（秒）</label>\
+                    <input type="number" v-model.number="healthCheck.cb_cooldown_seconds" min="10" max="3600">\
+                    <span class="help-text">熔断器打开后等待此时间转为半开状态（默认: 60）</span>\
+                </div>\
+                <div class="form-group">\
+                    <label>半开状态最大测试请求数</label>\
+                    <input type="number" v-model.number="healthCheck.cb_half_open_max_requests" min="1" max="20">\
+                    <span class="help-text">半开状态下允许的测试请求数量（默认: 3）</span>\
                 </div>\
             </div>\
             <button type="button" class="btn btn-primary" :disabled="savingHealthCheck" @click="updateHealthCheck()">\
