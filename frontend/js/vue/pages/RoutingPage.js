@@ -115,6 +115,8 @@ window.VuePages = window.VuePages || {};
       var analysisPolling = ref(false);
       var analysisReports = ref([]);
       var analysisReportsTotal = ref(0);
+      var analysisReportsPage = ref(0);
+      var analysisReportsPageSize = ref(10);
       var showAnalysisReport = ref(false);
       var currentReport = ref(null);
       var analysisPollingTimer = ref(null);
@@ -146,10 +148,14 @@ window.VuePages = window.VuePages || {};
         // 合并内置和自定义规则，附加来源标记
         var allRules = [];
         for (var i = 0; i < builtinRules.value.length; i++) {
-          allRules.push(Object.assign({}, builtinRules.value[i], { _source: "builtin" }));
+          allRules.push(
+            Object.assign({}, builtinRules.value[i], { _source: "builtin" }),
+          );
         }
         for (var j = 0; j < customRules.value.length; j++) {
-          allRules.push(Object.assign({}, customRules.value[j], { _source: "custom" }));
+          allRules.push(
+            Object.assign({}, customRules.value[j], { _source: "custom" }),
+          );
         }
 
         var rules = allRules;
@@ -304,8 +310,14 @@ window.VuePages = window.VuePages || {};
         return builtinRules.value.length + customRules.value.length;
       });
       var allEnabledCount = computed(function () {
-        return builtinRules.value.filter(function (r) { return r.enabled; }).length +
-               customRules.value.filter(function (r) { return r.enabled; }).length;
+        return (
+          builtinRules.value.filter(function (r) {
+            return r.enabled;
+          }).length +
+          customRules.value.filter(function (r) {
+            return r.enabled;
+          }).length
+        );
       });
       var allBuiltinCount = computed(function () {
         return builtinRules.value.length;
@@ -314,16 +326,34 @@ window.VuePages = window.VuePages || {};
         return customRules.value.length;
       });
       var allSimpleCount = computed(function () {
-        return builtinRules.value.filter(function (r) { return r.task_type === "simple"; }).length +
-               customRules.value.filter(function (r) { return r.task_type === "simple"; }).length;
+        return (
+          builtinRules.value.filter(function (r) {
+            return r.task_type === "simple";
+          }).length +
+          customRules.value.filter(function (r) {
+            return r.task_type === "simple";
+          }).length
+        );
       });
       var allDefaultCount = computed(function () {
-        return builtinRules.value.filter(function (r) { return r.task_type === "default"; }).length +
-               customRules.value.filter(function (r) { return r.task_type === "default"; }).length;
+        return (
+          builtinRules.value.filter(function (r) {
+            return r.task_type === "default";
+          }).length +
+          customRules.value.filter(function (r) {
+            return r.task_type === "default";
+          }).length
+        );
       });
       var allComplexCount = computed(function () {
-        return builtinRules.value.filter(function (r) { return r.task_type === "complex"; }).length +
-               customRules.value.filter(function (r) { return r.task_type === "complex"; }).length;
+        return (
+          builtinRules.value.filter(function (r) {
+            return r.task_type === "complex";
+          }).length +
+          customRules.value.filter(function (r) {
+            return r.task_type === "complex";
+          }).length
+        );
       });
 
       // ========== 方法 ==========
@@ -654,7 +684,10 @@ window.VuePages = window.VuePages || {};
         if (ruleForm.pattern.trim()) {
           try {
             // Strip Go-style inline flags (?i), (?s), (?m), (?U) etc. before JS validation
-            var patternForTest = ruleForm.pattern.replace(/^\(\?[ismUu]+\)/, '');
+            var patternForTest = ruleForm.pattern.replace(
+              /^\(\?[ismUu]+\)/,
+              "",
+            );
             new RegExp(patternForTest);
             ruleFormErrors.pattern = "";
           } catch (e) {
@@ -670,7 +703,8 @@ window.VuePages = window.VuePages || {};
           var cond = ruleForm.condition.trim();
           // 简单检查：必须包含操作符
           if (!/[=<>!]/.test(cond)) {
-            ruleFormErrors.condition = "条件表达式需要包含比较操作符（=, <, >, !=）";
+            ruleFormErrors.condition =
+              "条件表达式需要包含比较操作符（=, <, >, !=）";
             isValid = false;
           } else {
             ruleFormErrors.condition = "";
@@ -837,7 +871,9 @@ window.VuePages = window.VuePages || {};
 
       function loadAnalysisModels() {
         VueApi.get("/api/config/routing/models")
-          .then(function (r) { return r.json(); })
+          .then(function (r) {
+            return r.json();
+          })
           .then(function (data) {
             analysisModels.value = data.models || [];
             if (analysisModels.value.length > 0 && !analysisModelId.value) {
@@ -847,9 +883,20 @@ window.VuePages = window.VuePages || {};
           .catch(function () {});
       }
 
-      function loadAnalysisReports() {
-        VueApi.get("/api/routing/analysis/reports?limit=10&offset=0")
-          .then(function (r) { return r.json(); })
+      function loadAnalysisReports(page) {
+        if (page != null) {
+          analysisReportsPage.value = page;
+        }
+        var offset = analysisReportsPage.value * analysisReportsPageSize.value;
+        VueApi.get(
+          "/api/routing/analysis/reports?limit=" +
+            analysisReportsPageSize.value +
+            "&offset=" +
+            offset,
+        )
+          .then(function (r) {
+            return r.json();
+          })
           .then(function (data) {
             analysisReports.value = data.reports || [];
             analysisReportsTotal.value = data.total || 0;
@@ -895,10 +942,17 @@ window.VuePages = window.VuePages || {};
           end_time: timeRange.end,
         };
         VueApi.post("/api/routing/analysis/analyze", payload)
-          .then(function (r) { return r.json(); })
+          .then(function (r) {
+            return r.json();
+          })
           .then(function (data) {
             if (data.task_id) {
-              analysisTask.value = { id: data.task_id, status: "pending", progress: 0, stage: "initializing" };
+              analysisTask.value = {
+                id: data.task_id,
+                status: "pending",
+                progress: 0,
+                stage: "initializing",
+              };
               startPollingTask(data.task_id);
             }
           })
@@ -916,14 +970,20 @@ window.VuePages = window.VuePages || {};
         startSmoothProgress();
         analysisPollingTimer.value = setInterval(function () {
           VueApi.get("/api/routing/analysis/task/" + taskId)
-            .then(function (r) { return r.json(); })
+            .then(function (r) {
+              return r.json();
+            })
             .then(function (task) {
+              if (!task || !task.status) return;
               analysisTask.value = task;
               if (task.status === "completed" || task.status === "failed") {
                 stopPollingTask();
                 smoothProgress.value = 100;
                 if (task.status === "completed" && task.report) {
-                  currentReport.value = task.report;
+                  var rpt = task.report;
+                  if (!rpt.issues) rpt.issues = [];
+                  if (!rpt.recommendations) rpt.recommendations = [];
+                  currentReport.value = rpt;
                   showAnalysisReport.value = true;
                   loadAnalysisReports();
                 } else if (task.status === "failed") {
@@ -973,14 +1033,20 @@ window.VuePages = window.VuePages || {};
       }
 
       function viewReport(report) {
+        if (!report.issues) report.issues = [];
+        if (!report.recommendations) report.recommendations = [];
         currentReport.value = report;
         showAnalysisReport.value = true;
       }
 
       function loadReportDetail(id) {
         VueApi.get("/api/routing/analysis/reports/" + id)
-          .then(function (r) { return r.json(); })
+          .then(function (r) {
+            return r.json();
+          })
           .then(function (report) {
+            if (!report.issues) report.issues = [];
+            if (!report.recommendations) report.recommendations = [];
             currentReport.value = report;
             showAnalysisReport.value = true;
           })
@@ -992,6 +1058,40 @@ window.VuePages = window.VuePages || {};
       function closeAnalysisReport() {
         showAnalysisReport.value = false;
         currentReport.value = null;
+      }
+
+      function deleteAnalysisReport(report) {
+        confirmStore
+          .show({
+            title: "删除分析报告",
+            message: "确定要删除此报告吗？",
+            detail: "创建时间: " + formatReportDate(report.created_at),
+            confirmText: "确认删除",
+          })
+          .then(function (confirmed) {
+            if (!confirmed) return;
+
+            VueApi.request("/api/routing/analysis/reports/" + report.id, {
+              method: "DELETE",
+            })
+              .then(function () {
+                toastStore.success("报告已删除");
+
+                // If viewing this report, close it
+                if (
+                  currentReport.value &&
+                  currentReport.value.id === report.id
+                ) {
+                  closeAnalysisReport();
+                }
+
+                // Reload report list
+                loadAnalysisReports();
+              })
+              .catch(function (error) {
+                toastStore.error("删除失败: " + error.message);
+              });
+          });
       }
 
       function getAnalysisStageLabel(stage) {
@@ -1008,7 +1108,15 @@ window.VuePages = window.VuePages || {};
         return map[stage] || stage;
       }
 
-      var stageOrder = ["collecting_logs", "extracting_messages", "loading_rules", "building_prompt", "calling_llm", "parsing_result", "done"];
+      var stageOrder = [
+        "collecting_logs",
+        "extracting_messages",
+        "loading_rules",
+        "building_prompt",
+        "calling_llm",
+        "parsing_result",
+        "done",
+      ];
       function isStageCompleted(currentStage, checkStage) {
         var ci = stageOrder.indexOf(currentStage);
         var si = stageOrder.indexOf(checkStage);
@@ -1017,7 +1125,11 @@ window.VuePages = window.VuePages || {};
       }
 
       function getSeverityClass(severity) {
-        var map = { high: "severity-high", medium: "severity-medium", low: "severity-low" };
+        var map = {
+          high: "severity-high",
+          medium: "severity-medium",
+          low: "severity-low",
+        };
         return map[severity] || "";
       }
 
@@ -1033,7 +1145,17 @@ window.VuePages = window.VuePages || {};
         var day = String(d.getDate()).padStart(2, "0");
         var hours = String(d.getHours()).padStart(2, "0");
         var minutes = String(d.getMinutes()).padStart(2, "0");
-        return d.getFullYear() + "-" + month + "-" + day + " " + hours + ":" + minutes;
+        return (
+          d.getFullYear() +
+          "-" +
+          month +
+          "-" +
+          day +
+          " " +
+          hours +
+          ":" +
+          minutes
+        );
       }
 
       // ========== 下拉菜单 ==========
@@ -1052,7 +1174,8 @@ window.VuePages = window.VuePages || {};
           case "Enter":
           case " ": // Space
             event.preventDefault();
-            openDropdown.value = openDropdown.value === dropdownId ? null : dropdownId;
+            openDropdown.value =
+              openDropdown.value === dropdownId ? null : dropdownId;
             break;
           case "Escape":
             event.preventDefault();
@@ -1078,10 +1201,13 @@ window.VuePages = window.VuePages || {};
         var newEnabled = !rule.enabled;
         rule.enabled = newEnabled;
         try {
-          var response = await VueApi.request("/api/config/routing/rules/" + rule.id, {
-            method: "PUT",
-            body: JSON.stringify({ enabled: newEnabled }),
-          });
+          var response = await VueApi.request(
+            "/api/config/routing/rules/" + rule.id,
+            {
+              method: "PUT",
+              body: JSON.stringify({ enabled: newEnabled }),
+            },
+          );
           if (!response.ok) {
             rule.enabled = !newEnabled;
             var err = await response.json();
@@ -1096,9 +1222,13 @@ window.VuePages = window.VuePages || {};
       // ========== 一键应用建议 ==========
 
       function findRuleByName(name) {
-        var custom = customRules.value.find(function (r) { return r.name === name; });
+        var custom = customRules.value.find(function (r) {
+          return r.name === name;
+        });
         if (custom) return { rule: custom, source: "custom" };
-        var builtin = builtinRules.value.find(function (r) { return r.name === name; });
+        var builtin = builtinRules.value.find(function (r) {
+          return r.name === name;
+        });
         if (builtin) return { rule: builtin, source: "builtin" };
         return null;
       }
@@ -1136,13 +1266,14 @@ window.VuePages = window.VuePages || {};
             ruleForm.name = rec.rule_name || "";
             ruleForm.description = rec.description || "";
             applyRuleSpec(rec.rule_spec);
-            showAnalysisReport.value = false;
-            activeTab.value = "routing-config";
             break;
 
           case "modify":
             found = findRuleByName(rec.rule_name);
-            if (!found) { toastStore.error("未找到规则: " + rec.rule_name); return; }
+            if (!found) {
+              toastStore.error("未找到规则: " + rec.rule_name);
+              return;
+            }
             if (found.source === "custom") {
               showRuleModal(found.rule);
               applyRuleSpec(rec.rule_spec);
@@ -1154,37 +1285,52 @@ window.VuePages = window.VuePages || {};
               ruleForm.pattern = found.rule.pattern || "";
               ruleForm.condition = found.rule.condition || "";
               ruleForm.task_type = found.rule.task_type || "default";
-              ruleForm.priority = found.rule.priority != null ? found.rule.priority : 50;
+              ruleForm.priority =
+                found.rule.priority != null ? found.rule.priority : 50;
               ruleForm.enabled = found.rule.enabled !== false;
               applyRuleSpec(rec.rule_spec);
               toastStore.info("将创建自定义规则覆盖内置规则");
             }
-            showAnalysisReport.value = false;
-            activeTab.value = "routing-config";
             break;
 
           case "delete":
             found = findRuleByName(rec.rule_name);
-            if (!found) { toastStore.error("未找到规则: " + rec.rule_name); return; }
-            if (found.source === "builtin") { toastStore.error("内置规则不可删除"); return; }
+            if (!found) {
+              toastStore.error("未找到规则: " + rec.rule_name);
+              return;
+            }
+            if (found.source === "builtin") {
+              toastStore.error("内置规则不可删除");
+              return;
+            }
             deleteRule(found.rule);
             break;
 
           case "reorder":
             found = findRuleByName(rec.rule_name);
-            if (!found) { toastStore.error("未找到规则: " + rec.rule_name); return; }
+            if (!found) {
+              toastStore.error("未找到规则: " + rec.rule_name);
+              return;
+            }
             if (found.source === "custom") {
               var newPriority = rec.rule_spec.priority;
-              if (newPriority == null) { toastStore.error("建议未指定优先级"); return; }
+              if (newPriority == null) {
+                toastStore.error("建议未指定优先级");
+                return;
+              }
               VueApi.request("/api/config/routing/rules/" + found.rule.id, {
                 method: "PUT",
-                body: JSON.stringify(Object.assign({}, found.rule, { priority: newPriority })),
+                body: JSON.stringify(
+                  Object.assign({}, found.rule, { priority: newPriority }),
+                ),
               })
                 .then(function () {
                   toastStore.success("优先级已更新");
                   return loadRules();
                 })
-                .catch(function (error) { toastStore.error(error.message); });
+                .catch(function (error) {
+                  toastStore.error(error.message);
+                });
             } else {
               showRuleModal(null);
               ruleForm.name = found.rule.name;
@@ -1193,11 +1339,10 @@ window.VuePages = window.VuePages || {};
               ruleForm.pattern = found.rule.pattern || "";
               ruleForm.condition = found.rule.condition || "";
               ruleForm.task_type = found.rule.task_type || "default";
-              ruleForm.priority = rec.rule_spec.priority != null ? rec.rule_spec.priority : 50;
+              ruleForm.priority =
+                rec.rule_spec.priority != null ? rec.rule_spec.priority : 50;
               ruleForm.enabled = found.rule.enabled !== false;
               toastStore.info("将创建自定义规则覆盖内置规则");
-              showAnalysisReport.value = false;
-              activeTab.value = "routing-config";
             }
             break;
         }
@@ -1322,6 +1467,8 @@ window.VuePages = window.VuePages || {};
         smoothProgress: smoothProgress,
         analysisReports: analysisReports,
         analysisReportsTotal: analysisReportsTotal,
+        analysisReportsPage: analysisReportsPage,
+        analysisReportsPageSize: analysisReportsPageSize,
         showAnalysisReport: showAnalysisReport,
         currentReport: currentReport,
         openAnalysisModal: openAnalysisModal,
@@ -1329,6 +1476,7 @@ window.VuePages = window.VuePages || {};
         viewReport: viewReport,
         loadReportDetail: loadReportDetail,
         closeAnalysisReport: closeAnalysisReport,
+        deleteAnalysisReport: deleteAnalysisReport,
         getAnalysisStageLabel: getAnalysisStageLabel,
         isStageCompleted: isStageCompleted,
         getSeverityClass: getSeverityClass,
@@ -1991,7 +2139,13 @@ window.VuePages = window.VuePages || {};
 \
                 <div v-show="showAnalysisReport && currentReport" v-cloak class="analysis-report">\
                     <div class="analysis-report-header">\
-                        <button class="btn btn-sm" @click="closeAnalysisReport()" style="margin-bottom:var(--spacing-sm)">&larr; 返回</button>\
+                        <div style="display:flex;gap:var(--spacing-xs)">\
+                            <button class="btn btn-sm" @click="closeAnalysisReport()">&larr; 返回</button>\
+                            <button class="btn btn-sm btn-danger" @click="deleteAnalysisReport(currentReport)" title="删除此报告">\
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>\
+                                删除\
+                            </button>\
+                        </div>\
                         <div class="analysis-report-meta">\
                             <span v-show="currentReport && currentReport.model_used">模型: <code>{{ currentReport ? currentReport.model_used : \'\' }}</code></span>\
                             <span v-show="currentReport && currentReport.total_logs">日志: {{ (currentReport ? currentReport.analyzed_logs : 0) + \'/\' + (currentReport ? currentReport.total_logs : 0) }}</span>\
@@ -2050,15 +2204,23 @@ window.VuePages = window.VuePages || {};
                 <div class="analysis-section" v-show="!showAnalysisReport && analysisReports.length > 0" v-cloak style="margin-top: var(--spacing-lg);">\
                     <h4>历史报告 ({{ analysisReportsTotal }})</h4>\
                     <div class="analysis-reports-list">\
-                        <div v-for="r in analysisReports" :key="r.id" class="analysis-report-item" @click="loadReportDetail(r.id)">\
-                            <div class="analysis-report-item-info">\
+                        <div v-for="r in analysisReports" :key="r.id" class="analysis-report-item">\
+                            <div class="analysis-report-item-info" @click="loadReportDetail(r.id)" style="flex:1;cursor:pointer">\
                                 <span class="analysis-report-item-date">{{ formatReportDate(r.created_at) }}</span>\
                                 <span class="analysis-report-item-model"><code>{{ r.model_used }}</code></span>\
                             </div>\
-                            <div class="analysis-report-item-stats">\
+                            <div class="analysis-report-item-stats" @click="loadReportDetail(r.id)" style="cursor:pointer">\
                                 <span>{{ r.analyzed_logs + \'/\' + r.total_logs + \' 条日志\' }}</span>\
                             </div>\
+                            <button class="btn btn-sm btn-danger" @click.stop="deleteAnalysisReport(r)" title="删除" style="margin-left:var(--spacing-xs)">\
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>\
+                            </button>\
                         </div>\
+                    </div>\
+                    <div class="pagination" v-show="analysisReportsTotal > analysisReportsPageSize" v-cloak style="margin-top:var(--spacing-sm);display:flex;align-items:center;gap:var(--spacing-sm);justify-content:center">\
+                        <button class="btn btn-sm" @click="loadAnalysisReports(analysisReportsPage - 1)" :disabled="analysisReportsPage === 0">上一页</button>\
+                        <span style="font-size:var(--font-size-sm);color:var(--text-secondary)">第 {{ analysisReportsPage + 1 }} 页 / 共 {{ Math.ceil(analysisReportsTotal / analysisReportsPageSize) }} 页</span>\
+                        <button class="btn btn-sm" @click="loadAnalysisReports(analysisReportsPage + 1)" :disabled="(analysisReportsPage + 1) * analysisReportsPageSize >= analysisReportsTotal">下一页</button>\
                     </div>\
                 </div>\
             </div>\
