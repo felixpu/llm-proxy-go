@@ -159,6 +159,7 @@ func NewServer(deps ServerDeps) *Server {
 		routingAnalysisGroup.GET("/task/:task_id", routingAnalysisHandler.GetAnalysisTask)
 		routingAnalysisGroup.GET("/reports", routingAnalysisHandler.ListAnalysisReports)
 		routingAnalysisGroup.GET("/reports/:id", routingAnalysisHandler.GetAnalysisReport)
+		routingAnalysisGroup.DELETE("/reports/:id", routingAnalysisHandler.DeleteAnalysisReport)
 	}
 
 	// Set analyzer on handler after route registration.

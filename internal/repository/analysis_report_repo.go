@@ -109,6 +109,25 @@ func (r *AnalysisReportRepository) GetByID(ctx context.Context, id int64) (*mode
 	return r.scanReport(rows)
 }
 
+// Delete removes an analysis report by ID.
+func (r *AnalysisReportRepository) Delete(ctx context.Context, id int64) error {
+	result, err := r.db.ExecContext(ctx, `DELETE FROM routing_analysis_reports WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete analysis report: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("report not found: %d", id)
+	}
+
+	return nil
+}
+
 func (r *AnalysisReportRepository) scanReport(rows *sql.Rows) (*models.AnalysisReport, error) {
 	var rpt models.AnalysisReport
 	var startStr, endStr sql.NullString

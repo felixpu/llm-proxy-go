@@ -445,3 +445,38 @@ func (h *RoutingAnalysisHandler) GetAnalysisReport(c *gin.Context) {
 
 	c.JSON(http.StatusOK, report)
 }
+
+// DeleteAnalysisReport deletes a historical analysis report.
+// DELETE /api/routing/analysis/reports/:id
+func (h *RoutingAnalysisHandler) DeleteAnalysisReport(c *gin.Context) {
+	currentUser := middleware.GetCurrentUser(c)
+	if currentUser == nil || currentUser.Role != "admin" {
+		errorResponse(c, http.StatusForbidden, "Admin access required")
+		return
+	}
+
+	if h.reportRepo == nil {
+		errorResponse(c, http.StatusServiceUnavailable, "Report repository not initialized")
+		return
+	}
+
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		errorResponse(c, http.StatusBadRequest, "Invalid report ID")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), routingQueryTimeout)
+	defer cancel()
+
+	if err := h.reportRepo.Delete(ctx, id); err != nil {
+		h.logger.Error("failed to delete analysis report", zap.Error(err), zap.Int64("id", id))
+		errorResponse(c, http.StatusInternalServerError, "Failed to delete report")
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Report deleted",
+	})
+}
