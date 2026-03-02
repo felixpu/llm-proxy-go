@@ -244,14 +244,16 @@ window.VuePages = window.VuePages || {};
 
           // 计算缓存统计（从当前日志列表）
           if (logs.value && logs.value.length > 0) {
-            var totalInputTokens = 0;
             var totalCacheReadTokens = 0;
+            var requestsWithCacheHit = 0;
             logs.value.forEach(function(log) {
-              totalInputTokens += (log.input_tokens || 0);
               totalCacheReadTokens += (log.cache_read_input_tokens || 0);
+              if ((log.cache_read_input_tokens || 0) > 0) {
+                requestsWithCacheHit++;
+              }
             });
             stats.totalCacheReadTokens = totalCacheReadTokens;
-            stats.cacheHitRate = totalInputTokens > 0 ? totalCacheReadTokens / totalInputTokens : 0;
+            stats.cacheHitRate = logs.value.length > 0 ? requestsWithCacheHit / logs.value.length : 0;
           } else {
             stats.totalCacheReadTokens = 0;
             stats.cacheHitRate = 0;
