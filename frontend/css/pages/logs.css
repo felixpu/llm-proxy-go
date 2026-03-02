@@ -207,7 +207,49 @@
     color: #3b82f6;
 }
 
-/* 移动端适配 */
+.log-icon-warning {
+    color: var(--color-warning, #f59e0b);
+}
+
+.log-icon-cache {
+    color: #10b981;
+}
+
+/* ========================================
+   缓存统计徽章
+   ======================================== */
+
+.cache-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.cache-badge.cache-write {
+    background-color: #e0f2fe;
+    color: #0369a1;
+}
+
+.cache-badge.cache-hit {
+    background-color: #dcfce7;
+    color: #15803d;
+}
+
+/* Dark mode support */
+[data-theme="dark"] .cache-badge.cache-write {
+    background-color: rgba(3, 105, 161, 0.2);
+    color: #38bdf8;
+}
+
+[data-theme="dark"] .cache-badge.cache-hit {
+    background-color: rgba(21, 128, 61, 0.2);
+    color: #86efac;
+}
 @media (max-width: 768px) {
     /* 表格 - 固定第一列 + 横向滚动 */
     #logs-table {

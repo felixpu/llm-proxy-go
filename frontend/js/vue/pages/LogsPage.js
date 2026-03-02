@@ -104,6 +104,8 @@ window.VuePages = window.VuePages || {};
         totalCost: 0,
         avgLatency: 0,
         successRate: 0,
+        cacheHitRate: 0,
+        totalCacheReadTokens: 0,
       });
 
       // 筛选器
@@ -239,6 +241,22 @@ window.VuePages = window.VuePages || {};
           stats.totalCost = data.total_cost || 0;
           stats.avgLatency = data.avg_latency || 0;
           stats.successRate = data.success_rate || 0;
+
+          // 计算缓存统计（从当前日志列表）
+          if (logs.value && logs.value.length > 0) {
+            var totalInputTokens = 0;
+            var totalCacheReadTokens = 0;
+            logs.value.forEach(function(log) {
+              totalInputTokens += (log.input_tokens || 0);
+              totalCacheReadTokens += (log.cache_read_input_tokens || 0);
+            });
+            stats.totalCacheReadTokens = totalCacheReadTokens;
+            stats.cacheHitRate = totalInputTokens > 0 ? totalCacheReadTokens / totalInputTokens : 0;
+          } else {
+            stats.totalCacheReadTokens = 0;
+            stats.cacheHitRate = 0;
+          }
+
           // Extract filter options from the same response
           filterOptions.models = (data.by_model || []).map(function (item) {
             return item.model_name;
@@ -557,6 +575,13 @@ window.VuePages = window.VuePages || {};
         refreshOpen.value = false;
       }
 
+      // 计算普通输入 token（排除缓存读取）
+      function computeNormalInputTokens(log) {
+        if (!log) return 0;
+        var normal = (log.input_tokens || 0) - (log.cache_read_input_tokens || 0);
+        return Math.max(0, normal).toLocaleString();
+      }
+
       // header 操作按钮组件
       var LogsHeaderActions = {
         name: "LogsHeaderActions",
@@ -656,6 +681,7 @@ window.VuePages = window.VuePages || {};
         showLogDetail: showLogDetailFn,
         toggleInaccurate: toggleInaccurate,
         confirmDeleteLogs: confirmDeleteLogs,
+        computeNormalInputTokens: computeNormalInputTokens,
       };
 
       // __CONTINUE_TEMPLATE__
@@ -699,6 +725,24 @@ window.VuePages = window.VuePages || {};
             <div class="stat-info">\
                 <span class="stat-value">{{ (stats.successRate || 0).toFixed(1) + "%" }}</span>\
                 <span class="stat-label">成功率</span>\
+            </div>\
+        </div>\
+        <div class="stat-card">\
+            <div class="stat-icon">\
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12v3c0 1.657 3.134 3 7 3s7-1.343 7-3v-3c0 1.657-3.134 3-7 3s-7-1.343-7-3z"/><path d="M3 7v3c0 1.657 3.134 3 7 3s7-1.343 7-3V7c0 1.657-3.134 3-7 3S3 8.657 3 7z"/><path d="M17 5c0 1.657-3.134 3-7 3S3 6.657 3 5s3.134-3 7-3 7 1.343 7 3z"/></svg>\
+            </div>\
+            <div class="stat-info">\
+                <span class="stat-value">{{ (stats.cacheHitRate * 100).toFixed(1) + "%" }}</span>\
+                <span class="stat-label">缓存命中率</span>\
+            </div>\
+        </div>\
+        <div class="stat-card">\
+            <div class="stat-icon">\
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>\
+            </div>\
+            <div class="stat-info">\
+                <span class="stat-value">{{ (stats.totalCacheReadTokens || 0).toLocaleString() }}</span>\
+                <span class="stat-label">缓存读取 Tokens</span>\
             </div>\
         </div>\
     </div>\
@@ -857,6 +901,9 @@ window.VuePages = window.VuePages || {};
                                 <span v-show="log.stream" class="log-icon log-icon-stream" title="流式">\
                                     <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 7c2-2 4-2 6 0s4 2 6 0"/><path d="M3 13c2-2 4-2 6 0s4 2 6 0"/></svg>\
                                 </span>\
+                                <span v-show="log.cache_read_input_tokens > 0" class="log-icon log-icon-cache" title="缓存命中">\
+                                    <svg viewBox="0 0 20 20" fill="currentColor"><path d="M3 12v3c0 1.657 3.134 3 7 3s7-1.343 7-3v-3c0 1.657-3.134 3-7 3s-7-1.343-7-3z"/><path d="M3 7v3c0 1.657 3.134 3 7 3s7-1.343 7-3V7c0 1.657-3.134 3-7 3S3 8.657 3 7z"/><path d="M17 5c0 1.657-3.134 3-7 3S3 6.657 3 5s3.134-3 7-3 7 1.343 7 3z"/></svg>\
+                                </span>\
                                 <span v-show="log.is_inaccurate" class="log-icon log-icon-warning" title="标记为不准确">\
                                     <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>\
                                 </span>\
@@ -971,6 +1018,24 @@ window.VuePages = window.VuePages || {};
                             <div class="detail-item">\
                                 <span class="detail-label">成本</span>\
                                 <span class="detail-value">{{ "$" + (logDetail.cost || 0).toFixed(6) }}</span>\
+                            </div>\
+                            <div class="detail-item">\
+                                <span class="detail-label">缓存写入 Tokens</span>\
+                                <span class="detail-value">\
+                                    {{ (logDetail.cache_creation_input_tokens || 0).toLocaleString() }}\
+                                    <span v-show="logDetail.cache_creation_input_tokens > 0" class="cache-badge cache-write">写入</span>\
+                                </span>\
+                            </div>\
+                            <div class="detail-item">\
+                                <span class="detail-label">缓存读取 Tokens</span>\
+                                <span class="detail-value">\
+                                    {{ (logDetail.cache_read_input_tokens || 0).toLocaleString() }}\
+                                    <span v-show="logDetail.cache_read_input_tokens > 0" class="cache-badge cache-hit">命中</span>\
+                                </span>\
+                            </div>\
+                            <div class="detail-item">\
+                                <span class="detail-label">普通输入 Tokens</span>\
+                                <span class="detail-value">{{ computeNormalInputTokens(logDetail) }}</span>\
                             </div>\
                         </div>\
                     </div>\
