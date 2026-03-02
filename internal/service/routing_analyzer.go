@@ -1,13 +1,9 @@
 package service
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -256,81 +252,20 @@ func (a *RoutingAnalyzer) sampleLogs(logs []*models.RequestLog, maxSamples int) 
 
 // callAnalysisModel calls the LLM via the appropriate API adapter.
 func (a *RoutingAnalyzer) callAnalysisModel(ctx context.Context, userPrompt string, modelCfg *models.RoutingModelWithProvider) (string, error) {
-	// Determine API type
-	apiType := determineAPIType(modelCfg.APIType, modelCfg.ProviderAPIType)
-	if apiType == APITypeAuto {
-		detected, err := DetectAPIType(ctx, modelCfg.BaseURL, modelCfg.APIKey)
-		if err != nil {
-			return "", fmt.Errorf("无法自动检测 API 类型。请在 Provider 配置中手动设置 api_type 字段为以下值之一：\n"+
-				"  - anthropic_messages (Anthropic Messages API, /v1/messages)\n"+
-				"  - anthropic_responses (Anthropic Responses API, /v1/responses)\n"+
-				"  - openai_chat (OpenAI Chat Completions API, /v1/chat/completions)\n"+
-				"原始错误: %w", err)
-		}
-		apiType = detected
-		a.logger.Info("Auto-detected API type for analysis model",
-			zap.String("model", modelCfg.ModelName),
-			zap.String("api_type", string(apiType)))
-	}
-
-	adapter := GetAdapter(apiType)
-
-	messages := []Message{
-		{Role: "system", Content: AnalysisSystemPrompt},
-		{Role: "user", Content: userPrompt},
-	}
-
-	bodyBytes, err := adapter.BuildRequestBody(messages, RequestOptions{
-		Model:       modelCfg.ModelName,
-		MaxTokens:   4096,
-		Temperature: 0.1,
-		Stream:      false,
+	return CallLLMModel(ctx, LLMCallParams{
+		ModelCfg: modelCfg,
+		Messages: []Message{
+			{Role: "system", Content: AnalysisSystemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+		Options: RequestOptions{
+			Model:       modelCfg.ModelName,
+			MaxTokens:   4096,
+			Temperature: 0.1,
+			Stream:      false,
+		},
+		Client:     a.client,
+		Logger:     a.logger,
+		LogContext:  "analysis",
 	})
-	if err != nil {
-		return "", fmt.Errorf("marshal request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s%s", modelCfg.BaseURL, adapter.GetEndpoint())
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return "", fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	adapter.SetAuthHeaders(httpReq, modelCfg.APIKey)
-
-	resp, err := a.client.Do(httpReq)
-	if err != nil {
-		return "", fmt.Errorf("API call failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		// Check if it's an unsupported endpoint error
-		if resp.StatusCode == 400 {
-			var errResp struct {
-				Error struct {
-					Message string `json:"message"`
-				} `json:"error"`
-			}
-			json.Unmarshal(respBody, &errResp)
-			if strings.Contains(errResp.Error.Message, "not supported") ||
-				strings.Contains(errResp.Error.Message, "Unsupported") {
-				return "", fmt.Errorf("API 端点不支持: %s。当前使用的 API 类型为 %s，请检查 Provider 配置中的 api_type 字段是否正确",
-					errResp.Error.Message, apiType)
-			}
-		}
-		return "", fmt.Errorf("API returned status %d: %s", resp.StatusCode, truncate(string(respBody), 500))
-	}
-
-	parsedResp, err := adapter.ParseResponse(respBody)
-	if err != nil {
-		return "", fmt.Errorf("parse response: %w", err)
-	}
-
-	return parsedResp.Content, nil
 }

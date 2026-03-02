@@ -232,10 +232,20 @@ func ParseAnalysisResponse(text string) (*models.AnalysisReport, error) {
 		return nil, fmt.Errorf("parse analysis JSON: %w", err)
 	}
 
+	// Ensure slices are never nil so JSON serialization produces [] instead of null.
+	issues := raw.Issues
+	if issues == nil {
+		issues = []models.AnalysisIssue{}
+	}
+	recs := raw.Recommendations
+	if recs == nil {
+		recs = []models.AnalysisRecommendation{}
+	}
+
 	return &models.AnalysisReport{
 		Summary:         raw.Summary,
-		Issues:          raw.Issues,
-		Recommendations: raw.Recommendations,
+		Issues:          issues,
+		Recommendations: recs,
 		Conclusion:      raw.Conclusion,
 	}, nil
 }

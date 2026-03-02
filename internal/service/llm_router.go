@@ -1,12 +1,10 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -259,7 +257,7 @@ func (r *LLMRouter) callRoutingWithRetry(
 	return models.ModelRoleDefault, nil
 }
 
-// callRoutingModel calls a single routing model via OpenAI-compatible chat API.
+// callRoutingModel calls a single routing model via the appropriate API adapter.
 func (r *LLMRouter) callRoutingModel(
 	ctx context.Context,
 	systemContent, userMessage string,
@@ -268,94 +266,29 @@ func (r *LLMRouter) callRoutingModel(
 ) (*models.RoutingDecision, error) {
 	userPrompt := BuildRoutingPrompt(systemContent, userMessage)
 
-	// Determine API type
-	apiType := determineAPIType(modelCfg.APIType, modelCfg.ProviderAPIType)
-	if apiType == APITypeAuto {
-		// Auto-detect and use
-		detected, err := DetectAPIType(ctx, modelCfg.BaseURL, modelCfg.APIKey)
-		if err != nil {
-			return nil, fmt.Errorf("无法自动检测 API 类型。请在 Provider 配置中手动设置 api_type 字段为以下值之一：\n"+
-				"  - anthropic_messages (Anthropic Messages API, /v1/messages)\n"+
-				"  - anthropic_responses (Anthropic Responses API, /v1/responses)\n"+
-				"  - openai_chat (OpenAI Chat Completions API, /v1/chat/completions)\n"+
-				"原始错误: %w", err)
-		}
-		apiType = detected
-		r.logger.Info("Auto-detected API type for routing model",
-			zap.String("model", modelCfg.ModelName),
-			zap.String("api_type", string(apiType)))
-		// TODO: Cache detected type in database
-	}
-
-	// Get adapter
-	adapter := GetAdapter(apiType)
-
-	// Build messages
-	messages := []Message{
-		{Role: "system", Content: RoutingSystemPrompt},
-		{Role: "user", Content: userPrompt},
-	}
-
-	// Build request body using adapter
-	bodyBytes, err := adapter.BuildRequestBody(messages, RequestOptions{
-		Model:       modelCfg.ModelName,
-		MaxTokens:   routingCfg.MaxTokens,
-		Temperature: routingCfg.Temperature,
-		Stream:      false,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("marshal routing request: %w", err)
-	}
-
-	url := fmt.Sprintf("%s%s", modelCfg.BaseURL, adapter.GetEndpoint())
 	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(routingCfg.TimeoutSeconds)*time.Second)
 	defer cancel()
 
-	httpReq, err := http.NewRequestWithContext(timeoutCtx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	content, err := CallLLMModel(timeoutCtx, LLMCallParams{
+		ModelCfg: modelCfg,
+		Messages: []Message{
+			{Role: "system", Content: RoutingSystemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+		Options: RequestOptions{
+			Model:       modelCfg.ModelName,
+			MaxTokens:   routingCfg.MaxTokens,
+			Temperature: routingCfg.Temperature,
+			Stream:      false,
+		},
+		Client:     r.client,
+		Logger:     r.logger,
+		LogContext:  "routing",
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create routing request: %w", err)
+		return nil, err
 	}
 
-	httpReq.Header.Set("Content-Type", "application/json")
-	adapter.SetAuthHeaders(httpReq, modelCfg.APIKey)
-
-	resp, err := r.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("routing API call failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read routing response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		// Check if it's an unsupported endpoint error
-		if resp.StatusCode == 400 {
-			var errResp struct {
-				Error struct {
-					Message string `json:"message"`
-					Type    string `json:"type"`
-				} `json:"error"`
-			}
-			json.Unmarshal(respBody, &errResp)
-			if strings.Contains(errResp.Error.Message, "not supported") ||
-				strings.Contains(errResp.Error.Message, "Unsupported") {
-				return nil, fmt.Errorf("API 端点不支持: %s。当前使用的 API 类型为 %s，请检查 Provider 配置中的 api_type 字段是否正确",
-					errResp.Error.Message, apiType)
-			}
-		}
-		return nil, fmt.Errorf("routing API returned status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	// Parse response using adapter
-	parsedResp, err := adapter.ParseResponse(respBody)
-	if err != nil {
-		return nil, fmt.Errorf("parse routing response: %w", err)
-	}
-
-	content := parsedResp.Content
 	return parseRoutingDecision(content)
 }
 
