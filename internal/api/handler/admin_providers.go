@@ -150,13 +150,7 @@ func (h *ProviderHandler) CreateProvider(c *gin.Context) {
 
 	// Validate api_type if provided
 	if req.APIType != "" {
-		validTypes := map[string]bool{
-			"auto":                 true,
-			"anthropic_messages":   true,
-			"anthropic_responses":  true,
-			"openai_chat":          true,
-		}
-		if !validTypes[req.APIType] {
+		if !service.IsValidAPIType(req.APIType) {
 			errorResponse(c, http.StatusBadRequest, "invalid api_type: must be one of 'auto', 'anthropic_messages', 'anthropic_responses', 'openai_chat'")
 			return
 		}
@@ -199,13 +193,7 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 
 	// Validate api_type if provided
 	if req.APIType != nil {
-		validTypes := map[string]bool{
-			"auto":                 true,
-			"anthropic_messages":   true,
-			"anthropic_responses":  true,
-			"openai_chat":          true,
-		}
-		if !validTypes[*req.APIType] {
+		if !service.IsValidAPIType(*req.APIType) {
 			errorResponse(c, http.StatusBadRequest, "invalid api_type: must be one of 'auto', 'anthropic_messages', 'anthropic_responses', 'openai_chat'")
 			return
 		}

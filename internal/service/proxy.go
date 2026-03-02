@@ -184,7 +184,7 @@ func (s *ProxyService) proxyToEndpoint(
 
 	// For Anthropic APIs, also set version header if present
 	if apiType == APITypeAnthropicMessages || apiType == APITypeAnthropicResponses {
-		upReq.Header.Set("anthropic-version", headerOrDefault(originalHeaders, "Anthropic-Version", "2023-06-01"))
+		upReq.Header.Set("anthropic-version", headerOrDefault(originalHeaders, "Anthropic-Version", DefaultAnthropicVersion))
 		copyAnthropicHeaders(originalHeaders, upReq.Header)
 	}
 
@@ -341,8 +341,8 @@ func msSince(start time.Time) float64 {
 }
 
 func calculateCost(model *models.Model, usage models.Usage) float64 {
-	// Normal input tokens (excluding cache read tokens)
-	normalInputTokens := usage.InputTokens - usage.CacheReadInputTokens
+	// Normal input tokens (excluding cache read and cache creation tokens)
+	normalInputTokens := usage.InputTokens - usage.CacheReadInputTokens - usage.CacheCreationInputTokens
 	if normalInputTokens < 0 {
 		normalInputTokens = 0
 	}
@@ -351,10 +351,13 @@ func calculateCost(model *models.Model, usage models.Usage) float64 {
 	// Cache read tokens cost 10% of normal input token price
 	cacheReadCost := float64(usage.CacheReadInputTokens) / 1_000_000 * model.CostPerMtokInput * 0.1
 
+	// Cache creation tokens cost 125% of normal input token price
+	cacheCreationCost := float64(usage.CacheCreationInputTokens) / 1_000_000 * model.CostPerMtokInput * 1.25
+
 	// Output tokens
 	outputCost := float64(usage.OutputTokens) / 1_000_000 * model.CostPerMtokOutput * model.BillingMultiplier
 
-	return inputCost + cacheReadCost + outputCost
+	return inputCost + cacheReadCost + cacheCreationCost + outputCost
 }
 
 func calculateCostFromTokens(model *models.Model, inputTokens, outputTokens int) float64 {
@@ -363,16 +366,17 @@ func calculateCostFromTokens(model *models.Model, inputTokens, outputTokens int)
 	return inputCost + outputCost
 }
 
-// calculateCostFromTokensWithCache calculates cost considering cache read tokens.
-func calculateCostFromTokensWithCache(model *models.Model, inputTokens, outputTokens, cacheReadTokens int) float64 {
-	normalInputTokens := inputTokens - cacheReadTokens
+// calculateCostFromTokensWithCache calculates cost considering cache tokens.
+func calculateCostFromTokensWithCache(model *models.Model, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int) float64 {
+	normalInputTokens := inputTokens - cacheReadTokens - cacheCreationTokens
 	if normalInputTokens < 0 {
 		normalInputTokens = 0
 	}
 	inputCost := float64(normalInputTokens) / 1_000_000 * model.CostPerMtokInput
 	cacheReadCost := float64(cacheReadTokens) / 1_000_000 * model.CostPerMtokInput * 0.1
+	cacheCreationCost := float64(cacheCreationTokens) / 1_000_000 * model.CostPerMtokInput * 1.25
 	outputCost := float64(outputTokens) / 1_000_000 * model.CostPerMtokOutput * model.BillingMultiplier
-	return inputCost + cacheReadCost + outputCost
+	return inputCost + cacheReadCost + cacheCreationCost + outputCost
 }
 
 // SaveRequestLog persists a request log entry to the database asynchronously.
@@ -576,7 +580,7 @@ func (s *ProxyService) connectStreamEndpoint(
 
 	// For Anthropic APIs, also set version header if present
 	if apiType == APITypeAnthropicMessages || apiType == APITypeAnthropicResponses {
-		upReq.Header.Set("anthropic-version", headerOrDefault(originalHeaders, "Anthropic-Version", "2023-06-01"))
+		upReq.Header.Set("anthropic-version", headerOrDefault(originalHeaders, "Anthropic-Version", DefaultAnthropicVersion))
 		copyAnthropicHeaders(originalHeaders, upReq.Header)
 	}
 
@@ -756,7 +760,7 @@ func buildStreamMeta(meta *ProxyMetadata, ep *models.Endpoint, success bool, lat
 	finalMeta.OutputTokens = outputTokens
 	finalMeta.CacheReadInputTokens = cacheReadTokens
 	finalMeta.CacheCreationInputTokens = cacheCreationTokens
-	finalMeta.Cost = calculateCostFromTokensWithCache(ep.Model, inputTokens, outputTokens, cacheReadTokens)
+	finalMeta.Cost = calculateCostFromTokensWithCache(ep.Model, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
 	finalMeta.Success = success
 	return finalMeta
 }

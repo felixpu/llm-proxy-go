@@ -21,8 +21,7 @@ func TestCalculateCost_NegativeProtection(t *testing.T) {
 	tests := []struct {
 		name                 string
 		usage                models.Usage
-		expectedMinCost      float64
-		expectedNormalTokens int
+		expectedCost         float64
 	}{
 		{
 			name: "cache_read > input (edge case)",
@@ -31,8 +30,8 @@ func TestCalculateCost_NegativeProtection(t *testing.T) {
 				OutputTokens:         100,
 				CacheReadInputTokens: 600, // More than input
 			},
-			expectedMinCost:      0.00168, // Cache: 600/1M*3*0.1=0.00018, Output: 100/1M*15=0.0015, Total: 0.00168
-			expectedNormalTokens: 0,       // Should be clamped to 0
+			// Normal: clamped to 0, Cache read: 600/1M*3*0.1=0.00018, Output: 100/1M*15=0.0015
+			expectedCost: 0.00168,
 		},
 		{
 			name: "cache_read == input",
@@ -41,26 +40,41 @@ func TestCalculateCost_NegativeProtection(t *testing.T) {
 				OutputTokens:         100,
 				CacheReadInputTokens: 1000,
 			},
-			expectedMinCost:      0.0018, // Cache: 1000/1M*3*0.1=0.0003, Output: 100/1M*15=0.0015, Total: 0.0018
-			expectedNormalTokens: 0,
+			// Normal: 0, Cache read: 1000/1M*3*0.1=0.0003, Output: 100/1M*15=0.0015
+			expectedCost: 0.0018,
 		},
 		{
-			name: "normal case",
+			name: "normal case with cache read only",
 			usage: models.Usage{
 				InputTokens:          1000,
 				OutputTokens:         100,
 				CacheReadInputTokens: 400,
 			},
-			expectedMinCost:      0.00342, // Normal: 600/1M*3=0.0018, Cache: 400/1M*3*0.1=0.00012, Output: 100/1M*15=0.0015, Total: 0.00342
-			expectedNormalTokens: 600,
+			// Normal: 600/1M*3=0.0018, Cache read: 400/1M*3*0.1=0.00012, Output: 100/1M*15=0.0015
+			expectedCost: 0.00342,
+		},
+		{
+			name: "with cache creation tokens",
+			usage: models.Usage{
+				InputTokens:              1000,
+				OutputTokens:             100,
+				CacheReadInputTokens:     200,
+				CacheCreationInputTokens: 300,
+			},
+			// Normal: (1000-200-300)/1M*3=0.0015
+			// Cache read: 200/1M*3*0.1=0.00006
+			// Cache creation: 300/1M*3*1.25=0.001125
+			// Output: 100/1M*15=0.0015
+			// Total: 0.004185
+			expectedCost: 0.004185,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cost := calculateCost(model, tt.usage)
-			assert.GreaterOrEqual(t, cost, tt.expectedMinCost, "cost should not be negative")
-			assert.InDelta(t, tt.expectedMinCost, cost, 0.00001)
+			assert.GreaterOrEqual(t, cost, float64(0), "cost should not be negative")
+			assert.InDelta(t, tt.expectedCost, cost, 0.00001)
 		})
 	}
 }
@@ -74,45 +88,63 @@ func TestCalculateCostFromTokensWithCache_NegativeProtection(t *testing.T) {
 	}
 
 	tests := []struct {
-		name            string
-		inputTokens     int
-		outputTokens    int
-		cacheReadTokens int
-		expectedCost    float64
+		name                string
+		inputTokens         int
+		outputTokens        int
+		cacheReadTokens     int
+		cacheCreationTokens int
+		expectedCost        float64
 	}{
 		{
-			name:            "cache_read > input",
-			inputTokens:     500,
-			outputTokens:    100,
-			cacheReadTokens: 600,
-			expectedCost:    0.00168, // Cache: 600/1M*3*0.1=0.00018, Output: 100/1M*15=0.0015, Total: 0.00168
+			name:                "cache_read > input",
+			inputTokens:         500,
+			outputTokens:        100,
+			cacheReadTokens:     600,
+			cacheCreationTokens: 0,
+			expectedCost:        0.00168, // Cache read: 600/1M*3*0.1=0.00018, Output: 100/1M*15=0.0015, Total: 0.00168
 		},
 		{
-			name:            "cache_read == input",
-			inputTokens:     1000,
-			outputTokens:    100,
-			cacheReadTokens: 1000,
-			expectedCost:    0.0018, // Cache: 1000/1M*3*0.1=0.0003, Output: 100/1M*15=0.0015, Total: 0.0018
+			name:                "cache_read == input",
+			inputTokens:         1000,
+			outputTokens:        100,
+			cacheReadTokens:     1000,
+			cacheCreationTokens: 0,
+			expectedCost:        0.0018, // Cache read: 1000/1M*3*0.1=0.0003, Output: 100/1M*15=0.0015, Total: 0.0018
 		},
 		{
-			name:            "normal case",
-			inputTokens:     1000,
-			outputTokens:    100,
-			cacheReadTokens: 400,
-			expectedCost:    0.00342, // Normal: 600/1M*3=0.0018, Cache: 400/1M*3*0.1=0.00012, Output: 100/1M*15=0.0015, Total: 0.00342
+			name:                "normal case",
+			inputTokens:         1000,
+			outputTokens:        100,
+			cacheReadTokens:     400,
+			cacheCreationTokens: 0,
+			expectedCost:        0.00342, // Normal: 600/1M*3=0.0018, Cache read: 400/1M*3*0.1=0.00012, Output: 100/1M*15=0.0015, Total: 0.00342
 		},
 		{
-			name:            "zero cache",
-			inputTokens:     1000,
-			outputTokens:    100,
-			cacheReadTokens: 0,
-			expectedCost:    0.0045, // Normal: 1000/1M*3=0.003, Output: 100/1M*15=0.0015, Total: 0.0045
+			name:                "zero cache",
+			inputTokens:         1000,
+			outputTokens:        100,
+			cacheReadTokens:     0,
+			cacheCreationTokens: 0,
+			expectedCost:        0.0045, // Normal: 1000/1M*3=0.003, Output: 100/1M*15=0.0015, Total: 0.0045
+		},
+		{
+			name:                "with cache creation tokens",
+			inputTokens:         1000,
+			outputTokens:        100,
+			cacheReadTokens:     200,
+			cacheCreationTokens: 300,
+			// Normal: (1000-200-300)/1M*3=0.0015
+			// Cache read: 200/1M*3*0.1=0.00006
+			// Cache creation: 300/1M*3*1.25=0.001125
+			// Output: 100/1M*15=0.0015
+			// Total: 0.004185
+			expectedCost: 0.004185,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cost := calculateCostFromTokensWithCache(model, tt.inputTokens, tt.outputTokens, tt.cacheReadTokens)
+			cost := calculateCostFromTokensWithCache(model, tt.inputTokens, tt.outputTokens, tt.cacheReadTokens, tt.cacheCreationTokens)
 			assert.GreaterOrEqual(t, cost, float64(0), "cost should never be negative")
 			assert.InDelta(t, tt.expectedCost, cost, 0.00001)
 		})

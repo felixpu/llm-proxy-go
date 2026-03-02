@@ -496,9 +496,10 @@ func TestCalculateCostFromTokensWithCache(t *testing.T) {
 		BillingMultiplier: 1.0,
 	}
 
-	cost := calculateCostFromTokensWithCache(model, 1000, 500, 400)
-	// Normal input: (1000-400)/1M * 3 = 0.0018
+	cost := calculateCostFromTokensWithCache(model, 1000, 500, 400, 0)
+	// Normal input: (1000-400-0)/1M * 3 = 0.0018
 	// Cache read: 400/1M * 3 * 0.1 = 0.00012
+	// Cache creation: 0
 	// Output: 500/1M * 15 * 1 = 0.0075
 	// Total: 0.00942
 	assert.InDelta(t, 0.00942, cost, 0.00001)
@@ -986,11 +987,12 @@ func TestBuildStreamMeta_WithCacheReadTokens(t *testing.T) {
 	assert.True(t, result.Success)
 
 	// Verify cost calculation with cache discount
-	// Normal input: (1000-400)/1M * 3 = 0.0018
+	// Normal input: (1000-400-200)/1M * 3 = 0.0012
 	// Cache read: 400/1M * 3 * 0.1 = 0.00012
+	// Cache creation: 200/1M * 3 * 1.25 = 0.00075
 	// Output: 500/1M * 15 * 1 = 0.0075
-	// Total: 0.00942
-	assert.InDelta(t, 0.00942, result.Cost, 0.00001)
+	// Total: 0.00957
+	assert.InDelta(t, 0.00957, result.Cost, 0.00001)
 }
 
 func TestParseSSEUsage_WithCacheTokens(t *testing.T) {
