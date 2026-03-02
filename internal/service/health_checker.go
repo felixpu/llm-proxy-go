@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -296,16 +297,39 @@ func (hc *HealthChecker) IsHealthy(name string) bool {
 	return shouldAllowRequest(state, hc.cfg.CircuitBreaker)
 }
 
-// GetHealthyEndpoints returns endpoints that are currently healthy.
+// GetHealthyEndpoints returns endpoints that are currently healthy and allowed by circuit breaker.
+// Uses write lock because half-open transitions may mutate state.
 func (hc *HealthChecker) GetHealthyEndpoints(endpoints []*models.Endpoint) []*models.Endpoint {
-	hc.mu.RLock()
-	defer hc.mu.RUnlock()
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
 
 	var result []*models.Endpoint
 	for _, ep := range endpoints {
 		name := fmt.Sprintf("%s/%s", ep.Provider.Name, ep.Model.Name)
 		state, ok := hc.states[name]
-		if ok && state.Status == models.EndpointHealthy {
+		if !ok {
+			// Unknown endpoint — allow through (backward compatibility)
+			result = append(result, ep)
+			continue
+		}
+
+		// Check health status
+		if state.Status != models.EndpointHealthy {
+			continue
+		}
+
+		// Check circuit breaker: transition open→half-open if cooldown passed
+		if state.CircuitState == CircuitOpen && shouldTransitionToHalfOpen(state, hc.cfg.CircuitBreaker) {
+			state.CircuitState = CircuitHalfOpen
+			state.HalfOpenSuccesses = 0
+			state.HalfOpenFailures = 0
+			hc.logger.Info("Circuit breaker transitioned to half-open",
+				zap.String("endpoint", name),
+			)
+		}
+
+		// Allow request only if circuit breaker permits
+		if shouldAllowRequest(state, hc.cfg.CircuitBreaker) {
 			result = append(result, ep)
 		}
 	}
@@ -337,6 +361,9 @@ func (hc *HealthChecker) DecrementConnections(name string) {
 }
 
 // UpdateRequestStats records a completed request's outcome.
+//
+// Deprecated: Use UpdateRequestStatsV2 which includes circuit breaker logic.
+// Retained for backward compatibility in tests. New code should use UpdateRequestStatsV2.
 func (hc *HealthChecker) UpdateRequestStats(name string, success bool, latencyMs float64) {
 	hc.mu.Lock()
 	defer hc.mu.Unlock()
@@ -410,15 +437,17 @@ func (hc *HealthChecker) UpdateRequestStatsV2(result RequestResult) {
 			}
 			state.RecentErrors = append(state.RecentErrors, errorRecord)
 			if len(state.RecentErrors) > 20 {
-				// Keep only last 20 errors
-				state.RecentErrors = state.RecentErrors[len(state.RecentErrors)-20:]
+				// Copy to new slice to allow GC of old underlying array
+				trimmed := make([]ErrorRecord, 20)
+				copy(trimmed, state.RecentErrors[len(state.RecentErrors)-20:])
+				state.RecentErrors = trimmed
 			}
 
 			// Check if should transition to open
 			if shouldOpen, reason := shouldTransitionToOpen(state, hc.cfg.CircuitBreaker); shouldOpen {
 				state.CircuitState = CircuitOpen
-				now := time.Now()
-				state.CircuitOpenedAt = &now
+				openedAt := time.Now()
+				state.CircuitOpenedAt = &openedAt
 				state.LastError = reason
 				state.Status = models.EndpointUnhealthy
 				hc.logger.Warn("Circuit breaker opened",
@@ -565,9 +594,18 @@ func classifyHTTPError(statusCode int, responseBody []byte) ErrorType {
 		return ErrorTypePermanent
 	}
 
-	// 400 and 422 - check if it's a model error
+	// 400 and 422 - check response body for specific error patterns
 	if statusCode == 400 || statusCode == 422 {
 		if containsModelError(responseBody) {
+			return ErrorTypePermanent
+		}
+		// 400 is typically a client error (permanent).
+		// Only 422 (validation) is treated as potentially temporary
+		// since it may be caused by transient payload issues.
+		if statusCode == 400 {
+			if containsOverloadedError(responseBody) {
+				return ErrorTypeTemporary
+			}
 			return ErrorTypePermanent
 		}
 		return ErrorTypeTemporary
@@ -582,13 +620,14 @@ func classifyHTTPError(statusCode int, responseBody []byte) ErrorType {
 }
 
 // containsModelError checks if the response body contains model-related error messages.
+// Parses JSON error structure first, then falls back to keyword matching.
 func containsModelError(body []byte) bool {
 	if len(body) == 0 {
 		return false
 	}
 
-	bodyStr := string(body)
-	bodyLower := strings.ToLower(bodyStr)
+	// Try to parse structured JSON error response first
+	errorMessage := extractErrorField(body)
 
 	keywords := []string{
 		"model not found",
@@ -599,12 +638,65 @@ func containsModelError(body []byte) bool {
 	}
 
 	for _, keyword := range keywords {
-		if strings.Contains(bodyLower, keyword) {
+		if strings.Contains(errorMessage, keyword) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// containsOverloadedError checks if the response indicates a temporary overload condition.
+func containsOverloadedError(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+
+	errorMessage := extractErrorField(body)
+	overloadKeywords := []string{
+		"overloaded",
+		"temporarily unavailable",
+		"try again",
+		"capacity",
+	}
+
+	for _, keyword := range overloadKeywords {
+		if strings.Contains(errorMessage, keyword) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// extractErrorField attempts to parse a JSON error response and extract
+// the error message from standard API error structures. Returns a lowercased
+// string for case-insensitive matching. Falls back to full body if parsing fails.
+func extractErrorField(body []byte) string {
+	var structured struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &structured); err == nil && structured.Error.Message != "" {
+		return strings.ToLower(structured.Error.Message)
+	}
+
+	// Fallback: try flat error string
+	var flat struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &flat); err == nil && flat.Error != "" {
+		return strings.ToLower(flat.Error)
+	}
+
+	// Last resort: full body (limited to reduce noise)
+	s := string(body)
+	if len(s) > 500 {
+		s = s[:500]
+	}
+	return strings.ToLower(s)
 }
 
 // classifyError classifies a general error (non-HTTP).

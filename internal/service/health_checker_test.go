@@ -155,11 +155,7 @@ func TestHealthChecker_UpdateRequestStats(t *testing.T) {
 }
 
 func TestHealthChecker_GetHealthyEndpoints(t *testing.T) {
-	cfg := config.HealthCheckConfig{
-		Enabled:         true,
-		IntervalSeconds: 60,
-		TimeoutSeconds:  10,
-	}
+	cfg := defaultHealthCheckConfig()
 
 	hc := NewHealthChecker(cfg, zap.NewNop())
 
@@ -170,13 +166,59 @@ func TestHealthChecker_GetHealthyEndpoints(t *testing.T) {
 
 	// Initialize states
 	hc.mu.Lock()
-	hc.states["provider1/model1"] = &EndpointState{Name: "provider1/model1", Status: models.EndpointHealthy}
-	hc.states["provider2/model1"] = &EndpointState{Name: "provider2/model1", Status: models.EndpointUnhealthy}
-	hc.states["provider3/model1"] = &EndpointState{Name: "provider3/model1", Status: models.EndpointHealthy}
+	hc.states["provider1/model1"] = &EndpointState{Name: "provider1/model1", Status: models.EndpointHealthy, CircuitState: CircuitClosed}
+	hc.states["provider2/model1"] = &EndpointState{Name: "provider2/model1", Status: models.EndpointUnhealthy, CircuitState: CircuitClosed}
+	hc.states["provider3/model1"] = &EndpointState{Name: "provider3/model1", Status: models.EndpointHealthy, CircuitState: CircuitClosed}
 	hc.mu.Unlock()
 
 	healthy := hc.GetHealthyEndpoints(endpoints)
 	assert.Len(t, healthy, 2)
+}
+
+func TestHealthChecker_GetHealthyEndpoints_CircuitBreaker(t *testing.T) {
+	cfg := defaultHealthCheckConfig()
+
+	hc := NewHealthChecker(cfg, zap.NewNop())
+
+	ep1 := createHealthTestEndpoint("provider1", "model1")
+	ep2 := createHealthTestEndpoint("provider2", "model1")
+	ep3 := createHealthTestEndpoint("provider3", "model1")
+	endpoints := []*models.Endpoint{ep1, ep2, ep3}
+
+	now := time.Now()
+
+	hc.mu.Lock()
+	// provider1: healthy + circuit closed -> allowed
+	hc.states["provider1/model1"] = &EndpointState{
+		Name: "provider1/model1", Status: models.EndpointHealthy, CircuitState: CircuitClosed,
+	}
+	// provider2: healthy but circuit open (recently) -> blocked
+	hc.states["provider2/model1"] = &EndpointState{
+		Name: "provider2/model1", Status: models.EndpointHealthy, CircuitState: CircuitOpen,
+		CircuitOpenedAt: &now,
+	}
+	// provider3: healthy + circuit closed -> allowed
+	hc.states["provider3/model1"] = &EndpointState{
+		Name: "provider3/model1", Status: models.EndpointHealthy, CircuitState: CircuitClosed,
+	}
+	hc.mu.Unlock()
+
+	healthy := hc.GetHealthyEndpoints(endpoints)
+	assert.Len(t, healthy, 2, "endpoint with open circuit should be excluded")
+
+	// Now simulate cooldown passed -> should transition to half-open and allow
+	hc.mu.Lock()
+	pastCooldown := now.Add(-61 * time.Second)
+	hc.states["provider2/model1"].CircuitOpenedAt = &pastCooldown
+	hc.mu.Unlock()
+
+	healthy = hc.GetHealthyEndpoints(endpoints)
+	assert.Len(t, healthy, 3, "endpoint should be allowed after cooldown (half-open)")
+
+	// Verify the state transitioned to half-open
+	hc.mu.RLock()
+	assert.Equal(t, CircuitHalfOpen, hc.states["provider2/model1"].CircuitState)
+	hc.mu.RUnlock()
 }
 
 func TestHealthChecker_GetAllStates(t *testing.T) {
@@ -437,6 +479,12 @@ func TestClassifyHTTPError(t *testing.T) {
 			name:         "400 without model error",
 			statusCode:   400,
 			responseBody: []byte(`{"error": "invalid request"}`),
+			expected:     ErrorTypePermanent,
+		},
+		{
+			name:         "400 with overloaded error",
+			statusCode:   400,
+			responseBody: []byte(`{"error": {"message": "server is overloaded, try again later"}}`),
 			expected:     ErrorTypeTemporary,
 		},
 		{
