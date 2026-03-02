@@ -675,6 +675,25 @@ func (r *RequestLogRepositoryImpl) ListForAnalysis(ctx context.Context, startTim
 	return logs, rows.Err()
 }
 
+// CountForAnalysis returns the total count of logs matching analysis criteria.
+func (r *RequestLogRepositoryImpl) CountForAnalysis(ctx context.Context, startTime, endTime *time.Time) (int, error) {
+	var conditions []string
+	var params []any
+	conditions = append(conditions, "routing_method != ''")
+	if startTime != nil {
+		conditions = append(conditions, "created_at >= ?")
+		params = append(params, startTime.UTC().Format("2006-01-02 15:04:05"))
+	}
+	if endTime != nil {
+		conditions = append(conditions, "created_at <= ?")
+		params = append(params, endTime.UTC().Format("2006-01-02 15:04:05"))
+	}
+	query := "SELECT COUNT(*) FROM request_logs WHERE " + strings.Join(conditions, " AND ")
+	var count int
+	err := r.readDB.QueryRowContext(ctx, query, params...).Scan(&count)
+	return count, err
+}
+
 // EndpointModelStats contains historical per-endpoint-model statistics.
 type EndpointModelStats struct {
 	TotalRequests int64   `json:"total_requests"`

@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/user/llm-proxy-go/internal/models"
@@ -215,9 +216,57 @@ func formatSingleEntry(idx int, e *models.ExtractedLogEntry) string {
 	return b.String()
 }
 
+// extractAnalysisJSON extracts a JSON object from LLM response text.
+// Unlike extractJSON (designed for simple task_type responses), this handles
+// nested JSON objects with arrays and sub-objects.
+func extractAnalysisJSON(text string) string {
+	// 1. Try markdown code block (```json ... ```)
+	// Use greedy matching for the last ``` to handle nested code blocks
+	re := regexp.MustCompile("(?s)```(?:json)?\\s*\\n(\\{.+\\})\\s*\\n?```")
+	if m := re.FindStringSubmatch(text); len(m) > 1 {
+		return strings.TrimSpace(m[1])
+	}
+
+	// 2. Find the outermost JSON object using brace counting
+	start := strings.Index(text, "{")
+	if start == -1 {
+		return ""
+	}
+	depth := 0
+	inStr := false
+	escaped := false
+	for i := start; i < len(text); i++ {
+		if escaped {
+			escaped = false
+			continue
+		}
+		ch := text[i]
+		if ch == '\\' && inStr {
+			escaped = true
+			continue
+		}
+		if ch == '"' {
+			inStr = !inStr
+			continue
+		}
+		if inStr {
+			continue
+		}
+		if ch == '{' {
+			depth++
+		} else if ch == '}' {
+			depth--
+			if depth == 0 {
+				return text[start : i+1]
+			}
+		}
+	}
+	return ""
+}
+
 // ParseAnalysisResponse extracts the structured report from LLM response text.
 func ParseAnalysisResponse(text string) (*models.AnalysisReport, error) {
-	jsonStr := extractJSON(text)
+	jsonStr := extractAnalysisJSON(text)
 	if jsonStr == "" {
 		return nil, fmt.Errorf("no JSON found in analysis response")
 	}

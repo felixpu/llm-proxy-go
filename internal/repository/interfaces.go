@@ -87,6 +87,8 @@ type RequestLogRepository interface {
 	ListInaccurate(ctx context.Context, limit, offset int) ([]*models.RequestLog, int64, error)
 	// ListForAnalysis returns logs with request_content for routing analysis.
 	ListForAnalysis(ctx context.Context, startTime, endTime *time.Time, maxResults int) ([]*models.RequestLog, error)
+	// CountForAnalysis returns the total count of logs matching analysis criteria.
+	CountForAnalysis(ctx context.Context, startTime, endTime *time.Time) (int, error)
 	// GetEndpointModelStats returns historical stats grouped by endpoint_name/model_name.
 	GetEndpointModelStats(ctx context.Context) (map[string]*EndpointModelStats, error)
 }

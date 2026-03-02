@@ -109,18 +109,25 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 		t.Progress = 5
 	})
 
-	// Step 1: Collect logs
+	// Step 1: Count total logs in time range
+	actualTotal, err := a.logRepo.CountForAnalysis(ctx, req.StartTime, req.EndTime)
+	if err != nil {
+		a.failTask(taskID, fmt.Sprintf("count logs: %v", err))
+		return
+	}
+	if actualTotal == 0 {
+		a.failTask(taskID, "no logs found in the specified time range")
+		return
+	}
+
+	// Step 2: Collect logs (capped at 500)
 	maxResults := 500
 	logs, err := a.logRepo.ListForAnalysis(ctx, req.StartTime, req.EndTime, maxResults)
 	if err != nil {
 		a.failTask(taskID, fmt.Sprintf("collect logs: %v", err))
 		return
 	}
-	totalLogs := len(logs)
-	if totalLogs == 0 {
-		a.failTask(taskID, "no logs found in the specified time range")
-		return
-	}
+	totalLogs := actualTotal
 
 	a.updateTask(taskID, func(t *models.AnalysisTask) {
 		t.Stage = "extracting_messages"
@@ -168,6 +175,12 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 		return
 	}
 
+	a.logger.Debug("LLM analysis raw response",
+		zap.String("task_id", taskID),
+		zap.Int("response_length", len(llmResponse)),
+		zap.String("response_preview", truncateForLog(llmResponse, 500)),
+	)
+
 	a.updateTask(taskID, func(t *models.AnalysisTask) {
 		t.Stage = "parsing_result"
 		t.Progress = 85
@@ -178,6 +191,13 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 	if err != nil {
 		a.failTask(taskID, fmt.Sprintf("parse response: %v", err))
 		return
+	}
+
+	if report.Summary == nil && len(report.Issues) == 0 && report.Conclusion == "" {
+		a.logger.Warn("analysis report has empty content, LLM response may not match expected format",
+			zap.String("task_id", taskID),
+			zap.Int("response_length", len(llmResponse)),
+		)
 	}
 
 	report.ModelUsed = modelCfg.ModelName
@@ -268,4 +288,12 @@ func (a *RoutingAnalyzer) callAnalysisModel(ctx context.Context, userPrompt stri
 		Logger:     a.logger,
 		LogContext:  "analysis",
 	})
+}
+
+// truncateForLog truncates text to maxLen for logging purposes.
+func truncateForLog(text string, maxLen int) string {
+	if len(text) <= maxLen {
+		return text
+	}
+	return text[:maxLen] + "..."
 }
