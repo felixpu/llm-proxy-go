@@ -66,6 +66,7 @@ window.VuePages = window.VuePages || {};
         description: "",
         model_ids: [],
         custom_headers: "",
+        api_type: "auto",
       });
 
       // 角色选项
@@ -303,6 +304,7 @@ window.VuePages = window.VuePages || {};
         providerForm.description = "";
         providerForm.model_ids = [];
         providerForm.custom_headers = "";
+        providerForm.api_type = "auto";
         showProviderModal.value = true;
       }
 
@@ -326,6 +328,7 @@ window.VuePages = window.VuePages || {};
         providerForm.custom_headers = provider.custom_headers && Object.keys(provider.custom_headers).length > 0
           ? JSON.stringify(provider.custom_headers, null, 2)
           : "";
+        providerForm.api_type = provider.api_type || "auto";
         showProviderModal.value = true;
       }
 
@@ -349,6 +352,7 @@ window.VuePages = window.VuePages || {};
             enabled: providerForm.enabled,
             description: providerForm.description || null,
             model_ids: providerForm.model_ids,
+            api_type: providerForm.api_type || "auto",
           };
           if (providerForm.custom_headers) {
             try {
@@ -1068,6 +1072,21 @@ window.VuePages = window.VuePages || {};
                             </span>\
                         </label>\
                         <textarea v-model="providerForm.custom_headers" rows="4" placeholder=\'{"User-Agent": "claude-code/1.0", "X-Client-Type": "claude-code"}\' style="font-family: monospace; font-size: 13px;"></textarea>\
+                    </div>\
+                    <div class="form-group">\
+                        <label class="label-with-help">\
+                            API 类型\
+                            <span class="help-icon" data-tooltip="指定服务商使用的 API 格式：&#10;&#10;• auto（自动检测）- 首次使用时自动探测 API 类型&#10;• anthropic_messages - Anthropic Messages API (/v1/messages)&#10;• anthropic_responses - Anthropic Responses API (/v1/responses)&#10;• openai_chat - OpenAI Chat Completions API (/v1/chat/completions)&#10;&#10;推荐使用 auto，系统会自动选择正确的 API 格式。" data-tooltip-pos="bottom">\
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>\
+                            </span>\
+                        </label>\
+                        <select v-model="providerForm.api_type">\
+                            <option value="auto">auto（自动检测，推荐）</option>\
+                            <option value="anthropic_messages">anthropic_messages（Anthropic Messages API）</option>\
+                            <option value="anthropic_responses">anthropic_responses（Anthropic Responses API）</option>\
+                            <option value="openai_chat">openai_chat（OpenAI Chat Completions API）</option>\
+                        </select>\
+                        <small class="text-muted" style="display: block; margin-top: 4px;">选择 auto 让系统自动检测，或手动指定 API 类型以避免检测延迟</small>\
                     </div>\
                     <div class="form-group">\
                         <label class="checkbox-label">\

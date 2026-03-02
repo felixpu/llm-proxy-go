@@ -268,22 +268,46 @@ func (r *LLMRouter) callRoutingModel(
 ) (*models.RoutingDecision, error) {
 	userPrompt := BuildRoutingPrompt(systemContent, userMessage)
 
-	reqBody := map[string]any{
-		"model":       modelCfg.ModelName,
-		"max_tokens":  routingCfg.MaxTokens,
-		"temperature": routingCfg.Temperature,
-		"messages": []map[string]string{
-			{"role": "system", "content": RoutingSystemPrompt},
-			{"role": "user", "content": userPrompt},
-		},
+	// Determine API type
+	apiType := determineAPIType(modelCfg.APIType, modelCfg.ProviderAPIType)
+	if apiType == APITypeAuto {
+		// Auto-detect and use
+		detected, err := DetectAPIType(ctx, modelCfg.BaseURL, modelCfg.APIKey)
+		if err != nil {
+			return nil, fmt.Errorf("无法自动检测 API 类型。请在 Provider 配置中手动设置 api_type 字段为以下值之一：\n"+
+				"  - anthropic_messages (Anthropic Messages API, /v1/messages)\n"+
+				"  - anthropic_responses (Anthropic Responses API, /v1/responses)\n"+
+				"  - openai_chat (OpenAI Chat Completions API, /v1/chat/completions)\n"+
+				"原始错误: %w", err)
+		}
+		apiType = detected
+		r.logger.Info("Auto-detected API type for routing model",
+			zap.String("model", modelCfg.ModelName),
+			zap.String("api_type", string(apiType)))
+		// TODO: Cache detected type in database
 	}
 
-	bodyBytes, err := json.Marshal(reqBody)
+	// Get adapter
+	adapter := GetAdapter(apiType)
+
+	// Build messages
+	messages := []Message{
+		{Role: "system", Content: RoutingSystemPrompt},
+		{Role: "user", Content: userPrompt},
+	}
+
+	// Build request body using adapter
+	bodyBytes, err := adapter.BuildRequestBody(messages, RequestOptions{
+		Model:       modelCfg.ModelName,
+		MaxTokens:   routingCfg.MaxTokens,
+		Temperature: routingCfg.Temperature,
+		Stream:      false,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("marshal routing request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/v1/chat/completions", modelCfg.BaseURL)
+	url := fmt.Sprintf("%s%s", modelCfg.BaseURL, adapter.GetEndpoint())
 	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(routingCfg.TimeoutSeconds)*time.Second)
 	defer cancel()
 
@@ -293,7 +317,7 @@ func (r *LLMRouter) callRoutingModel(
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+modelCfg.APIKey)
+	adapter.SetAuthHeaders(httpReq, modelCfg.APIKey)
 
 	resp, err := r.client.Do(httpReq)
 	if err != nil {
@@ -307,27 +331,31 @@ func (r *LLMRouter) callRoutingModel(
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		// Check if it's an unsupported endpoint error
+		if resp.StatusCode == 400 {
+			var errResp struct {
+				Error struct {
+					Message string `json:"message"`
+					Type    string `json:"type"`
+				} `json:"error"`
+			}
+			json.Unmarshal(respBody, &errResp)
+			if strings.Contains(errResp.Error.Message, "not supported") ||
+				strings.Contains(errResp.Error.Message, "Unsupported") {
+				return nil, fmt.Errorf("API 端点不支持: %s。当前使用的 API 类型为 %s，请检查 Provider 配置中的 api_type 字段是否正确",
+					errResp.Error.Message, apiType)
+			}
+		}
 		return nil, fmt.Errorf("routing API returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	// Parse OpenAI-compatible response
-	var chatResp struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
+	// Parse response using adapter
+	parsedResp, err := adapter.ParseResponse(respBody)
+	if err != nil {
+		return nil, fmt.Errorf("parse routing response: %w", err)
 	}
 
-	if err := json.Unmarshal(respBody, &chatResp); err != nil {
-		return nil, fmt.Errorf("decode routing response: %w", err)
-	}
-
-	if len(chatResp.Choices) == 0 {
-		return nil, fmt.Errorf("empty routing response")
-	}
-
-	content := chatResp.Choices[0].Message.Content
+	content := parsedResp.Content
 	return parseRoutingDecision(content)
 }
 

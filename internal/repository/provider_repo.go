@@ -24,7 +24,7 @@ func NewProviderRepository(db *sql.DB) *SQLProviderRepository {
 func (r *SQLProviderRepository) FindByID(ctx context.Context, id int64) (*models.Provider, error) {
 	row := r.db.QueryRowContext(ctx,
 		`SELECT id, name, base_url, api_key, weight, max_concurrent,
-		        enabled, description, custom_headers, created_at, updated_at
+		        enabled, description, custom_headers, api_type, created_at, updated_at
 		 FROM providers WHERE id = ?`, id)
 	return scanProvider(row)
 }
@@ -32,7 +32,7 @@ func (r *SQLProviderRepository) FindByID(ctx context.Context, id int64) (*models
 func (r *SQLProviderRepository) FindByModelID(ctx context.Context, modelID int64) ([]*models.Provider, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT p.id, p.name, p.base_url, p.api_key, p.weight, p.max_concurrent,
-		        p.enabled, p.description, p.custom_headers, p.created_at, p.updated_at
+		        p.enabled, p.description, p.custom_headers, p.api_type, p.created_at, p.updated_at
 		 FROM providers p
 		 JOIN provider_models pm ON p.id = pm.provider_id
 		 WHERE pm.model_id = ? AND p.enabled = 1
@@ -47,7 +47,7 @@ func (r *SQLProviderRepository) FindByModelID(ctx context.Context, modelID int64
 func (r *SQLProviderRepository) FindAllEnabled(ctx context.Context) ([]*models.Provider, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, name, base_url, api_key, weight, max_concurrent,
-		        enabled, description, custom_headers, created_at, updated_at
+		        enabled, description, custom_headers, api_type, created_at, updated_at
 		 FROM providers WHERE enabled = 1 ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -61,12 +61,13 @@ func scanProvider(s scanner) (*models.Provider, error) {
 	var enabled int
 	var description sql.NullString
 	var customHeaders sql.NullString
+	var apiType sql.NullString
 	var createdAt, updatedAt sql.NullTime
 
 	err := s.Scan(
 		&p.ID, &p.Name, &p.BaseURL, &p.APIKey,
 		&p.Weight, &p.MaxConcurrent, &enabled,
-		&description, &customHeaders, &createdAt, &updatedAt,
+		&description, &customHeaders, &apiType, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -80,6 +81,11 @@ func scanProvider(s scanner) (*models.Provider, error) {
 		if err := json.Unmarshal([]byte(customHeaders.String), &p.CustomHeaders); err != nil {
 			return nil, fmt.Errorf("unmarshal custom_headers for provider %d: %w", p.ID, err)
 		}
+	}
+	if apiType.Valid {
+		p.APIType = apiType.String
+	} else {
+		p.APIType = "auto" // Default value
 	}
 	if createdAt.Valid {
 		p.CreatedAt = createdAt.Time
@@ -109,7 +115,7 @@ func scanProviders(rows *sql.Rows) ([]*models.Provider, error) {
 func (r *SQLProviderRepository) FindAll(ctx context.Context) ([]*models.Provider, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, name, base_url, api_key, weight, max_concurrent,
-		        enabled, description, custom_headers, created_at, updated_at
+		        enabled, description, custom_headers, api_type, created_at, updated_at
 		 FROM providers ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -132,12 +138,16 @@ func (r *SQLProviderRepository) Insert(ctx context.Context, p *models.Provider, 
 			customHeadersJSON = string(b)
 		}
 	}
+	apiType := p.APIType
+	if apiType == "" {
+		apiType = "auto" // Default value
+	}
 	result, err := tx.ExecContext(ctx,
 		`INSERT INTO providers (name, base_url, api_key, weight, max_concurrent,
-		        enabled, description, custom_headers, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		        enabled, description, custom_headers, api_type, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.Name, p.BaseURL, p.APIKey, p.Weight, p.MaxConcurrent,
-		boolToInt(p.Enabled), p.Description, customHeadersJSON, now, now)
+		boolToInt(p.Enabled), p.Description, customHeadersJSON, apiType, now, now)
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert provider: %w", err)
 	}

@@ -30,13 +30,13 @@ func (r *RoutingModelRepository) ListModels(ctx context.Context, providerID *int
 	if providerID != nil {
 		query = `SELECT id, provider_id, model_name, enabled, priority,
 			cost_per_mtok_input, cost_per_mtok_output, billing_multiplier,
-			description, created_at, updated_at
+			description, api_type, created_at, updated_at
 			FROM routing_models WHERE provider_id = ? ORDER BY priority DESC, id`
 		args = append(args, *providerID)
 	} else {
 		query = `SELECT id, provider_id, model_name, enabled, priority,
 			cost_per_mtok_input, cost_per_mtok_output, billing_multiplier,
-			description, created_at, updated_at
+			description, api_type, created_at, updated_at
 			FROM routing_models ORDER BY priority DESC, id`
 	}
 
@@ -62,7 +62,7 @@ func (r *RoutingModelRepository) GetModel(ctx context.Context, id int64) (*model
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, provider_id, model_name, enabled, priority,
 			cost_per_mtok_input, cost_per_mtok_output, billing_multiplier,
-			description, created_at, updated_at
+			description, api_type, created_at, updated_at
 		FROM routing_models WHERE id = ?
 	`, id)
 
@@ -86,16 +86,16 @@ func (r *RoutingModelRepository) GetModelWithProvider(ctx context.Context, id in
 	err := r.db.QueryRowContext(ctx, `
 		SELECT rm.id, rm.provider_id, rm.model_name, rm.enabled, rm.priority,
 			rm.cost_per_mtok_input, rm.cost_per_mtok_output, rm.billing_multiplier,
-			rm.description, rm.created_at, rm.updated_at,
-			p.base_url, p.api_key
+			rm.description, rm.api_type, rm.created_at, rm.updated_at,
+			p.base_url, p.api_key, p.api_type
 		FROM routing_models rm
 		JOIN providers p ON rm.provider_id = p.id
 		WHERE rm.id = ? AND rm.enabled = 1 AND p.enabled = 1
 	`, id).Scan(
 		&m.ID, &m.ProviderID, &m.ModelName, &enabled, &m.Priority,
 		&m.CostPerMtokInput, &m.CostPerMtokOutput, &m.BillingMultiplier,
-		&description, &createdAt, &updatedAt,
-		&m.BaseURL, &m.APIKey,
+		&description, &m.APIType, &createdAt, &updatedAt,
+		&m.BaseURL, &m.APIKey, &m.ProviderAPIType,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -125,16 +125,16 @@ func (r *RoutingModelRepository) GetModelWithProviderAny(ctx context.Context, id
 	err := r.db.QueryRowContext(ctx, `
 		SELECT rm.id, rm.provider_id, rm.model_name, rm.enabled, rm.priority,
 			rm.cost_per_mtok_input, rm.cost_per_mtok_output, rm.billing_multiplier,
-			rm.description, rm.created_at, rm.updated_at,
-			p.base_url, p.api_key
+			rm.description, rm.api_type, rm.created_at, rm.updated_at,
+			p.base_url, p.api_key, p.api_type
 		FROM routing_models rm
 		JOIN providers p ON rm.provider_id = p.id
 		WHERE rm.id = ?
 	`, id).Scan(
 		&m.ID, &m.ProviderID, &m.ModelName, &enabled, &m.Priority,
 		&m.CostPerMtokInput, &m.CostPerMtokOutput, &m.BillingMultiplier,
-		&description, &createdAt, &updatedAt,
-		&m.BaseURL, &m.APIKey,
+		&description, &m.APIType, &createdAt, &updatedAt,
+		&m.BaseURL, &m.APIKey, &m.ProviderAPIType,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -160,11 +160,11 @@ func (r *RoutingModelRepository) AddModel(ctx context.Context, m *models.Routing
 	result, err := r.db.ExecContext(ctx, `
 		INSERT INTO routing_models (provider_id, model_name, enabled, priority,
 			cost_per_mtok_input, cost_per_mtok_output, billing_multiplier,
-			description, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			description, api_type, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, m.ProviderID, m.ModelName, boolToInt(m.Enabled), m.Priority,
 		m.CostPerMtokInput, m.CostPerMtokOutput, m.BillingMultiplier,
-		m.Description, now, now)
+		m.Description, m.APIType, now, now)
 	if err != nil {
 		return 0, fmt.Errorf("failed to add routing model: %w", err)
 	}
@@ -217,12 +217,13 @@ func (r *RoutingModelRepository) scanModel(rows *sql.Rows) (*models.RoutingModel
 	var m models.RoutingModel
 	var enabled int
 	var description sql.NullString
+	var apiType sql.NullString
 	var createdAt, updatedAt string
 
 	err := rows.Scan(
 		&m.ID, &m.ProviderID, &m.ModelName, &enabled, &m.Priority,
 		&m.CostPerMtokInput, &m.CostPerMtokOutput, &m.BillingMultiplier,
-		&description, &createdAt, &updatedAt,
+		&description, &apiType, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan routing model: %w", err)
@@ -231,6 +232,9 @@ func (r *RoutingModelRepository) scanModel(rows *sql.Rows) (*models.RoutingModel
 	m.Enabled = enabled == 1
 	if description.Valid {
 		m.Description = description.String
+	}
+	if apiType.Valid {
+		m.APIType = apiType.String
 	}
 	m.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
 	m.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
@@ -242,12 +246,13 @@ func (r *RoutingModelRepository) scanModelRow(row *sql.Row) (*models.RoutingMode
 	var m models.RoutingModel
 	var enabled int
 	var description sql.NullString
+	var apiType sql.NullString
 	var createdAt, updatedAt string
 
 	err := row.Scan(
 		&m.ID, &m.ProviderID, &m.ModelName, &enabled, &m.Priority,
 		&m.CostPerMtokInput, &m.CostPerMtokOutput, &m.BillingMultiplier,
-		&description, &createdAt, &updatedAt,
+		&description, &apiType, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -256,6 +261,9 @@ func (r *RoutingModelRepository) scanModelRow(row *sql.Row) (*models.RoutingMode
 	m.Enabled = enabled == 1
 	if description.Valid {
 		m.Description = description.String
+	}
+	if apiType.Valid {
+		m.APIType = apiType.String
 	}
 	m.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
 	m.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)

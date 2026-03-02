@@ -31,6 +31,7 @@ type ProviderCreate struct {
 	Description   string            `json:"description"`
 	ModelIDs      []int64           `json:"model_ids"`
 	CustomHeaders map[string]string `json:"custom_headers"`
+	APIType       string            `json:"api_type"`
 }
 
 // ProviderUpdate represents a provider update request.
@@ -44,6 +45,7 @@ type ProviderUpdate struct {
 	Description   *string            `json:"description"`
 	ModelIDs      []int64            `json:"model_ids"`
 	CustomHeaders *map[string]string `json:"custom_headers"`
+	APIType       *string            `json:"api_type"`
 }
 
 // DetectModelsRequest represents a model detection request.
@@ -145,6 +147,23 @@ func (h *ProviderHandler) CreateProvider(c *gin.Context) {
 		errorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	// Validate api_type if provided
+	if req.APIType != "" {
+		validTypes := map[string]bool{
+			"auto":                 true,
+			"anthropic_messages":   true,
+			"anthropic_responses":  true,
+			"openai_chat":          true,
+		}
+		if !validTypes[req.APIType] {
+			errorResponse(c, http.StatusBadRequest, "invalid api_type: must be one of 'auto', 'anthropic_messages', 'anthropic_responses', 'openai_chat'")
+			return
+		}
+	} else {
+		req.APIType = "auto" // Default to auto
+	}
+
 	p := &models.Provider{
 		Name:          req.Name,
 		BaseURL:       req.BaseURL,
@@ -154,6 +173,7 @@ func (h *ProviderHandler) CreateProvider(c *gin.Context) {
 		Enabled:       req.Enabled,
 		Description:   req.Description,
 		CustomHeaders: req.CustomHeaders,
+		APIType:       req.APIType,
 	}
 	id, err := h.providerRepo.Insert(c.Request.Context(), p, req.ModelIDs)
 	if err != nil {
@@ -176,6 +196,21 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 		errorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	// Validate api_type if provided
+	if req.APIType != nil {
+		validTypes := map[string]bool{
+			"auto":                 true,
+			"anthropic_messages":   true,
+			"anthropic_responses":  true,
+			"openai_chat":          true,
+		}
+		if !validTypes[*req.APIType] {
+			errorResponse(c, http.StatusBadRequest, "invalid api_type: must be one of 'auto', 'anthropic_messages', 'anthropic_responses', 'openai_chat'")
+			return
+		}
+	}
+
 	updates := make(map[string]any)
 	if req.Name != nil { updates["name"] = *req.Name }
 	if req.BaseURL != nil { updates["base_url"] = *req.BaseURL }
@@ -185,6 +220,7 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 	if req.Enabled != nil { updates["enabled"] = *req.Enabled }
 	if req.Description != nil { updates["description"] = *req.Description }
 	if req.CustomHeaders != nil { updates["custom_headers"] = *req.CustomHeaders }
+	if req.APIType != nil { updates["api_type"] = *req.APIType }
 	if err := h.providerRepo.Update(c.Request.Context(), id, updates, req.ModelIDs); err != nil {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
