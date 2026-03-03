@@ -624,7 +624,12 @@ func (r *RequestLogRepositoryImpl) ListForAnalysis(ctx context.Context, startTim
 	var conditions []string
 	var params []any
 
-	conditions = append(conditions, "request_logs.routing_method != ''")
+	// Include all logs, not just those with routing_method
+	// This allows analysis of:
+	// 1. Logs with routing rules (routing_method = 'rule' or 'llm')
+	// 2. Logs with direct model selection (routing_method = '' or NULL)
+	// The latter helps identify patterns that should have routing rules
+
 	if startTime != nil {
 		conditions = append(conditions, "request_logs.created_at >= ?")
 		params = append(params, startTime.UTC().Format("2006-01-02 15:04:05"))
@@ -634,7 +639,10 @@ func (r *RequestLogRepositoryImpl) ListForAnalysis(ctx context.Context, startTim
 		params = append(params, endTime.UTC().Format("2006-01-02 15:04:05"))
 	}
 
-	whereSQL := strings.Join(conditions, " AND ")
+	whereSQL := "1=1"
+	if len(conditions) > 0 {
+		whereSQL = strings.Join(conditions, " AND ")
+	}
 	params = append(params, maxResults)
 
 	query := fmt.Sprintf(`
@@ -648,9 +656,12 @@ func (r *RequestLogRepositoryImpl) ListForAnalysis(ctx context.Context, startTim
 			COALESCE(request_logs.cache_creation_input_tokens, 0),
 			COALESCE(request_logs.cache_read_input_tokens, 0),
 			request_logs.message_preview, request_logs.request_content, '' as response_content,
-			request_logs.routing_method, request_logs.routing_reason,
-			request_logs.matched_rule_id, request_logs.matched_rule_name, request_logs.all_matches,
-			request_logs.is_inaccurate
+			COALESCE(request_logs.routing_method, '') as routing_method,
+			COALESCE(request_logs.routing_reason, '') as routing_reason,
+			request_logs.matched_rule_id,
+			COALESCE(request_logs.matched_rule_name, '') as matched_rule_name,
+			COALESCE(request_logs.all_matches, '') as all_matches,
+			COALESCE(request_logs.is_inaccurate, 0) as is_inaccurate
 		FROM request_logs
 		LEFT JOIN users u ON request_logs.user_id = u.id
 		WHERE %s
@@ -679,7 +690,7 @@ func (r *RequestLogRepositoryImpl) ListForAnalysis(ctx context.Context, startTim
 func (r *RequestLogRepositoryImpl) CountForAnalysis(ctx context.Context, startTime, endTime *time.Time) (int, error) {
 	var conditions []string
 	var params []any
-	conditions = append(conditions, "routing_method != ''")
+
 	if startTime != nil {
 		conditions = append(conditions, "created_at >= ?")
 		params = append(params, startTime.UTC().Format("2006-01-02 15:04:05"))
@@ -688,7 +699,12 @@ func (r *RequestLogRepositoryImpl) CountForAnalysis(ctx context.Context, startTi
 		conditions = append(conditions, "created_at <= ?")
 		params = append(params, endTime.UTC().Format("2006-01-02 15:04:05"))
 	}
-	query := "SELECT COUNT(*) FROM request_logs WHERE " + strings.Join(conditions, " AND ")
+
+	whereClause := "1=1"
+	if len(conditions) > 0 {
+		whereClause = strings.Join(conditions, " AND ")
+	}
+	query := "SELECT COUNT(*) FROM request_logs WHERE " + whereClause
 	var count int
 	err := r.readDB.QueryRowContext(ctx, query, params...).Scan(&count)
 	return count, err
