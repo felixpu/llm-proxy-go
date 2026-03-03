@@ -67,6 +67,11 @@ func (a *RoutingAnalyzer) StartAnalysis(ctx context.Context, req *models.Analysi
 		return "", fmt.Errorf("model_id %d not found or provider missing", req.ModelID)
 	}
 
+	// Validate model configuration
+	if err := validateModelConfig(modelCfg); err != nil {
+		return "", fmt.Errorf("invalid model configuration: %w", err)
+	}
+
 	taskID := fmt.Sprintf("analysis-%d", time.Now().UnixMilli())
 	task := &models.AnalysisTask{
 		ID:        taskID,
@@ -120,8 +125,13 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 		return
 	}
 
-	// Step 2: Collect logs (capped at 500)
-	maxResults := 500
+	// Step 2: Collect logs with intelligent limit based on total count
+	config := DefaultAnalysisConfig()
+	maxResults := config.MaxLogsPerBatch
+	if actualTotal > 1000 {
+		// For large datasets, collect more logs for better sampling
+		maxResults = 1000
+	}
 	logs, err := a.logRepo.ListForAnalysis(ctx, req.StartTime, req.EndTime, maxResults)
 	if err != nil {
 		a.failTask(taskID, fmt.Sprintf("collect logs: %v", err))
@@ -134,10 +144,10 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 		t.Progress = 15
 	})
 
-	// Step 2: Smart sampling — keep all if <=200, otherwise sample
-	sampled := a.sampleLogs(logs, 200)
+	// Step 3: Smart sampling — prioritize inaccurate logs
+	sampled := a.sampleLogs(logs, config.MaxLogsPerBatch)
 
-	// Step 3: Extract messages
+	// Step 4: Extract messages
 	entries := make([]*models.ExtractedLogEntry, 0, len(sampled))
 	for _, log := range sampled {
 		entries = append(entries, a.extractor.ExtractFromLog(log))
@@ -148,7 +158,7 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 		t.Progress = 25
 	})
 
-	// Step 4: Load rules
+	// Step 5: Load rules
 	rules, err := a.ruleRepo.ListRules(ctx, false)
 	if err != nil {
 		a.failTask(taskID, fmt.Sprintf("load rules: %v", err))
@@ -156,47 +166,34 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 	}
 
 	a.updateTask(taskID, func(t *models.AnalysisTask) {
-		t.Stage = "building_prompt"
+		t.Stage = "analyzing"
 		t.Progress = 35
 	})
 
-	// Step 5: Build prompt
-	userPrompt := BuildAnalysisPrompt(rules, entries, totalLogs, len(entries))
-
-	a.updateTask(taskID, func(t *models.AnalysisTask) {
-		t.Stage = "calling_llm"
-		t.Progress = 45
-	})
-
-	// Step 6: Call LLM
-	llmResponse, err := a.callAnalysisModel(ctx, userPrompt, modelCfg)
-	if err != nil {
-		a.failTask(taskID, fmt.Sprintf("LLM call: %v", err))
-		return
+	// Step 6: Choose analysis strategy based on data volume
+	var report *models.AnalysisReport
+	if len(entries) <= 200 {
+		// Single-pass analysis for small datasets
+		report, err = a.runSinglePassAnalysis(ctx, taskID, rules, entries, totalLogs, modelCfg, config)
+	} else {
+		// Batched analysis for large datasets
+		report, err = a.runBatchedAnalysis(ctx, taskID, rules, entries, totalLogs, modelCfg, config)
 	}
 
-	a.logger.Debug("LLM analysis raw response",
-		zap.String("task_id", taskID),
-		zap.Int("response_length", len(llmResponse)),
-		zap.String("response_preview", truncateForLog(llmResponse, 500)),
-	)
+	if err != nil {
+		a.failTask(taskID, fmt.Sprintf("analysis failed: %v", err))
+		return
+	}
 
 	a.updateTask(taskID, func(t *models.AnalysisTask) {
 		t.Stage = "parsing_result"
 		t.Progress = 85
 	})
 
-	// Step 7: Parse response
-	report, err := ParseAnalysisResponse(llmResponse)
-	if err != nil {
-		a.failTask(taskID, fmt.Sprintf("parse response: %v", err))
-		return
-	}
-
 	if report.Summary == nil && len(report.Issues) == 0 && report.Conclusion == "" {
 		a.logger.Warn("analysis report has empty content, LLM response may not match expected format",
 			zap.String("task_id", taskID),
-			zap.Int("response_length", len(llmResponse)),
+			zap.Int("analyzed_logs", len(entries)),
 		)
 	}
 
@@ -270,6 +267,42 @@ func (a *RoutingAnalyzer) sampleLogs(logs []*models.RequestLog, maxSamples int) 
 	return result
 }
 
+// validateModelConfig validates that the model configuration has all required fields.
+func validateModelConfig(cfg *models.RoutingModelWithProvider) error {
+	if cfg.ModelName == "" {
+		return fmt.Errorf("model_name is empty")
+	}
+	if cfg.BaseURL == "" {
+		return fmt.Errorf("base_url is empty")
+	}
+	if cfg.APIKey == "" {
+		return fmt.Errorf("api_key is empty")
+	}
+
+	// Validate api_type
+	validTypes := []string{"anthropic_messages", "anthropic_responses", "openai_chat"}
+	apiType := cfg.APIType
+	if apiType == "" {
+		apiType = cfg.ProviderAPIType
+	}
+	if apiType == "" || apiType == "auto" {
+		return fmt.Errorf("api_type must be explicitly set (not 'auto') for analysis. Supported types: %v", validTypes)
+	}
+
+	isValid := false
+	for _, t := range validTypes {
+		if apiType == t {
+			isValid = true
+			break
+		}
+	}
+	if !isValid {
+		return fmt.Errorf("unsupported api_type '%s'. Supported types: %v", apiType, validTypes)
+	}
+
+	return nil
+}
+
 // callAnalysisModel calls the LLM via the appropriate API adapter.
 func (a *RoutingAnalyzer) callAnalysisModel(ctx context.Context, userPrompt string, modelCfg *models.RoutingModelWithProvider) (string, error) {
 	return CallLLMModel(ctx, LLMCallParams{
@@ -280,7 +313,7 @@ func (a *RoutingAnalyzer) callAnalysisModel(ctx context.Context, userPrompt stri
 		},
 		Options: RequestOptions{
 			Model:       modelCfg.ModelName,
-			MaxTokens:   4096,
+			MaxTokens:   8192,
 			Temperature: 0.1,
 			Stream:      false,
 		},
@@ -288,12 +321,4 @@ func (a *RoutingAnalyzer) callAnalysisModel(ctx context.Context, userPrompt stri
 		Logger:     a.logger,
 		LogContext:  "analysis",
 	})
-}
-
-// truncateForLog truncates text to maxLen for logging purposes.
-func truncateForLog(text string, maxLen int) string {
-	if len(text) <= maxLen {
-		return text
-	}
-	return text[:maxLen] + "..."
 }

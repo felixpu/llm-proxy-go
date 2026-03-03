@@ -12,6 +12,10 @@ import (
 // AnalysisSystemPrompt defines the LLM's role for routing analysis.
 const AnalysisSystemPrompt = `你是一个路由规则分析专家。分析请求日志数据，识别路由规则的问题并提供优化建议。
 
+**重要：你必须只返回有效的 JSON 格式，不要包含任何解释性文本、Markdown 标记或其他内容。**
+
+你的响应必须是一个纯 JSON 对象，直接以 { 开头，以 } 结尾。不要使用 Markdown 代码块（三个反引号加 json），不要添加任何前缀或后缀文本。
+
 ## 你的任务
 
 根据提供的路由规则和请求日志数据，分析以下方面：
@@ -19,6 +23,19 @@ const AnalysisSystemPrompt = `你是一个路由规则分析专家。分析请�
 2. 规则优先级是否合理（priority_conflict）
 3. 是否有冗余规则（redundant_rule）
 4. 是否有规则过于宽泛（overly_broad）
+5. **直接指定模型的请求是否应该添加路由规则**（missing_rule）
+
+## 路由方式说明
+
+日志中的 routing_method 字段表示路由方式：
+- **rule**: 通过规则匹配路由（有 matched_rule_name）
+- **llm**: 规则未匹配，LLM 语义路由回退
+- **空值**: 用户直接指定模型名称，未使用路由系统
+
+**重要**：routing_method 为空的请求也需要分析！这些请求可能：
+- 存在明显的模式，应该添加路由规则
+- 频繁使用某个模型，提示需要优化默认路由
+- 绕过了路由系统，可能导致成本或性能问题
 
 ## 问题类型
 
@@ -27,6 +44,7 @@ const AnalysisSystemPrompt = `你是一个路由规则分析专家。分析请�
 - **priority_conflict**: 多条规则匹配同一请求，优先级设置不当
 - **redundant_rule**: 两条规则功能重叠，可以合并
 - **overly_broad**: 规则匹配范围过大，误匹配率高
+- **missing_rule**: 大量直接指定模型的请求存在明显模式，应添加规则
 
 ## 严重程度
 
@@ -43,9 +61,17 @@ const AnalysisSystemPrompt = `你是一个路由规则分析专家。分析请�
 
 注意：is_builtin=true 的内置规则不可直接修改或删除，系统会自动创建同名自定义规则覆盖。
 
+## 建议优先级
+
+每条建议必须包含优先级，帮助用户决定处理顺序：
+- **high**: 紧急优化，直接影响成本或用户体验（如误匹配导致成本浪费 >20%）
+- **medium**: 重要优化，可改善路由准确性（如 LLM 回退率 >30%）
+- **low**: 可选优化，锦上添花（如规则可读性改进）
+
 ## 输出格式
 
-返回有效的 JSON：
+**你的响应必须是且只能是以下 JSON 对象，不要有任何其他文本：**
+
 {
   "summary": {
     "rule_match_rate": 0.75,
@@ -66,8 +92,10 @@ const AnalysisSystemPrompt = `你是一个路由规则分析专家。分析请�
     {
       "action": "modify|add|delete|reorder",
       "rule_name": "rule_name_here",
-      "description": "修改建议",
-      "details": "具体修改内容",
+      "priority": "high|medium|low",
+      "reason": "为什么需要这个优化（业务价值、影响范围）",
+      "description": "具体怎么做（操作步骤）",
+      "details": "补充说明（可选）",
       "rule_spec": {
         "keywords": ["关键词1", "关键词2"],
         "pattern": "正则表达式（可选）",
@@ -79,7 +107,17 @@ const AnalysisSystemPrompt = `你是一个路由规则分析专家。分析请�
     }
   ],
   "conclusion": "总结分析结果和主要建议"
-}`
+}
+
+**关键要求：**
+1. 顶层 key 必须且只能是 summary、issues、recommendations、conclusion 这四个
+2. 不要嵌套在其他 key 下（如 "analysis"、"result"、"data" 等）
+3. 不要使用 Markdown 代码块（三个反引号加 json）
+4. 不要添加任何解释性文本
+5. 直接返回有效的 JSON 对象
+6. **CRITICAL**: recommendations 数组必须存在，不能为 null。如果没有建议，返回空数组 []
+7. **CRITICAL**: 对于每个识别的问题（issues），必须提供至少一条对应的优化建议（recommendations）
+8. **CRITICAL**: 建议类型为 add 或 modify 时，必须提供完整的 rule_spec 对象（包含 keywords、task_type、priority、enabled 字段）`
 
 // AnalysisUserPromptTemplate is the user prompt template for analysis.
 const AnalysisUserPromptTemplate = `请分析以下路由规则和请求日志数据：
@@ -94,6 +132,7 @@ const AnalysisUserPromptTemplate = `请分析以下路由规则和请求日志�
 - 分析日志数: %d
 - 规则匹配数: %d（%.1f%%）
 - LLM 回退数: %d（%.1f%%）
+- 直接指定模型数: %d（%.1f%%）
 - 标记不准确数: %d（%.1f%%）
 
 ## 请求日志数据
@@ -112,13 +151,15 @@ func BuildAnalysisPrompt(
 	rulesText := formatRulesForPrompt(rules)
 
 	// Compute stats
-	var ruleMatch, llmFallback, inaccurate int
+	var ruleMatch, llmFallback, directModel, inaccurate int
 	for _, e := range entries {
 		switch e.RoutingMethod {
 		case "rule":
 			ruleMatch++
 		case "llm":
 			llmFallback++
+		case "":
+			directModel++
 		}
 		if e.IsInaccurate {
 			inaccurate++
@@ -140,6 +181,7 @@ func BuildAnalysisPrompt(
 		totalLogs, analyzedLogs,
 		ruleMatch, pct(ruleMatch),
 		llmFallback, pct(llmFallback),
+		directModel, pct(directModel),
 		inaccurate, pct(inaccurate),
 		logsText,
 	)
@@ -182,7 +224,7 @@ func formatRulesForPrompt(rules []*models.RoutingRule) string {
 
 func formatLogsForPrompt(entries []*models.ExtractedLogEntry) string {
 	var b strings.Builder
-	maxBytes := 15000 // Keep prompt within reasonable size
+	maxBytes := 60000 // Keep prompt within reasonable size
 	for i, e := range entries {
 		line := formatSingleEntry(i+1, e)
 		if b.Len()+len(line) > maxBytes {
@@ -220,14 +262,24 @@ func formatSingleEntry(idx int, e *models.ExtractedLogEntry) string {
 // Unlike extractJSON (designed for simple task_type responses), this handles
 // nested JSON objects with arrays and sub-objects.
 func extractAnalysisJSON(text string) string {
-	// 1. Try markdown code block (```json ... ```)
+	text = strings.TrimSpace(text)
+
+	// Strategy 1: Direct parse - check if entire response is valid JSON
+	if json.Valid([]byte(text)) && strings.HasPrefix(text, "{") {
+		return text
+	}
+
+	// Strategy 2: Try markdown code block (```json ... ```)
 	// Use greedy matching for the last ``` to handle nested code blocks
 	re := regexp.MustCompile("(?s)```(?:json)?\\s*\\n(\\{.+\\})\\s*\\n?```")
 	if m := re.FindStringSubmatch(text); len(m) > 1 {
-		return strings.TrimSpace(m[1])
+		extracted := strings.TrimSpace(m[1])
+		if json.Valid([]byte(extracted)) {
+			return extracted
+		}
 	}
 
-	// 2. Find the outermost JSON object using brace counting
+	// Strategy 3: Find the outermost JSON object using brace counting
 	start := strings.Index(text, "{")
 	if start == -1 {
 		return ""
@@ -257,7 +309,11 @@ func extractAnalysisJSON(text string) string {
 		} else if ch == '}' {
 			depth--
 			if depth == 0 {
-				return text[start : i+1]
+				extracted := text[start : i+1]
+				if json.Valid([]byte(extracted)) {
+					return extracted
+				}
+				return ""
 			}
 		}
 	}
@@ -268,9 +324,10 @@ func extractAnalysisJSON(text string) string {
 func ParseAnalysisResponse(text string) (*models.AnalysisReport, error) {
 	jsonStr := extractAnalysisJSON(text)
 	if jsonStr == "" {
-		return nil, fmt.Errorf("no JSON found in analysis response")
+		return nil, fmt.Errorf("no JSON found in analysis response (response length: %d)", len(text))
 	}
 
+	// Try parsing the expected format first
 	var raw struct {
 		Summary         *models.AnalysisSummary          `json:"summary"`
 		Issues          []models.AnalysisIssue           `json:"issues"`
@@ -278,7 +335,13 @@ func ParseAnalysisResponse(text string) (*models.AnalysisReport, error) {
 		Conclusion      string                           `json:"conclusion"`
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
-		return nil, fmt.Errorf("parse analysis JSON: %w", err)
+		return nil, fmt.Errorf("parse analysis JSON: %w (JSON preview: %s)", err, truncateForLog(jsonStr, 200))
+	}
+
+	// If all fields are empty, the LLM may have wrapped output in a nested key.
+	// Try common wrapper keys: "analysis", "result", "report", "response", "data".
+	if raw.Summary == nil && len(raw.Issues) == 0 && len(raw.Recommendations) == 0 && raw.Conclusion == "" {
+		raw = tryUnwrapNestedJSON(jsonStr, raw)
 	}
 
 	// Ensure slices are never nil so JSON serialization produces [] instead of null.
@@ -297,4 +360,53 @@ func ParseAnalysisResponse(text string) (*models.AnalysisReport, error) {
 		Recommendations: recs,
 		Conclusion:      raw.Conclusion,
 	}, nil
+}
+
+// truncateForLog truncates a string for logging purposes.
+func truncateForLog(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+// tryUnwrapNestedJSON attempts to find the expected fields inside a nested wrapper key.
+func tryUnwrapNestedJSON(jsonStr string, fallback struct {
+	Summary         *models.AnalysisSummary          `json:"summary"`
+	Issues          []models.AnalysisIssue           `json:"issues"`
+	Recommendations []models.AnalysisRecommendation  `json:"recommendations"`
+	Conclusion      string                           `json:"conclusion"`
+}) struct {
+	Summary         *models.AnalysisSummary          `json:"summary"`
+	Issues          []models.AnalysisIssue           `json:"issues"`
+	Recommendations []models.AnalysisRecommendation  `json:"recommendations"`
+	Conclusion      string                           `json:"conclusion"`
+} {
+	// Parse into a generic map to inspect top-level keys
+	var generic map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(jsonStr), &generic); err != nil {
+		return fallback
+	}
+
+	// Common wrapper keys that LLMs may use
+	wrapperKeys := []string{"analysis", "result", "report", "response", "data"}
+	for _, key := range wrapperKeys {
+		inner, ok := generic[key]
+		if !ok {
+			continue
+		}
+		var unwrapped struct {
+			Summary         *models.AnalysisSummary          `json:"summary"`
+			Issues          []models.AnalysisIssue           `json:"issues"`
+			Recommendations []models.AnalysisRecommendation  `json:"recommendations"`
+			Conclusion      string                           `json:"conclusion"`
+		}
+		if err := json.Unmarshal(inner, &unwrapped); err == nil {
+			if unwrapped.Summary != nil || len(unwrapped.Issues) > 0 || len(unwrapped.Recommendations) > 0 || unwrapped.Conclusion != "" {
+				return unwrapped
+			}
+		}
+	}
+
+	return fallback
 }

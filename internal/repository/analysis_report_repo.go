@@ -32,6 +32,7 @@ type reportJSON struct {
 	Issues          []models.AnalysisIssue           `json:"issues"`
 	Recommendations []models.AnalysisRecommendation  `json:"recommendations"`
 	Conclusion      string                           `json:"conclusion"`
+	Warnings        []string                         `json:"warnings,omitempty"`
 }
 
 // Save persists an analysis report and returns its ID.
@@ -41,6 +42,7 @@ func (r *AnalysisReportRepository) Save(ctx context.Context, report *models.Anal
 		Issues:          report.Issues,
 		Recommendations: report.Recommendations,
 		Conclusion:      report.Conclusion,
+		Warnings:        report.Warnings,
 	}
 	reportBytes, err := json.Marshal(rj)
 	if err != nil {
@@ -157,6 +159,7 @@ func (r *AnalysisReportRepository) scanReport(rows *sql.Rows) (*models.AnalysisR
 		rpt.Issues = rj.Issues
 		rpt.Recommendations = rj.Recommendations
 		rpt.Conclusion = rj.Conclusion
+		rpt.Warnings = rj.Warnings
 	}
 
 	return &rpt, nil
