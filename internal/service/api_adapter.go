@@ -169,25 +169,21 @@ func tryEndpoint(ctx context.Context, baseURL, apiKey string, apiType APIType) b
 	// Limit response body size to prevent unbounded reads from malicious servers
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxDetectResponseBytes))
 
-	// If we get a 400 with "Unsupported" or "not supported", this endpoint is not supported
-	if resp.StatusCode == 400 {
+	switch resp.StatusCode {
+	case 200, 401, 403:
+		// 200: Success, 401/403: Auth failed but endpoint exists
+		return true
+	case 404:
+		// Endpoint does not exist
+		return false
+	case 400:
+		// Check if it's an "unsupported endpoint" error
 		bodyStr := string(body)
-		if strings.Contains(bodyStr, "Unsupported") || strings.Contains(bodyStr, "not supported") {
-			return false
-		}
+		return !strings.Contains(bodyStr, "Unsupported") && !strings.Contains(bodyStr, "not supported")
+	default:
+		// For 5xx or other errors, assume endpoint is not supported
+		return false
 	}
-
-	// If we get 401/403, the endpoint exists but auth failed (which is fine for detection)
-	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		return true
-	}
-
-	// If we get 200 or other non-400 errors, assume the endpoint is supported
-	if resp.StatusCode != 400 {
-		return true
-	}
-
-	return false
 }
 
 // baseAnthropicAdapter contains shared logic for all Anthropic API adapters.
@@ -324,6 +320,17 @@ func CallLLMModel(ctx context.Context, params LLMCallParams) (string, error) {
 	}
 
 	url := fmt.Sprintf("%s%s", modelCfg.BaseURL, adapter.GetEndpoint())
+
+	// Debug logging for analysis calls
+	if params.Logger != nil && params.LogContext == "analysis" {
+		params.Logger.Info("Calling LLM for analysis",
+			zap.String("url", url),
+			zap.String("api_type", string(apiType)),
+			zap.String("model", modelCfg.ModelName),
+			zap.String("base_url", modelCfg.BaseURL),
+			zap.String("endpoint", adapter.GetEndpoint()))
+	}
+
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return "", fmt.Errorf("create %s request: %w", params.LogContext, err)
@@ -343,6 +350,13 @@ func CallLLMModel(ctx context.Context, params LLMCallParams) (string, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		// Check if it's a 404 endpoint not found error
+		if resp.StatusCode == 404 {
+			return "", fmt.Errorf("API 端点不存在 (404)。当前使用的 API 类型为 %s，端点为 %s。"+
+				"请检查 Provider 配置中的 api_type 字段是否正确。支持的类型："+
+				"anthropic_messages (/v1/messages), anthropic_responses (/v1/responses), openai_chat (/v1/chat/completions)",
+				apiType, adapter.GetEndpoint())
+		}
 		// Check if it's an unsupported endpoint error
 		if resp.StatusCode == 400 {
 			var errResp struct {
