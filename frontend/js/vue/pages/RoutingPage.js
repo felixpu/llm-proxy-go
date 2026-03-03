@@ -1233,13 +1233,45 @@ window.VuePages = window.VuePages || {};
         return null;
       }
 
+      function findRuleByNameFuzzy(name) {
+        var exact = findRuleByName(name);
+        if (exact) return exact;
+        // Normalize: lowercase, trim, collapse whitespace, remove underscores/hyphens
+        var normalize = function (s) {
+          return (s || "")
+            .toLowerCase()
+            .trim()
+            .replace(/[\s_-]+/g, "");
+        };
+        var normalized = normalize(name);
+        var custom = customRules.value.find(function (r) {
+          return normalize(r.name) === normalized;
+        });
+        if (custom) return { rule: custom, source: "custom" };
+        var builtin = builtinRules.value.find(function (r) {
+          return normalize(r.name) === normalized;
+        });
+        if (builtin) return { rule: builtin, source: "builtin" };
+        return null;
+      }
+
       function isRecActionable(rec) {
         if (rec.action === "add") return !!rec.rule_spec;
         if (rec.action === "delete") {
-          var found = findRuleByName(rec.rule_name);
+          var found = findRuleByNameFuzzy(rec.rule_name);
           return found && found.source === "custom";
         }
-        return !!rec.rule_spec && !!findRuleByName(rec.rule_name);
+        // For modify: only need rule_spec (will create new rule if not found)
+        if (rec.action === "modify") return !!rec.rule_spec;
+        // For reorder: need rule_spec with priority and matching rule
+        if (rec.action === "reorder") {
+          return (
+            !!rec.rule_spec &&
+            rec.rule_spec.priority != null &&
+            !!findRuleByNameFuzzy(rec.rule_name)
+          );
+        }
+        return !!rec.rule_spec && !!findRuleByNameFuzzy(rec.rule_name);
       }
 
       function applyRuleSpec(spec) {
@@ -1269,10 +1301,15 @@ window.VuePages = window.VuePages || {};
             break;
 
           case "modify":
-            found = findRuleByName(rec.rule_name);
+            found = findRuleByNameFuzzy(rec.rule_name);
             if (!found) {
-              toastStore.error("未找到规则: " + rec.rule_name);
-              return;
+              // Rule not found - create new rule with the spec
+              showRuleModal(null);
+              ruleForm.name = rec.rule_name || "";
+              ruleForm.description = rec.description || "";
+              applyRuleSpec(rec.rule_spec);
+              toastStore.info("规则未找到，将创建新规则");
+              break;
             }
             if (found.source === "custom") {
               showRuleModal(found.rule);
@@ -1294,7 +1331,7 @@ window.VuePages = window.VuePages || {};
             break;
 
           case "delete":
-            found = findRuleByName(rec.rule_name);
+            found = findRuleByNameFuzzy(rec.rule_name);
             if (!found) {
               toastStore.error("未找到规则: " + rec.rule_name);
               return;
@@ -1307,7 +1344,7 @@ window.VuePages = window.VuePages || {};
             break;
 
           case "reorder":
-            found = findRuleByName(rec.rule_name);
+            found = findRuleByNameFuzzy(rec.rule_name);
             if (!found) {
               toastStore.error("未找到规则: " + rec.rule_name);
               return;
@@ -1483,6 +1520,7 @@ window.VuePages = window.VuePages || {};
         getSeverityLabel: getSeverityLabel,
         formatReportDate: formatReportDate,
         findRuleByName: findRuleByName,
+        findRuleByNameFuzzy: findRuleByNameFuzzy,
         isRecActionable: isRecActionable,
         applyRecommendation: applyRecommendation,
       };
@@ -2148,7 +2186,15 @@ window.VuePages = window.VuePages || {};
                         </div>\
                         <div class="analysis-report-meta">\
                             <span v-show="currentReport && currentReport.model_used">模型: <code>{{ currentReport ? currentReport.model_used : \'\' }}</code></span>\
-                            <span v-show="currentReport && currentReport.total_logs">日志: {{ (currentReport ? currentReport.analyzed_logs : 0) + \'/\' + (currentReport ? currentReport.total_logs : 0) }}</span>\
+                            <span v-show="currentReport && currentReport.total_logs"\
+                                  :title="currentReport && currentReport.analyzed_logs < currentReport.total_logs\
+                                    ? \'为提升分析效率，从 \' + currentReport.total_logs + \' 条日志中智能采样了 \'\
+                                      + currentReport.analyzed_logs + \' 条（优先采样标记为不准确的日志）\'\
+                                    : \'\'">\
+                                日志: {{ (currentReport ? currentReport.analyzed_logs : 0) + \'/\' + (currentReport ? currentReport.total_logs : 0) }}\
+                                <span v-show="currentReport && currentReport.analyzed_logs < currentReport.total_logs"\
+                                      style="color:var(--text-secondary);font-size:0.9em"> (采样)</span>\
+                            </span>\
                         </div>\
                     </div>\
 \
@@ -2182,14 +2228,22 @@ window.VuePages = window.VuePages || {};
                         </div>\
                     </div>\
 \
+                    <div class="analysis-section" v-show="currentReport && currentReport.warnings && currentReport.warnings.length > 0" v-cloak>\
+                        <div class="analysis-warnings">\
+                            <div v-for="(w, widx) in (currentReport ? currentReport.warnings : [])" :key="widx" class="analysis-warning-item">{{ w }}</div>\
+                        </div>\
+                    </div>\
+\
                     <div class="analysis-section" v-show="currentReport && currentReport.recommendations && currentReport.recommendations.length > 0" v-cloak>\
                         <h4>优化建议 ({{ currentReport ? currentReport.recommendations.length : 0 }})</h4>\
                         <div v-for="(rec, idx) in (currentReport ? currentReport.recommendations : [])" :key="idx" class="analysis-rec-card">\
                             <div class="analysis-rec-header">\
                                 <span class="analysis-rec-action" :class="\'action-\' + rec.action">{{ rec.action }}</span>\
+                                <span v-show="rec.priority" class="analysis-priority-badge" :class="\'priority-\' + rec.priority">{{ rec.priority }}</span>\
                                 <span class="analysis-rec-rule" v-show="rec.rule_name"><code>{{ rec.rule_name }}</code></span>\
                             </div>\
                             <div class="analysis-rec-desc">{{ rec.description }}</div>\
+                            <div class="analysis-rec-reason" v-show="rec.reason">{{ rec.reason }}</div>\
                             <div class="analysis-rec-details" v-show="rec.details">{{ rec.details }}</div>\
                             <button class="rec-apply-btn" v-show="isRecActionable(rec)" @click="applyRecommendation(rec)">应用建议</button>\
                         </div>\
