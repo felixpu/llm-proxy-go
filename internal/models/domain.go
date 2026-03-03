@@ -396,6 +396,7 @@ type AnalysisReport struct {
 	Issues         []AnalysisIssue    `json:"issues"`
 	Recommendations []AnalysisRecommendation `json:"recommendations"`
 	Conclusion     string             `json:"conclusion"`
+	Warnings       []string           `json:"warnings,omitempty"` // Warnings from batched analysis (e.g., failed batches)
 	CreatedAt      time.Time          `json:"created_at"`
 }
 
@@ -430,7 +431,9 @@ type RecommendedRuleSpec struct {
 type AnalysisRecommendation struct {
 	Action      string               `json:"action"` // modify/add/delete/reorder
 	RuleName    string               `json:"rule_name,omitempty"`
-	Description string               `json:"description"`
+	Priority    string               `json:"priority"`    // high/medium/low - urgency level
+	Reason      string               `json:"reason"`      // why this optimization is needed
+	Description string               `json:"description"` // what to do
 	Details     string               `json:"details,omitempty"`
 	RuleSpec    *RecommendedRuleSpec `json:"rule_spec,omitempty"`
 }
