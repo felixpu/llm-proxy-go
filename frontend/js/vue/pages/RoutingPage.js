@@ -44,6 +44,7 @@ window.VuePages = window.VuePages || {};
         rule_based_routing_enabled: true,
         rule_fallback_strategy: "default",
         rule_fallback_task_type: "default",
+        cross_role_fallback_enabled: false,
       });
 
       // 模型模态框
@@ -384,6 +385,8 @@ window.VuePages = window.VuePages || {};
         config.rule_fallback_strategy = cfg.rule_fallback_strategy || "default";
         config.rule_fallback_task_type =
           cfg.rule_fallback_task_type || "default";
+        config.cross_role_fallback_enabled =
+          cfg.cross_role_fallback_enabled || false;
       }
 
       function loadData() {
@@ -1138,6 +1141,33 @@ window.VuePages = window.VuePages || {};
         return map[severity] || severity;
       }
 
+      function getIssueTypeLabel(type) {
+        var map = {
+          false_positive: "误匹配",
+          false_negative: "漏匹配",
+          priority_conflict: "优先级冲突",
+          redundant_rule: "冗余规则",
+          overly_broad: "规则过宽",
+          missing_rule: "缺少规则",
+        };
+        return map[type] || type;
+      }
+
+      function getActionLabel(action) {
+        var map = {
+          modify: "修改",
+          add: "添加",
+          delete: "删除",
+          reorder: "调整优先级",
+        };
+        return map[action] || action;
+      }
+
+      function getPriorityLabel(priority) {
+        var map = { high: "高", medium: "中", low: "低" };
+        return map[priority] || priority;
+      }
+
       function formatReportDate(dateStr) {
         if (!dateStr) return "-";
         var d = new Date(dateStr);
@@ -1219,6 +1249,61 @@ window.VuePages = window.VuePages || {};
         }
       }
 
+      // ========== 按规则分组 computed ==========
+
+      var groupedByRule = computed(function () {
+        if (!currentReport.value) return [];
+        var issues = currentReport.value.issues || [];
+        var recs = currentReport.value.recommendations || [];
+        var groups = Object.create(null);
+
+        for (var i = 0; i < issues.length; i++) {
+          var key = issues[i].rule_name || "__general__";
+          if (!groups[key]) {
+            groups[key] = { ruleName: key === "__general__" ? "" : key, issues: [], recommendations: [] };
+          }
+          groups[key].issues.push(issues[i]);
+        }
+
+        for (var j = 0; j < recs.length; j++) {
+          var key = recs[j].rule_name || "__general__";
+          if (!groups[key]) {
+            groups[key] = { ruleName: key === "__general__" ? "" : key, issues: [], recommendations: [] };
+          }
+          groups[key].recommendations.push(recs[j]);
+        }
+
+        // Sort by severity: groups with issues first, then by highest severity
+        var severityOrder = { high: 0, medium: 1, low: 2 };
+        var entries = Object.keys(groups).map(function (k) {
+          return { key: k, data: groups[k] };
+        });
+
+        entries.sort(function (a, b) {
+          // General group always last
+          if (a.key === "__general__") return 1;
+          if (b.key === "__general__") return -1;
+          // Groups with issues come first
+          var aHasIssues = a.data.issues.length > 0 ? 0 : 1;
+          var bHasIssues = b.data.issues.length > 0 ? 0 : 1;
+          if (aHasIssues !== bHasIssues) return aHasIssues - bHasIssues;
+          // Sort by highest severity within issues
+          var aSev = 3;
+          var bSev = 3;
+          for (var i = 0; i < a.data.issues.length; i++) {
+            var s = severityOrder[a.data.issues[i].severity];
+            if (s != null && s < aSev) aSev = s;
+          }
+          for (var i = 0; i < b.data.issues.length; i++) {
+            var s = severityOrder[b.data.issues[i].severity];
+            if (s != null && s < bSev) bSev = s;
+          }
+          return aSev - bSev;
+        });
+
+        return entries;
+      });
+
       // ========== 一键应用建议 ==========
 
       function findRuleByName(name) {
@@ -1274,6 +1359,35 @@ window.VuePages = window.VuePages || {};
         return !!rec.rule_spec && !!findRuleByNameFuzzy(rec.rule_name);
       }
 
+      function getRecDisabledReason(rec) {
+        if (rec.action === "add") {
+          return rec.rule_spec ? "" : "建议缺少规则参数";
+        }
+        if (rec.action === "modify") {
+          return rec.rule_spec ? "" : "建议缺少规则参数";
+        }
+        if (rec.action === "delete") {
+          var found = findRuleByNameFuzzy(rec.rule_name);
+          if (!found) return "未找到匹配规则: " + (rec.rule_name || "");
+          if (found.source === "builtin") return "内置规则不可删除";
+          return "";
+        }
+        if (rec.action === "reorder") {
+          if (!rec.rule_spec || rec.rule_spec.priority == null) {
+            return "建议未指定目标优先级";
+          }
+          if (!findRuleByNameFuzzy(rec.rule_name)) {
+            return "未找到匹配规则: " + (rec.rule_name || "");
+          }
+          return "";
+        }
+        if (!rec.rule_spec) return "建议缺少规则参数";
+        if (!findRuleByNameFuzzy(rec.rule_name)) {
+          return "未找到匹配规则: " + (rec.rule_name || "");
+        }
+        return "";
+      }
+
       function applyRuleSpec(spec) {
         if (spec.keywords && spec.keywords.length > 0) {
           ruleForm.keywords = spec.keywords.join(", ");
@@ -1294,6 +1408,7 @@ window.VuePages = window.VuePages || {};
         var found;
         switch (rec.action) {
           case "add":
+            showAnalysisModal.value = false;
             showRuleModal(null);
             ruleForm.name = rec.rule_name || "";
             ruleForm.description = rec.description || "";
@@ -1304,6 +1419,7 @@ window.VuePages = window.VuePages || {};
             found = findRuleByNameFuzzy(rec.rule_name);
             if (!found) {
               // Rule not found - create new rule with the spec
+              showAnalysisModal.value = false;
               showRuleModal(null);
               ruleForm.name = rec.rule_name || "";
               ruleForm.description = rec.description || "";
@@ -1312,9 +1428,11 @@ window.VuePages = window.VuePages || {};
               break;
             }
             if (found.source === "custom") {
+              showAnalysisModal.value = false;
               showRuleModal(found.rule);
               applyRuleSpec(rec.rule_spec);
             } else {
+              showAnalysisModal.value = false;
               showRuleModal(null);
               ruleForm.name = found.rule.name;
               ruleForm.description = found.rule.description || "";
@@ -1340,6 +1458,7 @@ window.VuePages = window.VuePages || {};
               toastStore.error("内置规则不可删除");
               return;
             }
+            showAnalysisModal.value = false;
             deleteRule(found.rule);
             break;
 
@@ -1355,6 +1474,7 @@ window.VuePages = window.VuePages || {};
                 toastStore.error("建议未指定优先级");
                 return;
               }
+              showAnalysisModal.value = false;
               VueApi.request("/api/config/routing/rules/" + found.rule.id, {
                 method: "PUT",
                 body: JSON.stringify(
@@ -1369,6 +1489,7 @@ window.VuePages = window.VuePages || {};
                   toastStore.error(error.message);
                 });
             } else {
+              showAnalysisModal.value = false;
               showRuleModal(null);
               ruleForm.name = found.rule.name;
               ruleForm.description = found.rule.description || "";
@@ -1518,6 +1639,11 @@ window.VuePages = window.VuePages || {};
         isStageCompleted: isStageCompleted,
         getSeverityClass: getSeverityClass,
         getSeverityLabel: getSeverityLabel,
+        getIssueTypeLabel: getIssueTypeLabel,
+        getActionLabel: getActionLabel,
+        getPriorityLabel: getPriorityLabel,
+        getRecDisabledReason: getRecDisabledReason,
+        groupedByRule: groupedByRule,
         formatReportDate: formatReportDate,
         findRuleByName: findRuleByName,
         findRuleByNameFuzzy: findRuleByNameFuzzy,
@@ -1550,6 +1676,13 @@ window.VuePages = window.VuePages || {};
                             强制智能路由，忽略用户指定的模型\
                         </label>\
                         <p class="help-text">开启后所有请求都走智能路由，忽略用户指定的模型</p>\
+                    </div>\
+                    <div class="form-group">\
+                        <label class="checkbox-label">\
+                            <input type="checkbox" v-model="config.cross_role_fallback_enabled">\
+                            允许跨角色降级\
+                        </label>\
+                        <p class="help-text">开启后当目标角色无可用模型时，可降级到其他角色（如 complex → default）；关闭则仅在同角色内切换</p>\
                     </div>\
                     <div class="nested-config" v-show="config.rule_based_routing_enabled" v-cloak>\
                         <div class="form-group">\
@@ -2213,39 +2346,44 @@ window.VuePages = window.VuePages || {};
                         </div>\
                     </div>\
 \
-                    <div class="analysis-section" v-show="currentReport && currentReport.issues && currentReport.issues.length > 0" v-cloak>\
-                        <h4>发现问题 ({{ currentReport ? currentReport.issues.length : 0 }})</h4>\
-                        <div v-for="(issue, idx) in (currentReport ? currentReport.issues : [])" :key="idx" class="analysis-issue-card" :class="getSeverityClass(issue.severity)">\
-                            <div class="analysis-issue-header">\
-                                <span class="analysis-issue-type">{{ issue.type }}</span>\
-                                <span class="analysis-severity-badge" :class="getSeverityClass(issue.severity)">{{ getSeverityLabel(issue.severity) }}</span>\
-                            </div>\
-                            <div class="analysis-issue-rule" v-show="issue.rule_name">规则: <code>{{ issue.rule_name }}</code></div>\
-                            <div class="analysis-issue-desc">{{ issue.description }}</div>\
-                            <div class="analysis-issue-examples" v-show="issue.examples && issue.examples.length > 0">\
-                                <div class="analysis-example" v-for="(ex, eidx) in (issue.examples || []).slice(0, 3)" :key="eidx">{{ ex }}</div>\
-                            </div>\
-                        </div>\
-                    </div>\
-\
                     <div class="analysis-section" v-show="currentReport && currentReport.warnings && currentReport.warnings.length > 0" v-cloak>\
                         <div class="analysis-warnings">\
                             <div v-for="(w, widx) in (currentReport ? currentReport.warnings : [])" :key="widx" class="analysis-warning-item">{{ w }}</div>\
                         </div>\
                     </div>\
 \
-                    <div class="analysis-section" v-show="currentReport && currentReport.recommendations && currentReport.recommendations.length > 0" v-cloak>\
-                        <h4>优化建议 ({{ currentReport ? currentReport.recommendations.length : 0 }})</h4>\
-                        <div v-for="(rec, idx) in (currentReport ? currentReport.recommendations : [])" :key="idx" class="analysis-rec-card">\
-                            <div class="analysis-rec-header">\
-                                <span class="analysis-rec-action" :class="\'action-\' + rec.action">{{ rec.action }}</span>\
-                                <span v-show="rec.priority" class="analysis-priority-badge" :class="\'priority-\' + rec.priority">{{ rec.priority }}</span>\
-                                <span class="analysis-rec-rule" v-show="rec.rule_name"><code>{{ rec.rule_name }}</code></span>\
+                    <div class="analysis-section" v-show="groupedByRule.length > 0" v-cloak>\
+                        <h4>分析结果 ({{ currentReport ? (currentReport.issues || []).length : 0 }} 个问题, {{ currentReport ? (currentReport.recommendations || []).length : 0 }} 条建议)</h4>\
+                        <div v-for="group in groupedByRule" :key="group.key" class="analysis-rule-group">\
+                            <div class="analysis-rule-group-header">\
+                                <span class="analysis-rule-group-name" v-if="group.data.ruleName"><code>{{ group.data.ruleName }}</code></span>\
+                                <span class="analysis-rule-group-name" v-else>通用建议</span>\
+                                <span class="analysis-rule-group-count" v-show="group.data.issues.length > 0">{{ group.data.issues.length }} 个问题</span>\
+                                <span class="analysis-rule-group-count rec-count" v-show="group.data.recommendations.length > 0">{{ group.data.recommendations.length }} 条建议</span>\
                             </div>\
-                            <div class="analysis-rec-desc">{{ rec.description }}</div>\
-                            <div class="analysis-rec-reason" v-show="rec.reason">{{ rec.reason }}</div>\
-                            <div class="analysis-rec-details" v-show="rec.details">{{ rec.details }}</div>\
-                            <button class="rec-apply-btn" v-show="isRecActionable(rec)" @click="applyRecommendation(rec)">应用建议</button>\
+                            <div v-for="(issue, idx) in group.data.issues" :key="\'i-\' + idx" class="analysis-issue-card" :class="getSeverityClass(issue.severity)">\
+                                <div class="analysis-issue-header">\
+                                    <span class="analysis-issue-type">{{ getIssueTypeLabel(issue.type) }}</span>\
+                                    <span class="analysis-severity-badge" :class="getSeverityClass(issue.severity)">{{ getSeverityLabel(issue.severity) }}</span>\
+                                </div>\
+                                <div class="analysis-issue-desc">{{ issue.description }}</div>\
+                                <div class="analysis-issue-examples" v-show="issue.examples && issue.examples.length > 0">\
+                                    <div class="analysis-example" v-for="(ex, eidx) in (issue.examples || []).slice(0, 3)" :key="eidx">{{ ex }}</div>\
+                                </div>\
+                            </div>\
+                            <div v-for="(rec, idx) in group.data.recommendations" :key="\'r-\' + idx" class="analysis-rec-card">\
+                                <div class="analysis-rec-header">\
+                                    <span class="analysis-rec-action" :class="\'action-\' + rec.action">{{ getActionLabel(rec.action) }}</span>\
+                                    <span v-show="rec.priority" class="analysis-priority-badge" :class="\'priority-\' + rec.priority">{{ getPriorityLabel(rec.priority) }}</span>\
+                                </div>\
+                                <div class="analysis-rec-desc">{{ rec.description }}</div>\
+                                <div class="analysis-rec-reason" v-show="rec.reason">{{ rec.reason }}</div>\
+                                <div class="analysis-rec-details" v-show="rec.details">{{ rec.details }}</div>\
+                                <div class="analysis-rec-apply">\
+                                    <button class="rec-apply-btn" :disabled="!isRecActionable(rec)" @click="applyRecommendation(rec)">应用建议</button>\
+                                    <span class="rec-disabled-hint" v-show="!isRecActionable(rec)">{{ getRecDisabledReason(rec) }}</span>\
+                                </div>\
+                            </div>\
                         </div>\
                     </div>\
 \

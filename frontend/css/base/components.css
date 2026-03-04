@@ -4,6 +4,7 @@
 
 /* 按钮 */
 .btn {
+    width: fit-content;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1984,7 +1985,7 @@ textarea.error:focus {
 .custom-select {
     position: relative;
     display: block;
-    width: 100%;
+    /* width: 100%; */
 }
 
 .custom-select-trigger {
