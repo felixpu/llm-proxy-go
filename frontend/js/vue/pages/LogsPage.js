@@ -584,6 +584,31 @@ window.VuePages = window.VuePages || {};
         return Math.max(0, normal).toLocaleString();
       }
 
+      // 近似成本分解：基于 token 比例拆分总成本
+      function computeInputCost(log) {
+        if (!log || !log.cost) return "0.000000";
+        var totalTokens = (log.input_tokens || 0) + (log.output_tokens || 0) + (log.cache_creation_input_tokens || 0);
+        if (totalTokens === 0) return "0.000000";
+        var inputRatio = (log.input_tokens || 0) / totalTokens;
+        return (log.cost * inputRatio).toFixed(6);
+      }
+
+      function computeOutputCost(log) {
+        if (!log || !log.cost) return "0.000000";
+        var totalTokens = (log.input_tokens || 0) + (log.output_tokens || 0) + (log.cache_creation_input_tokens || 0);
+        if (totalTokens === 0) return "0.000000";
+        var outputRatio = (log.output_tokens || 0) / totalTokens;
+        return (log.cost * outputRatio).toFixed(6);
+      }
+
+      function computeCacheCreateCost(log) {
+        if (!log || !log.cost || !log.cache_creation_input_tokens) return "0.000000";
+        var totalTokens = (log.input_tokens || 0) + (log.output_tokens || 0) + (log.cache_creation_input_tokens || 0);
+        if (totalTokens === 0) return "0.000000";
+        var cacheRatio = (log.cache_creation_input_tokens || 0) / totalTokens;
+        return (log.cost * cacheRatio).toFixed(6);
+      }
+
       // header 操作按钮组件
       var LogsHeaderActions = {
         name: "LogsHeaderActions",
@@ -608,8 +633,8 @@ window.VuePages = window.VuePages || {};
                   <button type="button" v-for="opt in REFRESH_OPTIONS" :key="opt.value" class="custom-select-option" :class="{ selected: autoRefreshInterval === opt.value }" @click="setAutoRefresh(opt.value); refreshOpen = false">{{ opt.label }}</button>\
               </div>\
           </div>\
-          <button class="icon-btn" @click="refreshLogs()" title="立即刷新">\
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>\
+          <button class="btn" @click="refreshLogs()" title="立即刷新">\
+              立即刷新\
           </button>',
       };
 
@@ -684,6 +709,9 @@ window.VuePages = window.VuePages || {};
         toggleInaccurate: toggleInaccurate,
         confirmDeleteLogs: confirmDeleteLogs,
         computeNormalInputTokens: computeNormalInputTokens,
+        computeInputCost: computeInputCost,
+        computeOutputCost: computeOutputCost,
+        computeCacheCreateCost: computeCacheCreateCost,
       };
 
       // __CONTINUE_TEMPLATE__
@@ -857,68 +885,119 @@ window.VuePages = window.VuePages || {};
                 <button @click="filters.success = \'\'; debouncedApply()">&times;</button>\
             </span>\
         </div>\
-        <!-- 日志表格 -->\
-        <div class="table-container">\
-            <table class="table">\
-                <thead>\
-                    <tr>\
-                        <th>时间</th>\
-                        <th>用户</th>\
-                        <th>模型</th>\
-                        <th>端点</th>\
-                        <th>任务类型</th>\
-                        <th>路由方式</th>\
-                        <th>匹配规则</th>\
-                        <th>延迟</th>\
-                        <th>成本</th>\
-                        <th>状态</th>\
-                        <th>操作</th>\
-                    </tr>\
-                </thead>\
-                <tbody>\
-                    <tr v-show="loading">\
-                        <td colspan="11" class="text-center">加载中...</td>\
-                    </tr>\
-                    <tr v-show="!loading && logs.length === 0" v-cloak>\
-                        <td colspan="11" class="text-center text-muted" style="padding:40px;">暂无日志记录</td>\
-                    </tr>\
-                    <tr v-for="log in logs" :key="log.id" :class="{ \'row-inaccurate\': log.is_inaccurate }">\
-                        <td>{{ formatDateTime(log.created_at) }}</td>\
-                        <td>{{ log.username }}</td>\
-                        <td><span class="model-tag">{{ log.model_name }}</span></td>\
-                        <td>{{ log.endpoint_name }}</td>\
-                        <td><span class="task-type-badge" :class="\'type-\' + (log.task_type || \'default\')">{{ log.task_type || "-" }}</span></td>\
-                        <td><span class="routing-method-badge" :class="getRoutingMethodClass(log.routing_method)" :title="getRoutingMethodTooltip(log.routing_method)">{{ formatRoutingMethod(log.routing_method) }}</span></td>\
-                        <td>{{ log.matched_rule_name || "-" }}</td>\
-                        <td>{{ (log.latency_ms || 0).toFixed(0) + " ms" }}</td>\
-                        <td>{{ "$" + (log.cost || 0).toFixed(6) }}</td>\
-                        <td>\
-                            <span class="log-status-icons">\
-                                <span v-show="log.success" class="log-icon log-icon-success" title="成功">\
-                                    <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>\
-                                </span>\
-                                <span v-show="!log.success" class="log-icon log-icon-error" title="失败">\
-                                    <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>\
-                                </span>\
-                                <span v-show="log.stream" class="log-icon log-icon-stream" title="流式">\
-                                    <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 7c2-2 4-2 6 0s4 2 6 0"/><path d="M3 13c2-2 4-2 6 0s4 2 6 0"/></svg>\
-                                </span>\
-                                <span v-show="log.cache_read_input_tokens > 0" class="log-icon log-icon-cache" title="缓存命中">\
-                                    <svg viewBox="0 0 20 20" fill="currentColor"><path d="M3 12v3c0 1.657 3.134 3 7 3s7-1.343 7-3v-3c0 1.657-3.134 3-7 3s-7-1.343-7-3z"/><path d="M3 7v3c0 1.657 3.134 3 7 3s7-1.343 7-3V7c0 1.657-3.134 3-7 3S3 8.657 3 7z"/><path d="M17 5c0 1.657-3.134 3-7 3S3 6.657 3 5s3.134-3 7-3 7 1.343 7 3z"/></svg>\
-                                </span>\
-                                <span v-show="log.is_inaccurate" class="log-icon log-icon-warning" title="标记为不准确">\
-                                    <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>\
-                                </span>\
+        <!-- 日志卡片列表 -->\
+        <div class="log-card-list">\
+            <div v-show="loading" class="text-center" style="padding:40px;">加载中...</div>\
+            <div v-show="!loading && logs.length === 0" class="text-center text-muted" style="padding:40px;">暂无日志记录</div>\
+            <div v-for="log in logs" :key="log.id"\
+                 class="log-card"\
+                 :class="{ \'card-error\': !log.success, \'card-inaccurate\': log.is_inaccurate }"\
+                 @click="showLogDetail(log.id)">\
+                <!-- 左列：信息区 -->\
+                <div class="log-card-info">\
+                    <!-- 第一行：模型 + 状态图标 + 端点 + 时间 -->\
+                    <div class="log-card-header">\
+                        <span class="log-card-model">{{ log.model_name }}</span>\
+                        <span class="log-status-icons">\
+                            <span v-show="log.success" class="log-icon log-icon-success" title="成功">\
+                                <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>\
                             </span>\
-                        </td>\
-                        <td>\
-                            <button class="btn btn-sm btn-ghost" @click="showLogDetail(log.id)" title="查看详情">\
-                                <svg viewBox="0 0 20 20" fill="currentColor" style="width:16px;height:16px;"><path d="M10 12a2 2 0 100-4 2 2 0 000 4z"/><path fill-rule="evenodd" d="M.458 10C1.732 5.943 5.522 3 10 3s8.268 2.943 9.542 7c-1.274 4.057-5.064 7-9.542 7S1.732 14.057.458 10zM14 10a4 4 0 11-8 0 4 4 0 018 0z" clip-rule="evenodd"/></svg>\
-                            </button>\
-                        </td>\
-                    </tr>\
-                </tbody>\
-            </table>\
+                            <span v-show="!log.success" class="log-icon log-icon-error" title="失败">\
+                                <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg>\
+                            </span>\
+                            <span v-show="log.stream" class="log-icon log-icon-stream" title="流式">\
+                                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 7c2-2 4-2 6 0s4 2 6 0"/><path d="M3 13c2-2 4-2 6 0s4 2 6 0"/></svg>\
+                            </span>\
+                            <span v-show="log.cache_read_input_tokens > 0" class="log-icon log-icon-cache" title="缓存命中">\
+                                <svg viewBox="0 0 20 20" fill="currentColor"><path d="M3 12v3c0 1.657 3.134 3 7 3s7-1.343 7-3v-3c0 1.657-3.134 3-7 3s-7-1.343-7-3z"/><path d="M3 7v3c0 1.657 3.134 3 7 3s7-1.343 7-3V7c0 1.657-3.134 3-7 3S3 8.657 3 7z"/><path d="M17 5c0 1.657-3.134 3-7 3S3 6.657 3 5s3.134-3 7-3 7 1.343 7 3z"/></svg>\
+                            </span>\
+                            <span v-show="log.is_inaccurate" class="log-icon log-icon-warning" title="标记为不准确">\
+                                <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>\
+                            </span>\
+                        </span>\
+                        <span class="log-card-separator">|</span>\
+                        <span class="log-card-endpoint">{{ log.endpoint_name }}</span>\
+                        <span class="log-card-time">{{ formatDateTime(log.created_at) }}</span>\
+                    </div>\
+                    <!-- 第二行：徽章 + 延迟 + 用户 -->\
+                    <div class="log-card-badges">\
+                        <span class="task-type-badge" :class="\'type-\' + (log.task_type || \'default\')">{{ log.task_type || "-" }}</span>\
+                        <span class="routing-method-badge" :class="getRoutingMethodClass(log.routing_method)" :title="getRoutingMethodTooltip(log.routing_method)">{{ formatRoutingMethod(log.routing_method) }}</span>\
+                        <span v-show="log.matched_rule_name" class="log-card-rule">{{ log.matched_rule_name }}</span>\
+                        <span class="log-card-latency">{{ (log.latency_ms||0).toFixed(0) }} ms</span>\
+                        <span v-show="log.username" class="log-card-user">{{ log.username }}</span>\
+                    </div>\
+                </div>\
+                <!-- TOKEN 列 -->\
+                <div class="log-card-metric" @click.stop>\
+                    <span class="log-card-metric-label">TOKEN</span>\
+                    <span class="log-card-metric-value">\
+                        <span class="token-down">&darr; {{ (log.input_tokens||0).toLocaleString() }}</span>\
+                        <span class="token-up">&uarr; {{ (log.output_tokens||0).toLocaleString() }}</span>\
+                        <span class="rich-tooltip-wrap">\
+                            <span class="metric-info-icon">\
+                                <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>\
+                            </span>\
+                            <div class="rich-tooltip">\
+                                <div class="rich-tooltip-title">Token 明细</div>\
+                                <div class="rich-tooltip-row">\
+                                    <span class="rich-tooltip-label">输入 Token</span>\
+                                    <span class="rich-tooltip-val">{{ (log.input_tokens||0).toLocaleString() }}</span>\
+                                </div>\
+                                <div class="rich-tooltip-row">\
+                                    <span class="rich-tooltip-label">输出 Token</span>\
+                                    <span class="rich-tooltip-val">{{ (log.output_tokens||0).toLocaleString() }}</span>\
+                                </div>\
+                                <div v-show="log.cache_creation_input_tokens > 0" class="rich-tooltip-row">\
+                                    <span class="rich-tooltip-label">缓存创建 <span class="cache-badge cache-write" style="margin-left:0;font-size:9px;padding:1px 4px;">1h</span></span>\
+                                    <span class="rich-tooltip-val">{{ (log.cache_creation_input_tokens||0).toLocaleString() }}</span>\
+                                </div>\
+                                <div v-show="log.cache_read_input_tokens > 0" class="rich-tooltip-row">\
+                                    <span class="rich-tooltip-label">缓存读取</span>\
+                                    <span class="rich-tooltip-val">{{ (log.cache_read_input_tokens||0).toLocaleString() }}</span>\
+                                </div>\
+                                <div class="rich-tooltip-divider"></div>\
+                                <div class="rich-tooltip-row">\
+                                    <span class="rich-tooltip-label">总 Token</span>\
+                                    <span class="rich-tooltip-val val-highlight">{{ ((log.input_tokens||0) + (log.output_tokens||0) + (log.cache_creation_input_tokens||0)).toLocaleString() }}</span>\
+                                </div>\
+                            </div>\
+                        </span>\
+                    </span>\
+                </div>\
+                <!-- 费用列 -->\
+                <div class="log-card-metric" @click.stop>\
+                    <span class="log-card-metric-label">费用</span>\
+                    <span class="log-card-metric-value">\
+                        ${{ (log.cost||0).toFixed(6) }}\
+                        <span class="rich-tooltip-wrap">\
+                            <span class="metric-info-icon">\
+                                <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>\
+                            </span>\
+                            <div class="rich-tooltip">\
+                                <div class="rich-tooltip-title">成本明细</div>\
+                                <div class="rich-tooltip-row">\
+                                    <span class="rich-tooltip-label">输入成本</span>\
+                                    <span class="rich-tooltip-val">${{ computeInputCost(log) }}</span>\
+                                </div>\
+                                <div class="rich-tooltip-row">\
+                                    <span class="rich-tooltip-label">输出成本</span>\
+                                    <span class="rich-tooltip-val">${{ computeOutputCost(log) }}</span>\
+                                </div>\
+                                <div v-show="log.cache_creation_input_tokens > 0" class="rich-tooltip-row">\
+                                    <span class="rich-tooltip-label">缓存创建成本</span>\
+                                    <span class="rich-tooltip-val">${{ computeCacheCreateCost(log) }}</span>\
+                                </div>\
+                                <div class="rich-tooltip-divider"></div>\
+                                <div class="rich-tooltip-row">\
+                                    <span class="rich-tooltip-label">计费</span>\
+                                    <span class="rich-tooltip-val val-highlight">${{ (log.cost||0).toFixed(6) }}</span>\
+                                </div>\
+                            </div>\
+                        </span>\
+                    </span>\
+                </div>\
+            </div>\
         </div>\
         <!-- 分页 -->\
         <div class="pagination" v-show="totalPages > 1" v-cloak>\

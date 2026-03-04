@@ -168,6 +168,276 @@
     }
 }
 
+/* ========================================
+   日志卡片列表
+   ======================================== */
+
+.log-card-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.log-card {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 0 var(--spacing-xl);
+    padding: var(--spacing-md) var(--spacing-lg);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-left: 3px solid var(--color-success);
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    align-items: center;
+}
+
+.log-card:hover {
+    box-shadow: var(--shadow-md);
+    border-color: var(--color-primary);
+}
+
+.log-card.card-error {
+    border-left-color: var(--color-error);
+}
+
+.log-card.card-inaccurate {
+    background: rgba(245, 158, 11, 0.05);
+    border-left-color: var(--color-warning);
+}
+
+/* 左列：信息区 */
+.log-card-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+/* 第一行：模型 + 图标 + 端点 + 时间 */
+.log-card-header {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    min-width: 0;
+}
+
+.log-card-model {
+    font-weight: var(--font-weight-semibold);
+    color: var(--text-primary);
+    font-size: var(--font-size-base);
+    white-space: nowrap;
+}
+
+.log-card-endpoint {
+    font-size: var(--font-size-sm);
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.log-card-separator {
+    color: var(--text-muted);
+    font-size: var(--font-size-xs);
+    flex-shrink: 0;
+}
+
+.log-card-time {
+    margin-left: auto;
+    font-size: var(--font-size-xs);
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+/* 第二行：徽章 + 用户 */
+.log-card-badges {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    flex-wrap: wrap;
+}
+
+.log-card-rule {
+    font-size: var(--font-size-xs);
+    color: var(--text-tertiary);
+}
+
+.log-card-latency {
+    font-size: var(--font-size-xs);
+    color: var(--text-muted);
+}
+
+.log-card-user {
+    margin-left: auto;
+    font-size: var(--font-size-xs);
+    color: var(--text-tertiary);
+    white-space: nowrap;
+}
+
+/* 右侧列：TOKEN 和费用 */
+.log-card-metric {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+    padding-left: var(--spacing-lg);
+    border-left: 1px solid var(--border-color);
+    min-width: 90px;
+}
+
+.log-card-metric-label {
+    font-size: 10px;
+    font-weight: var(--font-weight-medium);
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.log-card-metric-value {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--font-size-sm);
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    position: relative;
+}
+
+.log-card-metric-value .token-down {
+    color: var(--color-primary);
+}
+
+.log-card-metric-value .token-up {
+    color: var(--color-success);
+}
+
+/* 信息图标（触发 rich tooltip） */
+.metric-info-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    color: var(--text-muted);
+    cursor: help;
+    transition: color var(--transition-fast);
+    flex-shrink: 0;
+}
+
+.metric-info-icon:hover {
+    color: var(--color-primary);
+}
+
+.metric-info-icon svg {
+    width: 14px;
+    height: 14px;
+}
+
+/* ========================================
+   Rich Tooltip（Token/成本明细弹窗）
+   ======================================== */
+
+.rich-tooltip-wrap {
+    position: relative;
+}
+
+.rich-tooltip {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    right: 0;
+    min-width: 200px;
+    padding: var(--spacing-md);
+    background: var(--gray-900);
+    color: #e4e4e7;
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xl);
+    z-index: var(--z-dropdown);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(4px);
+    transition: opacity 0.2s ease-out, visibility 0.2s ease-out, transform 0.2s ease-out;
+    pointer-events: none;
+    font-size: var(--font-size-xs);
+    line-height: 1.5;
+}
+
+.rich-tooltip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    right: 16px;
+    border: 6px solid transparent;
+    border-top-color: var(--gray-900);
+}
+
+.rich-tooltip-wrap:hover .rich-tooltip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+.rich-tooltip-title {
+    font-weight: var(--font-weight-semibold);
+    color: #fafafa;
+    margin-bottom: var(--spacing-sm);
+    font-size: var(--font-size-sm);
+}
+
+.rich-tooltip-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 0;
+    gap: var(--spacing-lg);
+}
+
+.rich-tooltip-row + .rich-tooltip-row {
+    border-top: 1px solid var(--gray-700);
+}
+
+.rich-tooltip-label {
+    color: var(--gray-400);
+    white-space: nowrap;
+}
+
+.rich-tooltip-val {
+    font-weight: var(--font-weight-medium);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.rich-tooltip-val.val-highlight {
+    color: var(--color-success);
+    font-weight: var(--font-weight-semibold);
+}
+
+.rich-tooltip-divider {
+    height: 1px;
+    background: var(--gray-700);
+    margin: var(--spacing-xs) 0;
+}
+
+/* Dark mode: tooltip 在深色模式下保持深底 */
+:root.dark .rich-tooltip {
+    background: var(--gray-800);
+}
+
+:root.dark .rich-tooltip::after {
+    border-top-color: var(--gray-800);
+}
+
+:root.dark .rich-tooltip-row + .rich-tooltip-row {
+    border-top-color: var(--gray-700);
+}
+
+:root.dark .rich-tooltip-divider {
+    background: var(--gray-700);
+}
+
 /* 日志状态图标 */
 .log-status-icons {
     display: inline-flex;
@@ -251,17 +521,30 @@
     color: #86efac;
 }
 @media (max-width: 768px) {
-    /* 表格 - 固定第一列 + 横向滚动 */
-    #logs-table {
-        min-width: 800px;
+    /* 卡片列表移动端：切换为纵向堆叠 */
+    .log-card {
+        grid-template-columns: 1fr;
+        padding: var(--spacing-sm) var(--spacing-md);
+        gap: var(--spacing-sm);
     }
 
-    #logs-table th:first-child,
-    #logs-table td:first-child {
-        position: sticky;
-        left: 0;
-        background: var(--bg-surface);
-        z-index: var(--z-sticky);
+    .log-card-metric {
+        border-left: none;
+        border-top: 1px solid var(--border-color);
+        padding-left: 0;
+        padding-top: var(--spacing-sm);
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        min-width: 0;
+    }
+
+    .log-card-header {
+        flex-wrap: wrap;
+    }
+
+    .log-card-time {
+        margin-left: 0;
     }
 
     /* section 头部紧凑 */
@@ -292,6 +575,12 @@
     .page-info {
         font-size: var(--font-size-xs);
         padding: var(--spacing-xs) var(--spacing-sm);
+    }
+
+    /* Rich tooltip 移动端 */
+    .rich-tooltip {
+        right: -8px;
+        min-width: 180px;
     }
 }
 
@@ -377,26 +666,6 @@
 .task-type-badge.type-complex {
     background: var(--role-complex-bg-solid, rgba(139, 92, 246, 0.1));
     color: var(--role-complex-color, #8b5cf6);
-}
-
-/* ========================================
-   不准确标记样式
-   ======================================== */
-
-.row-inaccurate {
-    background: rgba(245, 158, 11, 0.05);
-}
-
-.row-inaccurate td {
-    border-left: 3px solid var(--color-warning, #f59e0b);
-}
-
-.row-inaccurate td:first-child {
-    border-left: 3px solid var(--color-warning, #f59e0b);
-}
-
-.log-icon-warning {
-    color: var(--color-warning, #f59e0b);
 }
 
 /* ========================================
