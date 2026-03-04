@@ -403,6 +403,15 @@ func (hc *HealthChecker) UpdateRequestStatsV2(result RequestResult) {
 		state.AvgResponseTimeMs = state.totalResponseMs / float64(state.TotalRequests)
 	}
 
+	// Circuit breaker disabled: keep endpoint pass-through and skip all state-machine transitions.
+	if !hc.cfg.CircuitBreaker.Enabled {
+		state.CircuitState = CircuitClosed
+		state.CircuitOpenedAt = nil
+		state.HalfOpenSuccesses = 0
+		state.HalfOpenFailures = 0
+		return
+	}
+
 	// Handle circuit breaker logic based on current state
 	switch state.CircuitState {
 	case CircuitClosed:
@@ -743,6 +752,10 @@ func extractErrorMessage(err error, responseBody []byte) string {
 // shouldTransitionToOpen checks if the circuit breaker should transition to open state.
 // Returns (shouldOpen, reason).
 func shouldTransitionToOpen(state *EndpointState, cfg config.CircuitBreakerConfig) (bool, string) {
+	if !cfg.Enabled {
+		return false, ""
+	}
+
 	// Only transition from closed state
 	if state.CircuitState != CircuitClosed {
 		return false, ""
@@ -763,6 +776,10 @@ func shouldTransitionToOpen(state *EndpointState, cfg config.CircuitBreakerConfi
 
 // shouldTransitionToHalfOpen checks if the circuit breaker should transition to half-open state.
 func shouldTransitionToHalfOpen(state *EndpointState, cfg config.CircuitBreakerConfig) bool {
+	if !cfg.Enabled {
+		return false
+	}
+
 	// Only transition from open state
 	if state.CircuitState != CircuitOpen {
 		return false
@@ -779,6 +796,10 @@ func shouldTransitionToHalfOpen(state *EndpointState, cfg config.CircuitBreakerC
 
 // shouldAllowRequest checks if a request should be allowed based on circuit state.
 func shouldAllowRequest(state *EndpointState, cfg config.CircuitBreakerConfig) bool {
+	if !cfg.Enabled {
+		return true
+	}
+
 	switch state.CircuitState {
 	case CircuitClosed:
 		return true

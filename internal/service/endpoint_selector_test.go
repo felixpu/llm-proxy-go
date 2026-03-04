@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/user/llm-proxy-go/internal/config"
 	"github.com/user/llm-proxy-go/internal/models"
 	"github.com/user/llm-proxy-go/internal/repository"
@@ -147,4 +148,44 @@ func TestSelectEndpoint_GetConfigError_UsesDefaults(t *testing.T) {
 	assert.NoError(t, err, "should use defaults when GetConfig fails")
 	assert.NotNil(t, result)
 	assert.Equal(t, "sonnet", result.Model.Name)
+}
+
+func TestSelectEndpoint_DisabledModel_FallbackSameRole(t *testing.T) {
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ms := NewModelSelector(hc, logger)
+
+	db := testutil.NewTestDB(t)
+	rcr := repository.NewRoutingConfigRepository(db, logger)
+	es := NewEndpointSelector(ms, hc, lb, nil, rcr, logger)
+
+	disabledModel := &models.Model{ID: 1, Name: "disabled-model", Role: models.ModelRoleDefault, Enabled: false}
+	fallbackModel := &models.Model{ID: 2, Name: "fallback-model", Role: models.ModelRoleDefault, Enabled: true}
+
+	endpoints := []*models.Endpoint{
+		{
+			Model:    disabledModel,
+			Provider: &models.Provider{ID: 1, Name: "provider-disabled", BaseURL: "http://test", APIKey: "key"},
+		},
+		{
+			Model:    fallbackModel,
+			Provider: &models.Provider{ID: 2, Name: "provider-fallback", BaseURL: "http://test", APIKey: "key"},
+		},
+	}
+
+	hc.UpdateState("provider-disabled/disabled-model", models.EndpointHealthy, "")
+	hc.UpdateState("provider-fallback/fallback-model", models.EndpointHealthy, "")
+
+	req := &models.AnthropicRequest{
+		Model: "disabled-model",
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "test"}},
+		},
+	}
+
+	result, err := es.SelectEndpoint(t.Context(), req, endpoints)
+	require.NoError(t, err, "disabled model should fallback to same role model per SelectEndpoint priority comment")
+	require.NotNil(t, result)
+	assert.Equal(t, "fallback-model", result.Model.Name)
 }

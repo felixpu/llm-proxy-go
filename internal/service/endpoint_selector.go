@@ -91,8 +91,8 @@ func (s *EndpointSelector) SelectEndpoint(
 	// 3. User specified a concrete model
 	if req.Model != "" {
 		model := s.findModelByName(req.Model, endpoints)
-		if model != nil && model.Enabled {
-			if s.modelSelector.HasHealthyEndpoints(model, endpoints) {
+		if model != nil {
+			if model.Enabled && s.modelSelector.HasHealthyEndpoints(model, endpoints) {
 				ep := s.selectEndpointForModel(model, endpoints, req)
 				if ep != nil {
 					return &EndpointSelectionResult{
@@ -102,7 +102,7 @@ func (s *EndpointSelector) SelectEndpoint(
 					}, nil
 				}
 			}
-			// No healthy endpoints for this model → fallback
+			// Disabled model or no healthy endpoints for this model -> fallback
 			fallbackModel, fallbackInfo, err := s.modelSelector.FindAvailableModelWithFallback(
 				model.Role, model, endpoints, crossRoleFallback)
 			if err != nil {
@@ -120,7 +120,7 @@ func (s *EndpointSelector) SelectEndpoint(
 			}, nil
 		}
 
-		// 4/5. Model disabled or not found → return error, require admin to configure the exact model
+		// 5. Model not found -> return error, require admin to configure the exact model
 		s.logger.Error("requested model not configured",
 			zap.String("requested_model", req.Model))
 		return nil, fmt.Errorf("model %q is not configured, please add it in the admin panel", req.Model)

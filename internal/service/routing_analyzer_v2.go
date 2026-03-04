@@ -472,21 +472,38 @@ func mergeSummaries(summaries []*models.AnalysisSummary, totalEntries int) *mode
 		TopTaskTypes: make(map[string]int),
 	}
 
-	var totalRuleMatch, totalLLMFallback, totalInaccurate float64
+	var weightedRuleMatch, weightedLLMFallback, weightedInaccurate float64
+	totalWeight := 0
 	for _, s := range summaries {
-		totalRuleMatch += s.RuleMatchRate
-		totalLLMFallback += s.LLMFallbackRate
-		totalInaccurate += s.InaccurateRate
+		weight := 0
+		for _, count := range s.TopTaskTypes {
+			weight += count
+		}
+		if weight <= 0 {
+			weight = 1
+		}
+		totalWeight += weight
+		weightedRuleMatch += s.RuleMatchRate * float64(weight)
+		weightedLLMFallback += s.LLMFallbackRate * float64(weight)
+		weightedInaccurate += s.InaccurateRate * float64(weight)
 
 		for taskType, count := range s.TopTaskTypes {
 			merged.TopTaskTypes[taskType] += count
 		}
 	}
 
-	n := float64(len(summaries))
-	merged.RuleMatchRate = totalRuleMatch / n
-	merged.LLMFallbackRate = totalLLMFallback / n
-	merged.InaccurateRate = totalInaccurate / n
+	denominator := totalWeight
+	if denominator <= 0 {
+		denominator = len(summaries)
+	}
+	if totalEntries > 0 && denominator > totalEntries {
+		// Keep denominator grounded to real sample size if summary counts are inconsistent.
+		denominator = totalEntries
+	}
+	denom := float64(denominator)
+	merged.RuleMatchRate = weightedRuleMatch / denom
+	merged.LLMFallbackRate = weightedLLMFallback / denom
+	merged.InaccurateRate = weightedInaccurate / denom
 
 	return merged
 }

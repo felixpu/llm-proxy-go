@@ -197,6 +197,24 @@ func TestStartAnalysis_ConcurrentRequests(t *testing.T) {
 	assert.Equal(t, 1, len(successIDs), "exactly one analysis should start")
 }
 
+// TestSampleLogs_NeverExceedsMaxSamples verifies sampling never returns more than maxSamples,
+// even when inaccurate logs exceed the configured cap.
+func TestSampleLogs_NeverExceedsMaxSamples(t *testing.T) {
+	analyzer := &RoutingAnalyzer{logger: zap.NewNop()}
+
+	var logs []*models.RequestLog
+	for i := 0; i < 10; i++ {
+		logs = append(logs, &models.RequestLog{
+			ID:          int64(i + 1),
+			IsInaccurate: true,
+		})
+	}
+
+	maxSamples := 5
+	sampled := analyzer.sampleLogs(logs, maxSamples)
+	assert.LessOrEqual(t, len(sampled), maxSamples, "sample size must not exceed maxSamples")
+}
+
 // Mock repository for testing
 type mockRoutingModelRepository struct {
 	model *models.RoutingModelWithProvider

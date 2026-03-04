@@ -265,6 +265,9 @@ func (a *RoutingAnalyzer) sampleLogs(logs []*models.RequestLog, maxSamples int) 
 	// Include all inaccurate logs first
 	result := make([]*models.RequestLog, 0, maxSamples)
 	result = append(result, inaccurate...)
+	if len(result) >= maxSamples {
+		return result[:maxSamples]
+	}
 
 	// Fill remaining with evenly spaced normal logs
 	remaining := maxSamples - len(result)

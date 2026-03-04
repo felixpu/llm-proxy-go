@@ -1050,6 +1050,38 @@ func TestUpdateRequestStatsWithCircuitBreaker(t *testing.T) {
 	})
 }
 
+// TestUpdateRequestStatsWithCircuitBreaker_Disabled verifies that when circuit breaker
+// is disabled, failures do not transition circuit state to open.
+func TestUpdateRequestStatsWithCircuitBreaker_Disabled(t *testing.T) {
+	cfg := defaultHealthCheckConfig()
+	cfg.CircuitBreaker.Enabled = false
+	cfg.CircuitBreaker.ConsecutiveFailures = 1
+	cfg.CircuitBreaker.PermanentErrorThreshold = 1
+
+	hc := NewHealthChecker(cfg, zap.NewNop())
+	name := "test-provider/test-model-disabled-cb"
+
+	hc.mu.Lock()
+	state := NewEndpointState(name)
+	state.Status = models.EndpointHealthy
+	hc.states[name] = state
+	hc.mu.Unlock()
+
+	// Even with thresholds set to 1, disabled circuit breaker should keep circuit closed.
+	hc.UpdateRequestStatsV2(RequestResult{
+		EndpointName: name,
+		Success:      false,
+		LatencyMs:    50,
+		StatusCode:   500,
+	})
+
+	hc.mu.RLock()
+	circuitState := hc.states[name].CircuitState
+	hc.mu.RUnlock()
+	assert.Equal(t, CircuitClosed, circuitState, "disabled circuit breaker should not open")
+	assert.True(t, hc.IsHealthy(name), "disabled circuit breaker should not block endpoint traffic")
+}
+
 // TestCircuitBreakerFullFlow tests the complete circuit breaker state transitions
 func TestCircuitBreakerFullFlow(t *testing.T) {
 	cfg := defaultHealthCheckConfig()
