@@ -65,16 +65,22 @@ func (s *EndpointSelector) SelectEndpoint(
 	// Get routing config
 	cfg, _ := s.routingConfigRepo.GetConfig(ctx)
 
+	// Read cross-role fallback setting
+	crossRoleFallback := false
+	if cfg != nil {
+		crossRoleFallback = cfg.CrossRoleFallbackEnabled
+	}
+
 	// 1. Force smart routing
 	if cfg != nil && cfg.ForceSmartRouting {
 		s.logger.Debug("force smart routing enabled")
-		return s.doSmartRouting(ctx, req, endpoints)
+		return s.doSmartRouting(ctx, req, endpoints, crossRoleFallback)
 	}
 
 	// 2. User specified "auto"
 	if strings.EqualFold(req.Model, "auto") {
 		s.logger.Debug("auto model requested, using smart routing")
-		return s.doSmartRouting(ctx, req, endpoints)
+		return s.doSmartRouting(ctx, req, endpoints, crossRoleFallback)
 	}
 
 	// 3. User specified a concrete model
@@ -91,9 +97,9 @@ func (s *EndpointSelector) SelectEndpoint(
 					}, nil
 				}
 			}
-			// No healthy endpoints for this model → fallback within same role
+			// No healthy endpoints for this model → fallback
 			fallbackModel, fallbackInfo, err := s.modelSelector.FindAvailableModelWithFallback(
-				model.Role, model, endpoints)
+				model.Role, model, endpoints, crossRoleFallback)
 			if err != nil {
 				return nil, fmt.Errorf("no available endpoint for model %s: %w", req.Model, err)
 			}
@@ -116,7 +122,7 @@ func (s *EndpointSelector) SelectEndpoint(
 	}
 
 	// 6. No model specified → default role fallback
-	return s.selectWithFallback(models.ModelRoleDefault, nil, endpoints)
+	return s.selectWithFallback(models.ModelRoleDefault, nil, endpoints, crossRoleFallback)
 }
 
 // doSmartRouting performs smart routing via LLMRouter, then selects an endpoint for the inferred role.
@@ -124,34 +130,24 @@ func (s *EndpointSelector) doSmartRouting(
 	ctx context.Context,
 	req *models.AnthropicRequest,
 	endpoints []*models.Endpoint,
+	crossRoleFallback bool,
 ) (*EndpointSelectionResult, error) {
 	if s.llmRouter == nil {
 		s.logger.Warn("smart routing requested but LLMRouter is nil, falling back to default")
-		return s.selectWithFallback(models.ModelRoleDefault, nil, endpoints)
+		return s.selectWithFallback(models.ModelRoleDefault, nil, endpoints, crossRoleFallback)
 	}
 
 	taskType, decision, err := s.llmRouter.InferTaskType(ctx, req)
 	if err != nil {
 		s.logger.Warn("smart routing inference failed, falling back to default", zap.Error(err))
-		return s.selectWithFallback(models.ModelRoleDefault, nil, endpoints)
+		return s.selectWithFallback(models.ModelRoleDefault, nil, endpoints, crossRoleFallback)
 	}
 
-	// Get rule match result if rule-based routing was used
-	var ruleResult *ClassifyResult
-	if decision != nil && decision.CacheType == "rule" {
-		userMessage := extractLastUserMessage(req)
-		if userMessage != "" {
-			classifier := NewRoutingClassifier(nil)
-			ruleResult = classifier.Classify(userMessage)
-		}
-	}
-
-	result, selErr := s.selectWithFallback(taskType, nil, endpoints)
+	result, selErr := s.selectWithFallback(taskType, nil, endpoints, crossRoleFallback)
 	if selErr != nil {
 		return nil, selErr
 	}
 	result.RoutingDecision = decision
-	result.RuleMatchResult = ruleResult
 	return result, nil
 }
 
@@ -160,8 +156,9 @@ func (s *EndpointSelector) selectWithFallback(
 	role models.ModelRole,
 	originalModel *models.Model,
 	endpoints []*models.Endpoint,
+	crossRoleFallback bool,
 ) (*EndpointSelectionResult, error) {
-	model, fallbackInfo, err := s.modelSelector.FindAvailableModelWithFallback(role, originalModel, endpoints)
+	model, fallbackInfo, err := s.modelSelector.FindAvailableModelWithFallback(role, originalModel, endpoints, crossRoleFallback)
 	if err != nil {
 		return nil, err
 	}

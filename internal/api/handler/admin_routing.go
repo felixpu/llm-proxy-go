@@ -50,9 +50,10 @@ type LLMRoutingConfigUpdate struct {
 	SimilarityThreshold     *float64 `json:"similarity_threshold"`
 	LocalEmbeddingModel     *string  `json:"local_embedding_model"`
 	ForceSmartRouting       *bool    `json:"force_smart_routing"`
-	RuleBasedRoutingEnabled *bool    `json:"rule_based_routing_enabled"`
-	RuleFallbackStrategy    *string  `json:"rule_fallback_strategy"`
-	RuleFallbackTaskType    *string  `json:"rule_fallback_task_type"`
+	RuleBasedRoutingEnabled   *bool    `json:"rule_based_routing_enabled"`
+	RuleFallbackStrategy     *string  `json:"rule_fallback_strategy"`
+	RuleFallbackTaskType     *string  `json:"rule_fallback_task_type"`
+	CrossRoleFallbackEnabled *bool    `json:"cross_role_fallback_enabled"`
 }
 
 // RoutingHandler handles routing model and LLM config API endpoints.
@@ -207,6 +208,7 @@ func (h *RoutingHandler) UpdateLLMRoutingConfig(c *gin.Context) {
 	if req.RuleBasedRoutingEnabled != nil { updates["rule_based_routing_enabled"] = *req.RuleBasedRoutingEnabled }
 	if req.RuleFallbackStrategy != nil { updates["rule_fallback_strategy"] = *req.RuleFallbackStrategy }
 	if req.RuleFallbackTaskType != nil { updates["rule_fallback_task_type"] = *req.RuleFallbackTaskType }
+	if req.CrossRoleFallbackEnabled != nil { updates["cross_role_fallback_enabled"] = *req.CrossRoleFallbackEnabled }
 	if err := h.configRepo.UpdateConfig(c.Request.Context(), updates); err != nil {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return

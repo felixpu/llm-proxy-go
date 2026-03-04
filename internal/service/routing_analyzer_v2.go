@@ -232,10 +232,6 @@ func formatDetailedEntry(idx int, e *models.ExtractedLogEntry, showFullMessage b
 		b.WriteString("- **标记**: ⚠️ 不准确\n")
 	}
 
-	if e.MessageSummary != "" {
-		b.WriteString(fmt.Sprintf("- **上下文**: %s\n", e.MessageSummary))
-	}
-
 	msg := e.UserMessage
 	if !showFullMessage && len(msg) > 500 {
 		msg = msg[:500] + "..."

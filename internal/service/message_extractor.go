@@ -3,23 +3,60 @@ package service
 import (
 	"encoding/json"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/user/llm-proxy-go/internal/models"
 )
 
-var systemReminderRe = regexp.MustCompile(`(?s)<system-reminder>.*?</system-reminder>`)
+// systemInjectionRe matches system-injected XML tags from Claude Code clients.
+var systemInjectionRe = regexp.MustCompile(`(?s)<(?:system-reminder|command-name|command-message|command-args|local-command-caveat|local-command-stdout)>.*?</(?:system-reminder|command-name|command-message|command-args|local-command-caveat|local-command-stdout)>`)
 
-// trivialMessages are short messages with no routing signal.
-var trivialMessages = map[string]bool{
-	"continue": true, "yes": true, "ok": true, "no": true,
-	"y": true, "n": true, "go": true, "next": true,
-	"继续": true, "好的": true, "是": true, "否": true,
+// stripSystemInjections removes system-injected content from user messages
+// so that routing decisions are based on actual user intent only.
+func stripSystemInjections(text string) string {
+	cleaned := systemInjectionRe.ReplaceAllString(text, "")
+	return strings.TrimSpace(cleaned)
 }
 
 // MessageExtractor extracts analysis-relevant info from stored request_content JSON.
 type MessageExtractor struct{}
+
+// ExtractRoutingMessage extracts the last user message text from an AnthropicRequest,
+// using the same logic as the routing classifier: find the last user message with
+// text content, skip messages that are entirely tool_result, and strip system
+// injection tags. This is the single source of truth for what text the routing
+// rules evaluate against.
+func ExtractRoutingMessage(req *models.AnthropicRequest) string {
+	if len(req.Messages) == 0 {
+		return ""
+	}
+
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		msg := req.Messages[i]
+		if msg.Role != "user" {
+			continue
+		}
+
+		parts := msg.Content.GetParts()
+		if len(parts) == 0 {
+			continue
+		}
+
+		var textParts []string
+		for _, part := range parts {
+			if part.Type == "text" && part.Text != "" {
+				textParts = append(textParts, part.Text)
+			}
+		}
+
+		if len(textParts) > 0 {
+			raw := strings.Join(textParts, "\n")
+			return stripSystemInjections(raw)
+		}
+	}
+
+	return ""
+}
 
 // ExtractFromLog extracts an ExtractedLogEntry from a RequestLog.
 func (e *MessageExtractor) ExtractFromLog(log *models.RequestLog) *models.ExtractedLogEntry {
@@ -36,133 +73,20 @@ func (e *MessageExtractor) ExtractFromLog(log *models.RequestLog) *models.Extrac
 		return entry
 	}
 
-	userMsg, summary := e.parseRequestContent(log.RequestContent)
-	entry.UserMessage = userMsg
-	entry.MessageSummary = summary
-
-	if entry.UserMessage == "" {
-		entry.UserMessage = log.MessagePreview
-	}
-	return entry
-}
-
-// parseRequestContent parses the stored JSON and returns (userMessage, summary).
-func (e *MessageExtractor) parseRequestContent(content string) (string, string) {
 	var req models.AnthropicRequest
-	if err := json.Unmarshal([]byte(content), &req); err != nil {
-		return "", ""
+	if err := json.Unmarshal([]byte(log.RequestContent), &req); err != nil {
+		entry.UserMessage = log.MessagePreview
+		return entry
 	}
 
-	userMsg := e.extractLastPureUserMessage(&req)
-	summary := e.buildMessageSummary(&req)
-	return userMsg, summary
-}
-
-// extractLastPureUserMessage finds the last meaningful user text message,
-// skipping tool_result messages, system-reminder tags, and trivial short messages.
-func (e *MessageExtractor) extractLastPureUserMessage(req *models.AnthropicRequest) string {
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		msg := req.Messages[i]
-		if msg.Role != "user" {
-			continue
-		}
-
-		parts := msg.Content.GetParts()
-		if len(parts) == 0 {
-			continue
-		}
-
-		// Skip if all parts are tool_result
-		allToolResult := true
-		for _, p := range parts {
-			if p.Type != "tool_result" {
-				allToolResult = false
-				break
-			}
-		}
-		if allToolResult {
-			continue
-		}
-
-		// Collect text parts, filtering system-reminder content
-		var texts []string
-		for _, p := range parts {
-			if p.Type != "text" || p.Text == "" {
-				continue
-			}
-			cleaned := systemReminderRe.ReplaceAllString(p.Text, "")
-			cleaned = strings.TrimSpace(cleaned)
-			if cleaned != "" {
-				texts = append(texts, cleaned)
-			}
-		}
-
-		combined := strings.Join(texts, "\n")
-		combined = strings.TrimSpace(combined)
-
-		// Skip trivial messages, keep looking backwards
-		if trivialMessages[strings.ToLower(combined)] {
-			continue
-		}
-
-		if len(combined) > 500 {
-			combined = combined[:500] + "..."
-		}
-		return combined
+	userMsg := ExtractRoutingMessage(&req)
+	if userMsg == "" {
+		userMsg = log.MessagePreview
 	}
-	return ""
-}
-
-// buildMessageSummary generates a compact structural summary of the conversation.
-func (e *MessageExtractor) buildMessageSummary(req *models.AnthropicRequest) string {
-	var userCount, asstCount, toolUseCount, toolResultCount int
-	hasSys := req.System != nil && !req.System.IsEmpty()
-	hasThinking := false
-
-	for _, msg := range req.Messages {
-		switch msg.Role {
-		case "user":
-			userCount++
-		case "assistant":
-			asstCount++
-		}
-		for _, p := range msg.Content.GetParts() {
-			switch p.Type {
-			case "tool_use":
-				toolUseCount++
-			case "tool_result":
-				toolResultCount++
-			case "thinking":
-				hasThinking = true
-			}
-		}
+	if len(userMsg) > 500 {
+		userMsg = userMsg[:500] + "..."
 	}
+	entry.UserMessage = userMsg
 
-	var b strings.Builder
-	b.WriteString("msgs=")
-	b.WriteString(strings.Join([]string{
-		itoa(len(req.Messages)),
-		"(user:", itoa(userCount),
-		",asst:", itoa(asstCount), ")",
-	}, ""))
-
-	if toolUseCount > 0 {
-		b.WriteString(" tools_used=")
-		b.WriteString(itoa(toolUseCount))
-	}
-	if toolResultCount > 0 {
-		b.WriteString(" tool_results=")
-		b.WriteString(itoa(toolResultCount))
-	}
-	if hasSys {
-		b.WriteString(" sys=true")
-	}
-	if hasThinking {
-		b.WriteString(" thinking=true")
-	}
-	return b.String()
-}
-
-func itoa(n int) string {
-	return strconv.Itoa(n)
+	return entry
 }

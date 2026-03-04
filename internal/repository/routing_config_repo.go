@@ -27,7 +27,8 @@ var routingConfigBoolFields = map[string]bool{
 	"semantic_cache_enabled":      true,
 	"force_smart_routing":         true,
 	"rule_based_routing_enabled":  true,
-	"log_full_content":            true,
+	"log_full_content":                true,
+	"cross_role_fallback_enabled":  true,
 }
 
 // GetConfig retrieves the LLM routing configuration.
@@ -48,6 +49,9 @@ func (r *RoutingConfigRepository) GetConfig(ctx context.Context) (*models.Routin
 	var ruleFallbackTaskType sql.NullString
 	var ruleFallbackModelID sql.NullInt64
 
+	// Cross-role fallback
+	var crossRoleFallbackEnabled sql.NullInt64
+
 	// Logging fields
 	var logFullContent sql.NullInt64
 
@@ -57,7 +61,7 @@ func (r *RoutingConfigRepository) GetConfig(ctx context.Context) (*models.Routin
 			temperature, retry_count, semantic_cache_enabled, embedding_model_id,
 			similarity_threshold, local_embedding_model, force_smart_routing,
 			rule_based_routing_enabled, rule_fallback_strategy, rule_fallback_task_type,
-			rule_fallback_model_id, log_full_content
+			rule_fallback_model_id, cross_role_fallback_enabled, log_full_content
 		FROM routing_llm_config
 		WHERE id = 1
 	`).Scan(
@@ -66,7 +70,7 @@ func (r *RoutingConfigRepository) GetConfig(ctx context.Context) (*models.Routin
 		&cfg.Temperature, &cfg.RetryCount, &semanticEnabled, &embeddingModelID,
 		&similarityThreshold, &localEmbeddingModel, &forceSmartRouting,
 		&ruleBasedEnabled, &ruleFallbackStrategy, &ruleFallbackTaskType,
-		&ruleFallbackModelID, &logFullContent,
+		&ruleFallbackModelID, &crossRoleFallbackEnabled, &logFullContent,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -136,6 +140,13 @@ func (r *RoutingConfigRepository) GetConfig(ctx context.Context) (*models.Routin
 	}
 	if ruleFallbackModelID.Valid {
 		cfg.RuleFallbackModelID = &ruleFallbackModelID.Int64
+	}
+
+	// Cross-role fallback
+	if crossRoleFallbackEnabled.Valid {
+		cfg.CrossRoleFallbackEnabled = crossRoleFallbackEnabled.Int64 == 1
+	} else {
+		cfg.CrossRoleFallbackEnabled = defaults.CrossRoleFallbackEnabled
 	}
 
 	// Logging fields

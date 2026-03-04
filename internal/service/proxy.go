@@ -411,16 +411,27 @@ func (s *ProxyService) SaveRequestLog(ctx context.Context, meta *ProxyMetadata, 
 		d := meta.RoutingDecision
 		entry.RoutingReason = d.Reason
 		entry.RoutingMethod = routingMethodFromDecision(d)
+
+		// Populate rule match fields from RoutingDecision
+		if d.MatchedRule != nil {
+			entry.MatchedRuleID = &d.MatchedRule.ID
+			entry.MatchedRuleName = d.MatchedRule.Name
+		}
+		if len(d.AllMatches) > 0 {
+			entry.AllMatches = d.AllMatches
+		}
 	}
 
-	// Populate rule match fields
-	if meta.RuleMatchResult != nil {
+	// Legacy: populate from RuleMatchResult if RoutingDecision didn't have rule info
+	if entry.MatchedRuleName == "" && meta.RuleMatchResult != nil {
 		r := meta.RuleMatchResult
 		if r.Rule != nil {
 			entry.MatchedRuleID = &r.Rule.ID
 			entry.MatchedRuleName = r.Rule.Name
 		}
-		entry.AllMatches = r.Matches
+		if len(r.Matches) > 0 {
+			entry.AllMatches = r.Matches
+		}
 	}
 
 	// Generate message preview from request content

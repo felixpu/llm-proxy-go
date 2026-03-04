@@ -7,11 +7,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// FallbackPriority defines role fallback order (aligned with Python FALLBACK_PRIORITY).
+// FallbackPriority defines cross-role fallback order (aligned with Python FALLBACK_PRIORITY).
 var FallbackPriority = map[models.ModelRole][]models.ModelRole{
 	models.ModelRoleSimple:  {models.ModelRoleSimple, models.ModelRoleDefault, models.ModelRoleComplex},
 	models.ModelRoleDefault: {models.ModelRoleDefault, models.ModelRoleComplex},
 	models.ModelRoleComplex: {models.ModelRoleComplex, models.ModelRoleDefault},
+}
+
+// SameRoleFallback restricts fallback to the same role only (no cross-role degradation).
+var SameRoleFallback = map[models.ModelRole][]models.ModelRole{
+	models.ModelRoleSimple:  {models.ModelRoleSimple},
+	models.ModelRoleDefault: {models.ModelRoleDefault},
+	models.ModelRoleComplex: {models.ModelRoleComplex},
 }
 
 // ModelSelector handles model selection with weight-based picking and cross-role fallback.
@@ -95,16 +102,24 @@ func (s *ModelSelector) HasHealthyEndpoints(model *models.Model, endpoints []*mo
 	return false
 }
 
-// FindAvailableModelWithFallback finds an available model with cross-role fallback.
+// FindAvailableModelWithFallback finds an available model with fallback.
+// When crossRoleFallback is true, uses cross-role fallback chain (e.g. complex→default).
+// When false, only tries models within the same role.
 // Returns (model, fallbackInfo, error).
 func (s *ModelSelector) FindAvailableModelWithFallback(
 	originalRole models.ModelRole,
 	originalModel *models.Model,
 	endpoints []*models.Endpoint,
+	crossRoleFallback bool,
 ) (*models.Model, *models.FallbackInfo, error) {
-	fallbackChain := FallbackPriority[originalRole]
+	var fallbackChain []models.ModelRole
+	if crossRoleFallback {
+		fallbackChain = FallbackPriority[originalRole]
+	} else {
+		fallbackChain = SameRoleFallback[originalRole]
+	}
 	if len(fallbackChain) == 0 {
-		fallbackChain = []models.ModelRole{originalRole, models.ModelRoleDefault}
+		fallbackChain = []models.ModelRole{originalRole}
 	}
 
 	var triedRoles []string

@@ -323,7 +323,7 @@ func TestGenerateMergedConclusion(t *testing.T) {
 
 func TestBuildHierarchicalPrompt(t *testing.T) {
 	rules := []*models.RoutingRule{
-		{ID: 1, Name: "test_rule", Priority: 100, Enabled: true},
+		{ID: 1, Name: "test_rule", Priority: 100, Enabled: true, TaskType: "coding", HitCount: 42},
 	}
 	entries := []*models.ExtractedLogEntry{
 		{ID: 1, TaskType: "coding", RoutingMethod: "rule", MatchedRuleName: "test_rule", UserMessage: "test message", IsInaccurate: false},
@@ -339,6 +339,7 @@ func TestBuildHierarchicalPrompt(t *testing.T) {
 	assert.Contains(t, result, "分析日志数: 2")
 	assert.Contains(t, result, "## 当前路由规则")
 	assert.Contains(t, result, "test_rule")
+	assert.Contains(t, result, "hits=42")
 	assert.Contains(t, result, "## 详细日志样本")
 	assert.Contains(t, result, "不准确的日志")
 	assert.Contains(t, result, "⚠️ 不准确")
@@ -431,8 +432,117 @@ func TestRecommendationStructure(t *testing.T) {
 	assert.NotNil(t, rec.RuleSpec)
 }
 
+func TestDeduplicateIssues_PreservesRuleName(t *testing.T) {
+	issues := []models.AnalysisIssue{
+		{RuleName: "code_rule", Type: "false_positive", Severity: "high", Description: "desc1"},
+		{RuleName: "code_rule", Type: "overly_broad", Severity: "medium", Description: "desc2"},
+		{RuleName: "translate_rule", Type: "false_positive", Severity: "low", Description: "desc3"},
+		{RuleName: "", Type: "missing_rule", Severity: "medium", Description: "desc4"},
+	}
+
+	result := deduplicateIssues(issues)
+	assert.Len(t, result, 4, "All have unique rule_name:type keys")
+
+	// Verify rule_name is preserved
+	ruleNames := make(map[string]int)
+	for _, issue := range result {
+		ruleNames[issue.RuleName]++
+	}
+	assert.Equal(t, 2, ruleNames["code_rule"])
+	assert.Equal(t, 1, ruleNames["translate_rule"])
+	assert.Equal(t, 1, ruleNames[""])
+}
+
+func TestDeduplicateRecommendations_PreservesRuleSpec(t *testing.T) {
+	priority80 := 80
+	priority60 := 60
+	recs := []models.AnalysisRecommendation{
+		{
+			RuleName:    "code_rule",
+			Action:      "modify",
+			Priority:    "high",
+			Description: "modify code rule",
+			RuleSpec:    &models.RecommendedRuleSpec{Keywords: []string{"code"}, Priority: &priority80},
+		},
+		{
+			RuleName:    "code_rule",
+			Action:      "modify", // duplicate key
+			Priority:    "medium",
+			Description: "different desc",
+			RuleSpec:    &models.RecommendedRuleSpec{Keywords: []string{"debug"}, Priority: &priority60},
+		},
+		{
+			RuleName:    "code_rule",
+			Action:      "reorder", // different action, same rule
+			Priority:    "low",
+			Description: "reorder",
+			RuleSpec:    &models.RecommendedRuleSpec{Priority: &priority60},
+		},
+		{
+			RuleName:    "",
+			Action:      "add",
+			Priority:    "medium",
+			Description: "add general rule",
+			RuleSpec:    &models.RecommendedRuleSpec{Keywords: []string{"general"}, Priority: &priority80},
+		},
+	}
+
+	result := deduplicateRecommendations(recs)
+	assert.Len(t, result, 3, "Duplicate code_rule:modify should be removed")
+
+	// First occurrence wins
+	assert.Equal(t, "code_rule", result[0].RuleName)
+	assert.Equal(t, "modify", result[0].Action)
+	assert.Equal(t, "high", result[0].Priority)
+	assert.NotNil(t, result[0].RuleSpec)
+	assert.Equal(t, []string{"code"}, result[0].RuleSpec.Keywords)
+
+	// reorder kept
+	assert.Equal(t, "code_rule", result[1].RuleName)
+	assert.Equal(t, "reorder", result[1].Action)
+
+	// general add kept with rule_spec
+	assert.Equal(t, "", result[2].RuleName)
+	assert.Equal(t, "add", result[2].Action)
+	assert.NotNil(t, result[2].RuleSpec)
+}
+
+func TestGenerateMergedConclusion_AllSeverities(t *testing.T) {
+	tests := []struct {
+		name       string
+		issues     []models.AnalysisIssue
+		recs       []models.AnalysisRecommendation
+		containStr string
+	}{
+		{
+			name: "multiple high priority issues",
+			issues: []models.AnalysisIssue{
+				{Severity: "high"},
+				{Severity: "high"},
+				{Severity: "medium"},
+			},
+			recs:       []models.AnalysisRecommendation{{}, {}, {}},
+			containStr: "2 个高优先级问题",
+		},
+		{
+			name: "only low issues",
+			issues: []models.AnalysisIssue{
+				{Severity: "low"},
+				{Severity: "low"},
+			},
+			recs:       []models.AnalysisRecommendation{{}},
+			containStr: "整体路由规则运行良好",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := generateMergedConclusion(tt.issues, tt.recs)
+			assert.Contains(t, result, tt.containStr)
+		})
+	}
+}
+
 func intPtr(i int) *int {
 	return &i
 }
-
-

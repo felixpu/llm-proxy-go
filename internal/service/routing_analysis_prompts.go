@@ -37,6 +37,21 @@ const AnalysisSystemPrompt = `你是一个路由规则分析专家。分析请�
 - 频繁使用某个模型，提示需要优化默认路由
 - 绕过了路由系统，可能导致成本或性能问题
 
+## 规则匹配机制
+
+路由规则只使用 **最后一条 user 消息的纯文本** 进行匹配（与你看到的日志中的 message 字段完全一致）。
+tool_result 类型的消息会被跳过，系统注入标签（如 <system-reminder>）会被清除。
+
+三种匹配方式（按优先级降序评估，首个命中的规则决定任务类型）：
+
+1. **Keywords**（关键词匹配）：消息文本包含任一关键词即命中（不区分大小写）。示例：keywords=["翻译","translate"] 匹配含"翻译"或"translate"的消息。
+2. **Pattern**（正则匹配）：Go 正则表达式，匹配消息文本。示例：pattern="^(?i)(write|create|build).*code"。
+3. **Condition**（DSL 条件）：内置 DSL，支持 message_length、has_code_block 等条件。示例：condition="message_length > 2000 AND has_code_block = true"。
+
+每条规则的 hits 字段表示历史命中次数：
+- hits=0 表示规则从未被实际请求命中，可能关键词不匹配实际用户消息
+- 高 hits 值表示规则活跃，修改时需谨慎评估影响范围
+
 ## 问题类型
 
 - **false_positive**: 规则匹配了不应匹配的请求（例如简单查询被路由到 complex 模型）
@@ -204,8 +219,8 @@ func formatRulesForPrompt(rules []*models.RoutingRule) string {
 		if r.IsBuiltin {
 			builtinTag = ", is_builtin=true"
 		}
-		b.WriteString(fmt.Sprintf("- **%s** [%s, priority=%d, task=%s%s]",
-			r.Name, status, r.Priority, r.TaskType, builtinTag))
+		b.WriteString(fmt.Sprintf("- **%s** [%s, priority=%d, task=%s, hits=%d%s]",
+			r.Name, status, r.Priority, r.TaskType, r.HitCount, builtinTag))
 		if len(r.Keywords) > 0 {
 			b.WriteString(fmt.Sprintf("\n  keywords: %s", strings.Join(r.Keywords, ", ")))
 		}
@@ -247,9 +262,6 @@ func formatSingleEntry(idx int, e *models.ExtractedLogEntry) string {
 		b.WriteString(" | **INACCURATE**")
 	}
 	b.WriteString("\n")
-	if e.MessageSummary != "" {
-		b.WriteString(fmt.Sprintf("- context: %s\n", e.MessageSummary))
-	}
 	msg := e.UserMessage
 	if len(msg) > 300 {
 		msg = msg[:300] + "..."

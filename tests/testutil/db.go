@@ -177,6 +177,7 @@ CREATE TABLE IF NOT EXISTS routing_llm_config (
     rule_fallback_strategy TEXT DEFAULT 'default',
     rule_fallback_task_type TEXT DEFAULT 'default',
     rule_fallback_model_id INTEGER,
+    cross_role_fallback_enabled INTEGER DEFAULT 0,
     log_full_content INTEGER DEFAULT 1
 );
 

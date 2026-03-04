@@ -167,16 +167,20 @@ func (r *LLMRouter) classifyWithRules(ctx context.Context, cfg *models.RoutingCo
 
 	taskType := parseModelRole(result.TaskType)
 	decision := &models.RoutingDecision{
-		TaskType:  taskType,
-		Reason:    result.Reason,
-		FromCache: false,
-		CacheType: "rule",
+		TaskType:   taskType,
+		Reason:     result.Reason,
+		FromCache:  false,
+		CacheType:  "rule",
+		AllMatches: result.Matches,
 	}
 
 	// If no rule matched (fallback reason), delegate to fallback strategy
 	if result.Rule == nil {
 		return r.handleFallbackStrategy(ctx, cfg, decision)
 	}
+
+	// Carry matched rule info in the decision
+	decision.MatchedRule = result.Rule
 
 	return taskType, decision, false
 }
@@ -347,48 +351,10 @@ func extractSystemContent(req *models.AnthropicRequest) string {
 }
 
 // extractLastUserMessage extracts the last user message text from the request.
+// Delegates to ExtractRoutingMessage (defined in message_extractor.go) to ensure
+// the routing classifier and the analysis pipeline see identical text.
 func extractLastUserMessage(req *models.AnthropicRequest) string {
-	if len(req.Messages) == 0 {
-		return ""
-	}
-
-	// Iterate from the end to find the last user message
-	for i := len(req.Messages) - 1; i >= 0; i-- {
-		msg := req.Messages[i]
-		if msg.Role != "user" {
-			continue
-		}
-
-		// Content can be a string or array of content parts
-		parts := msg.Content.GetParts()
-		if len(parts) == 0 {
-			continue
-		}
-
-		var textParts []string
-		for _, part := range parts {
-			if part.Type == "text" && part.Text != "" {
-				textParts = append(textParts, part.Text)
-			}
-		}
-
-		if len(textParts) > 0 {
-			raw := strings.Join(textParts, "\n")
-			return stripSystemInjections(raw)
-		}
-	}
-
-	return ""
-}
-
-// systemInjectionRe matches system-injected XML tags from Claude Code clients.
-var systemInjectionRe = regexp.MustCompile(`(?s)<(?:system-reminder|command-name|command-message|command-args|local-command-caveat|local-command-stdout)>.*?</(?:system-reminder|command-name|command-message|command-args|local-command-caveat|local-command-stdout)>`)
-
-// stripSystemInjections removes system-injected content from user messages
-// so that routing decisions are based on actual user intent only.
-func stripSystemInjections(text string) string {
-	cleaned := systemInjectionRe.ReplaceAllString(text, "")
-	return strings.TrimSpace(cleaned)
+	return ExtractRoutingMessage(req)
 }
 
 // parseModelRole converts a string to ModelRole with fallback to default.

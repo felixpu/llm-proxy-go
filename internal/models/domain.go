@@ -192,6 +192,9 @@ type RoutingConfig struct {
 	RuleFallbackTaskType    string           `json:"rule_fallback_task_type"`
 	RuleFallbackModelID     *int64           `json:"rule_fallback_model_id"`
 
+	// Cross-role fallback
+	CrossRoleFallbackEnabled bool `json:"cross_role_fallback_enabled"`
+
 	// Logging fields
 	LogFullContent bool `json:"log_full_content"`
 }
@@ -215,6 +218,8 @@ func DefaultRoutingConfig() *RoutingConfig {
 		RuleBasedRoutingEnabled: true,
 		RuleFallbackStrategy:    FallbackDefault,
 		RuleFallbackTaskType:    "default",
+
+		CrossRoleFallbackEnabled: false,
 
 		LogFullContent: true,
 	}
@@ -261,11 +266,13 @@ type EmbeddingModel struct {
 
 // RoutingDecision represents the result of an LLM routing decision.
 type RoutingDecision struct {
-	TaskType  ModelRole `json:"task_type"`
-	Reason    string    `json:"reason"`
-	FromCache bool      `json:"from_cache"`
-	CacheType string    `json:"cache_type,omitempty"` // "L1", "L2", "L3", ""
-	ModelUsed string    `json:"model_used,omitempty"`
+	TaskType    ModelRole    `json:"task_type"`
+	Reason      string       `json:"reason"`
+	FromCache   bool         `json:"from_cache"`
+	CacheType   string       `json:"cache_type,omitempty"` // "L1", "L2", "L3", ""
+	ModelUsed   string       `json:"model_used,omitempty"`
+	MatchedRule *RoutingRule `json:"matched_rule,omitempty"`
+	AllMatches  []*RuleHit   `json:"all_matches,omitempty"`
 }
 
 // FallbackStrategy defines the behavior when no routing rule matches.
@@ -442,7 +449,6 @@ type AnalysisRecommendation struct {
 type ExtractedLogEntry struct {
 	ID              int64  `json:"id"`
 	UserMessage     string `json:"user_message"`
-	MessageSummary  string `json:"message_summary"`
 	TaskType        string `json:"task_type"`
 	RoutingMethod   string `json:"routing_method"`
 	MatchedRuleName string `json:"matched_rule_name,omitempty"`

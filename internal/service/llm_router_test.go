@@ -394,6 +394,78 @@ func TestLLMRouter_InferTaskType_NoRuleMatch_FallbackUserChoice(t *testing.T) {
 	assert.Contains(t, decision.Reason, "user-configured")
 }
 
+func TestLLMRouter_InferTaskType_RuleMatchCarriesRuleInfo(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	logger := zap.NewNop()
+
+	// Insert a custom rule
+	_, err := db.Exec(`INSERT INTO routing_rules (name, keywords, task_type, priority, is_builtin, enabled)
+		VALUES ('custom_dev_rule', '["自定义开发"]', 'complex', 95, 0, 1)`)
+	assert.NoError(t, err)
+
+	router := NewLLMRouter(db, nil, logger)
+
+	req := &models.AnthropicRequest{
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "这是一个自定义开发任务"}},
+		},
+	}
+
+	taskType, decision, err := router.InferTaskType(t.Context(), req)
+	assert.NoError(t, err)
+	assert.Equal(t, models.ModelRoleComplex, taskType)
+	assert.NotNil(t, decision)
+	assert.Equal(t, "rule", decision.CacheType)
+
+	// Verify rule match info is carried in decision
+	assert.NotNil(t, decision.MatchedRule, "RoutingDecision should carry matched rule info")
+	assert.Equal(t, "custom_dev_rule", decision.MatchedRule.Name)
+	assert.Equal(t, "complex", decision.MatchedRule.TaskType)
+	assert.NotEmpty(t, decision.AllMatches, "RoutingDecision should carry all matches")
+}
+
+func TestLLMRouter_InferTaskType_BuiltinRuleCarriesRuleInfo(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	logger := zap.NewNop()
+
+	router := NewLLMRouter(db, nil, logger)
+
+	req := &models.AnthropicRequest{
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "帮我设计一个微服务架构"}},
+		},
+	}
+
+	taskType, decision, err := router.InferTaskType(t.Context(), req)
+	assert.NoError(t, err)
+	assert.Equal(t, models.ModelRoleComplex, taskType)
+	assert.NotNil(t, decision)
+
+	// Builtin rules should also carry rule info
+	assert.NotNil(t, decision.MatchedRule, "RoutingDecision should carry matched builtin rule info")
+	assert.Equal(t, "architecture_keywords", decision.MatchedRule.Name)
+}
+
+func TestLLMRouter_InferTaskType_NoMatch_NoRuleInfo(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	logger := zap.NewNop()
+
+	router := NewLLMRouter(db, nil, logger)
+
+	req := &models.AnthropicRequest{
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "Hello, how are you?"}},
+		},
+	}
+
+	_, decision, err := router.InferTaskType(t.Context(), req)
+	assert.NoError(t, err)
+	assert.NotNil(t, decision)
+
+	// No rule matched - MatchedRule should be nil
+	assert.Nil(t, decision.MatchedRule, "No rule matched, MatchedRule should be nil")
+}
+
 func TestLLMRouter_InferTaskType_EmptyMessage(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	logger := zap.NewNop()
