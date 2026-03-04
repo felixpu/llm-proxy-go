@@ -111,3 +111,40 @@ func TestFindModelByName(t *testing.T) {
 		})
 	}
 }
+
+func TestSelectEndpoint_GetConfigError_UsesDefaults(t *testing.T) {
+	// Test for C-2: GetConfig error should be logged and defaults used
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ms := NewModelSelector(hc, logger)
+
+	db := testutil.NewTestDB(t)
+	db.Close() // Close DB to simulate error
+
+	rcr := repository.NewRoutingConfigRepository(db, logger)
+	es := NewEndpointSelector(ms, hc, lb, nil, rcr, logger)
+
+	// Set up endpoints
+	defaultModel := &models.Model{ID: 1, Name: "sonnet", Role: models.ModelRoleDefault, Enabled: true}
+	endpoints := []*models.Endpoint{
+		{
+			Model:    defaultModel,
+			Provider: &models.Provider{ID: 1, Name: "provider-1", BaseURL: "http://test", APIKey: "key"},
+		},
+	}
+
+	hc.UpdateState("provider-1/sonnet", models.EndpointHealthy, "")
+
+	req := &models.AnthropicRequest{
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "test"}},
+		},
+	}
+
+	// Should still work with defaults even if GetConfig fails
+	result, err := es.SelectEndpoint(t.Context(), req, endpoints)
+	assert.NoError(t, err, "should use defaults when GetConfig fails")
+	assert.NotNil(t, result)
+	assert.Equal(t, "sonnet", result.Model.Name)
+}

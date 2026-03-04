@@ -178,3 +178,88 @@ func TestRoutingConfigRepository_UpdateConfig_ClearModelID(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, config.PrimaryModelID)
 }
+
+func TestRoutingConfigRepository_GetConfig_WrappedNoRowsError(t *testing.T) {
+	// Test that sql.ErrNoRows is properly detected (should use errors.Is)
+	// This test verifies the fix for C-3: using errors.Is instead of ==
+	db := testutil.NewTestDB(t) // No defaults inserted
+	repo := NewRoutingConfigRepository(db, zap.NewNop())
+	ctx := context.Background()
+
+	// When no rows exist, should return default config without error
+	config, err := repo.GetConfig(ctx)
+	require.NoError(t, err, "should return default config when no rows exist")
+	require.NotNil(t, config)
+	assert.False(t, config.Enabled)
+	assert.True(t, config.CacheEnabled)
+}
+
+func TestRoutingConfigRepository_UpdateConfig_RejectsInvalidColumnNames(t *testing.T) {
+	// Test for C-1: SQL column name injection prevention
+	db := testutil.NewTestDBWithDefaults(t)
+	repo := NewRoutingConfigRepository(db, zap.NewNop())
+	ctx := context.Background()
+
+	tests := []struct {
+		name        string
+		updates     map[string]any
+		shouldError bool
+	}{
+		{
+			name: "valid column name",
+			updates: map[string]any{
+				"enabled": true,
+			},
+			shouldError: false,
+		},
+		{
+			name: "invalid column name - SQL injection attempt",
+			updates: map[string]any{
+				"enabled; DROP TABLE routing_llm_config; --": true,
+			},
+			shouldError: true,
+		},
+		{
+			name: "invalid column name - non-existent field",
+			updates: map[string]any{
+				"malicious_field": "value",
+			},
+			shouldError: true,
+		},
+		{
+			name: "invalid column name - with quotes",
+			updates: map[string]any{
+				"enabled' OR '1'='1": true,
+			},
+			shouldError: true,
+		},
+		{
+			name: "multiple valid columns",
+			updates: map[string]any{
+				"enabled":           true,
+				"cache_enabled":     false,
+				"cache_ttl_seconds": 600,
+			},
+			shouldError: false,
+		},
+		{
+			name: "one valid, one invalid",
+			updates: map[string]any{
+				"enabled":        true,
+				"invalid_column": "value",
+			},
+			shouldError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := repo.UpdateConfig(ctx, tt.updates)
+			if tt.shouldError {
+				assert.Error(t, err, "should reject invalid column name")
+			} else {
+				assert.NoError(t, err, "should accept valid column names")
+			}
+		})
+	}
+}

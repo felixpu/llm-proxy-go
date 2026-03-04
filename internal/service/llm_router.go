@@ -118,8 +118,14 @@ func (r *LLMRouter) InferTaskType(ctx context.Context, req *models.AnthropicRequ
 			taskType := parseModelRole(entry.TaskType)
 			// Promote to L1
 			r.routingCache.Set(cacheKey, taskType)
-			// Update hit count async
-			go func() { _ = r.embeddingRepo.UpdateHitCountByHash(context.Background(), cacheKey) }()
+			// Update hit count async with timeout
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := r.embeddingRepo.UpdateHitCountByHash(ctx, cacheKey); err != nil {
+					r.logger.Warn("failed to update cache hit count", zap.Error(err))
+				}
+			}()
 
 			decision := &models.RoutingDecision{
 				TaskType:  taskType,
@@ -160,9 +166,17 @@ func (r *LLMRouter) classifyWithRules(ctx context.Context, cfg *models.RoutingCo
 	classifier := NewRoutingClassifier(customRules)
 	result := classifier.Classify(message)
 
-	// Increment hit count for matched rule async
+	// Increment hit count for matched rule async with timeout
 	if result.Rule != nil && result.Rule.ID > 0 {
-		go func() { _ = r.ruleRepo.IncrementHitCount(context.Background(), result.Rule.ID) }()
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := r.ruleRepo.IncrementHitCount(ctx, result.Rule.ID); err != nil {
+				r.logger.Warn("failed to increment rule hit count",
+					zap.Int64("rule_id", result.Rule.ID),
+					zap.Error(err))
+			}
+		}()
 	}
 
 	taskType := parseModelRole(result.TaskType)

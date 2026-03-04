@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/user/llm-proxy-go/internal/models"
@@ -12,18 +13,24 @@ import (
 	"go.uber.org/zap"
 )
 
+// RoutingModelRepositoryInterface defines the interface for routing model repository operations.
+type RoutingModelRepositoryInterface interface {
+	GetModelWithProviderAny(ctx context.Context, modelID int64) (*models.RoutingModelWithProvider, error)
+}
+
 // RoutingAnalyzer performs LLM-based routing rule analysis.
 type RoutingAnalyzer struct {
 	logRepo    repository.RequestLogRepository
 	ruleRepo   repository.RoutingRuleRepository
-	modelRepo  *repository.RoutingModelRepository
+	modelRepo  RoutingModelRepositoryInterface
 	reportRepo *repository.AnalysisReportRepository
 	extractor  *MessageExtractor
 	logger     *zap.Logger
 	client     *http.Client
 
-	mu    sync.RWMutex
-	tasks map[string]*models.AnalysisTask
+	mu       sync.RWMutex
+	tasks    map[string]*models.AnalysisTask
+	idCounter int64 // Atomic counter for unique task IDs
 }
 
 // NewRoutingAnalyzer creates a new RoutingAnalyzer.
@@ -48,16 +55,6 @@ func NewRoutingAnalyzer(
 
 // StartAnalysis launches an async analysis task and returns its ID.
 func (a *RoutingAnalyzer) StartAnalysis(ctx context.Context, req *models.AnalysisRequest) (string, error) {
-	// Limit concurrency: only 1 analysis at a time
-	a.mu.RLock()
-	for _, t := range a.tasks {
-		if t.Status == "pending" || t.Status == "running" {
-			a.mu.RUnlock()
-			return "", fmt.Errorf("analysis already in progress (task %s)", t.ID)
-		}
-	}
-	a.mu.RUnlock()
-
 	// Validate model (any status, user explicitly chose it)
 	modelCfg, err := a.modelRepo.GetModelWithProviderAny(ctx, req.ModelID)
 	if err != nil {
@@ -72,28 +69,43 @@ func (a *RoutingAnalyzer) StartAnalysis(ctx context.Context, req *models.Analysi
 		return "", fmt.Errorf("invalid model configuration: %w", err)
 	}
 
-	taskID := fmt.Sprintf("analysis-%d", time.Now().UnixMilli())
+	// Use single write lock for check-and-insert to prevent TOCTOU race
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Limit concurrency: only 1 analysis at a time
+	for _, t := range a.tasks {
+		if t.Status == "pending" || t.Status == "running" {
+			return "", fmt.Errorf("analysis already in progress (task %s)", t.ID)
+		}
+	}
+
+	taskID := fmt.Sprintf("analysis-%d-%d", time.Now().UnixMilli(), atomic.AddInt64(&a.idCounter, 1))
 	task := &models.AnalysisTask{
 		ID:        taskID,
-		Status:    "pending",
+		Status:    "running", // Set to running immediately to prevent race
 		Progress:  0,
 		Stage:     "initializing",
 		CreatedAt: time.Now(),
 	}
 
-	a.mu.Lock()
 	a.tasks[taskID] = task
-	a.mu.Unlock()
 
 	go a.runAnalysis(taskID, req, modelCfg)
 	return taskID, nil
 }
 
-// GetTask returns the current state of an analysis task.
+// GetTask returns a copy of the current state of an analysis task.
+// Returns nil if task not found.
 func (a *RoutingAnalyzer) GetTask(taskID string) *models.AnalysisTask {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.tasks[taskID]
+	if t, ok := a.tasks[taskID]; ok {
+		// Return a copy to prevent race conditions
+		copy := *t
+		return &copy
+	}
+	return nil
 }
 
 func (a *RoutingAnalyzer) updateTask(taskID string, fn func(t *models.AnalysisTask)) {
@@ -109,7 +121,6 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 	defer cancel()
 
 	a.updateTask(taskID, func(t *models.AnalysisTask) {
-		t.Status = "running"
 		t.Stage = "collecting_logs"
 		t.Progress = 5
 	})

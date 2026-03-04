@@ -63,7 +63,12 @@ func (s *EndpointSelector) SelectEndpoint(
 	endpoints []*models.Endpoint,
 ) (*EndpointSelectionResult, error) {
 	// Get routing config
-	cfg, _ := s.routingConfigRepo.GetConfig(ctx)
+	cfg, err := s.routingConfigRepo.GetConfig(ctx)
+	if err != nil {
+		s.logger.Warn("failed to load routing config, using defaults",
+			zap.Error(err))
+		// Continue with nil cfg, which will use default behavior
+	}
 
 	// Read cross-role fallback setting
 	crossRoleFallback := false

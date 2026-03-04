@@ -7,18 +7,46 @@ import (
 	"go.uber.org/zap"
 )
 
-// FallbackPriority defines cross-role fallback order (aligned with Python FALLBACK_PRIORITY).
-var FallbackPriority = map[models.ModelRole][]models.ModelRole{
+// fallbackPriority defines cross-role fallback order (aligned with Python FALLBACK_PRIORITY).
+// This map is immutable and should never be modified after initialization.
+var fallbackPriority = map[models.ModelRole][]models.ModelRole{
 	models.ModelRoleSimple:  {models.ModelRoleSimple, models.ModelRoleDefault, models.ModelRoleComplex},
 	models.ModelRoleDefault: {models.ModelRoleDefault, models.ModelRoleComplex},
 	models.ModelRoleComplex: {models.ModelRoleComplex, models.ModelRoleDefault},
 }
 
-// SameRoleFallback restricts fallback to the same role only (no cross-role degradation).
-var SameRoleFallback = map[models.ModelRole][]models.ModelRole{
+// sameRoleFallback restricts fallback to the same role only (no cross-role degradation).
+// This map is immutable and should never be modified after initialization.
+var sameRoleFallback = map[models.ModelRole][]models.ModelRole{
 	models.ModelRoleSimple:  {models.ModelRoleSimple},
 	models.ModelRoleDefault: {models.ModelRoleDefault},
 	models.ModelRoleComplex: {models.ModelRoleComplex},
+}
+
+// GetFallbackPriority returns the cross-role fallback chain for the given role.
+// Returns a copy to prevent external modification.
+func GetFallbackPriority(role models.ModelRole) []models.ModelRole {
+	chain, ok := fallbackPriority[role]
+	if !ok {
+		return []models.ModelRole{role}
+	}
+	// Return a copy to prevent modification
+	result := make([]models.ModelRole, len(chain))
+	copy(result, chain)
+	return result
+}
+
+// GetSameRoleFallback returns the same-role fallback chain for the given role.
+// Returns a copy to prevent external modification.
+func GetSameRoleFallback(role models.ModelRole) []models.ModelRole {
+	chain, ok := sameRoleFallback[role]
+	if !ok {
+		return []models.ModelRole{role}
+	}
+	// Return a copy to prevent modification
+	result := make([]models.ModelRole, len(chain))
+	copy(result, chain)
+	return result
 }
 
 // ModelSelector handles model selection with weight-based picking and cross-role fallback.
@@ -114,12 +142,9 @@ func (s *ModelSelector) FindAvailableModelWithFallback(
 ) (*models.Model, *models.FallbackInfo, error) {
 	var fallbackChain []models.ModelRole
 	if crossRoleFallback {
-		fallbackChain = FallbackPriority[originalRole]
+		fallbackChain = GetFallbackPriority(originalRole)
 	} else {
-		fallbackChain = SameRoleFallback[originalRole]
-	}
-	if len(fallbackChain) == 0 {
-		fallbackChain = []models.ModelRole{originalRole}
+		fallbackChain = GetSameRoleFallback(originalRole)
 	}
 
 	var triedRoles []string

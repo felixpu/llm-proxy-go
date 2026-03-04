@@ -330,7 +330,13 @@ func (a *RoutingAnalyzer) runBatchedAnalysis(
 		// Memory check before processing batch
 		runtime.ReadMemStats(&memStats)
 		currentAlloc := memStats.Alloc
-		memoryIncreaseMB := (currentAlloc - baselineAlloc) / 1024 / 1024
+		var memoryIncreaseMB uint64
+		if currentAlloc > baselineAlloc {
+			memoryIncreaseMB = (currentAlloc - baselineAlloc) / 1024 / 1024
+		} else {
+			// After GC, current allocation might be less than baseline
+			memoryIncreaseMB = 0
+		}
 
 		if memoryIncreaseMB > maxMemoryIncreaseMB {
 			warning := fmt.Sprintf("⚠️ 内存使用超过阈值 (%d MB)，在批次 %d/%d 处提前终止分析",
@@ -398,16 +404,23 @@ func (a *RoutingAnalyzer) runBatchedAnalysis(
 		// Log memory usage after each batch
 		if i%5 == 0 || i == numBatches-1 {
 			runtime.ReadMemStats(&memStats)
+			var currentIncreaseMB uint64
+			if memStats.Alloc > baselineAlloc {
+				currentIncreaseMB = (memStats.Alloc - baselineAlloc) / 1024 / 1024
+			}
 			a.logger.Debug("batch memory usage",
 				zap.Int("batch", i+1),
 				zap.Uint64("current_alloc_mb", memStats.Alloc/1024/1024),
-				zap.Uint64("increase_mb", (memStats.Alloc-baselineAlloc)/1024/1024))
+				zap.Uint64("increase_mb", currentIncreaseMB))
 		}
 	}
 
 	// Final memory report
 	runtime.ReadMemStats(&memStats)
-	finalMemoryIncreaseMB := (memStats.Alloc - baselineAlloc) / 1024 / 1024
+	var finalMemoryIncreaseMB uint64
+	if memStats.Alloc > baselineAlloc {
+		finalMemoryIncreaseMB = (memStats.Alloc - baselineAlloc) / 1024 / 1024
+	}
 	a.logger.Info("batched analysis completed",
 		zap.String("task_id", taskID),
 		zap.Int("successful_batches", numBatches-failedBatches),

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/user/llm-proxy-go/internal/models"
@@ -27,8 +28,34 @@ var routingConfigBoolFields = map[string]bool{
 	"semantic_cache_enabled":      true,
 	"force_smart_routing":         true,
 	"rule_based_routing_enabled":  true,
-	"log_full_content":                true,
-	"cross_role_fallback_enabled":  true,
+	"log_full_content":            true,
+	"cross_role_fallback_enabled": true,
+}
+
+// validRoutingConfigColumns is the allowlist of valid column names for UpdateConfig.
+// This prevents SQL injection via column names.
+var validRoutingConfigColumns = map[string]bool{
+	"enabled":                     true,
+	"primary_model_id":            true,
+	"fallback_model_id":           true,
+	"timeout_seconds":             true,
+	"cache_enabled":               true,
+	"cache_ttl_seconds":           true,
+	"cache_ttl_l3_seconds":        true,
+	"max_tokens":                  true,
+	"temperature":                 true,
+	"retry_count":                 true,
+	"semantic_cache_enabled":      true,
+	"embedding_model_id":          true,
+	"similarity_threshold":        true,
+	"local_embedding_model":       true,
+	"force_smart_routing":         true,
+	"rule_based_routing_enabled":  true,
+	"rule_fallback_strategy":      true,
+	"rule_fallback_task_type":     true,
+	"rule_fallback_model_id":      true,
+	"cross_role_fallback_enabled": true,
+	"log_full_content":            true,
 }
 
 // GetConfig retrieves the LLM routing configuration.
@@ -73,7 +100,7 @@ func (r *RoutingConfigRepository) GetConfig(ctx context.Context) (*models.Routin
 		&ruleFallbackModelID, &crossRoleFallbackEnabled, &logFullContent,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			r.logger.Debug("no routing config found, using defaults")
 			return models.DefaultRoutingConfig(), nil
 		}
@@ -169,6 +196,11 @@ func (r *RoutingConfigRepository) UpdateConfig(ctx context.Context, updates map[
 	params := make([]any, 0, len(updates))
 
 	for field, value := range updates {
+		// Validate column name against allowlist to prevent SQL injection
+		if !validRoutingConfigColumns[field] {
+			return fmt.Errorf("invalid column name: %q", field)
+		}
+
 		// Convert bool to int for SQLite
 		if routingConfigBoolFields[field] {
 			if b, ok := value.(bool); ok {
