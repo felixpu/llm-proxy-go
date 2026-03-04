@@ -49,11 +49,13 @@ tests/                          → 集中式测试（e2e/, integration/, testut
 
 ## Key Services (internal/service/)
 
-- **ProxyService** — 核心代理：请求转发、流式响应、元数据收集（延迟/成本/Token）
+- **ProxyService** — 核心代理：请求转发、流式响应、元数据收集（延迟/成本/Token）。使用 APIAdapter 接口支持多 Provider
+- **APIAdapter** — Provider 适配器接口，每个 Provider（Anthropic/OpenAI）实现自己的请求构建、响应解析、流式处理。共享逻辑在 `llm_caller.go`
 - **AuthService** — API Key 验证 + Session 管理 + 默认管理员创建
-- **HealthChecker** — 后台定期检查端点可用性，自动标记不健康端点
+- **HealthChecker** — 后台定期检查端点可用性 + 熔断器（Circuit Breaker）：Closed → Open → Half-Open 状态机，自动隔离故障端点
 - **LoadBalancer** — 四种策略：round_robin / weighted / least_connections / conversation_hash
 - **LLMRouter** — 基于嵌入向量的语义路由 + 条件解析
+- **RoutingAnalyzerV2** — 批量分析路由规则有效性，生成报告（按规则分组、警告、优先级）
 - **EndpointStore** — 从 Model+Provider 构建端点列表，运行时动态更新
 - **WorkerCoordinator** — 多进程 Primary 选举、心跳、故障转移
 - **CacheService** — L1 内存(bigcache) + L2 SQLite + L3 语义缓存
@@ -89,3 +91,18 @@ SQLite（modernc.org/sqlite 纯 Go 驱动），WAL 模式。迁移文件在 `int
 
 - 代码注释使用英文（与现有代码库保持一致）
 - README 和用户文档使用中文
+
+## Recent Architecture Decisions
+
+参考 `docs/decisions/` 中的 ADR（Architecture Decision Records）：
+
+- **ADR-0001**: 熔断器（Circuit Breaker）设计 — 状态机模式，自动隔离故障端点，30 秒熔断时长
+- **ADR-0002**: Provider API 适配器系统 — 接口抽象，支持多 Provider（Anthropic/OpenAI），共享 HTTP 调用逻辑
+
+## Message Extraction
+
+路由和分析使用统一的消息提取逻辑（`internal/service/message_extractor.go`）：
+- 优先提取最后一条 user 消息
+- 支持跨角色回退（user → assistant → system）
+- 处理多模态内容（文本 + 图片）
+- 路由分析器使用相同逻辑确保数据一致性
