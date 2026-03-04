@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/user/llm-proxy-go/internal/models"
-	"github.com/user/llm-proxy-go/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -15,16 +14,24 @@ import (
 type EndpointStore struct {
 	mu            sync.RWMutex
 	endpoints     []*models.Endpoint
-	modelRepo     *repository.SQLModelRepository
-	providerRepo  *repository.SQLProviderRepository
+	modelRepo     endpointStoreModelRepository
+	providerRepo  endpointStoreProviderRepository
 	healthChecker *HealthChecker
 	logger        *zap.Logger
 }
 
+type endpointStoreModelRepository interface {
+	FindAllEnabled(ctx context.Context) ([]*models.Model, error)
+}
+
+type endpointStoreProviderRepository interface {
+	FindByModelID(ctx context.Context, modelID int64) ([]*models.Provider, error)
+}
+
 // NewEndpointStore creates a new EndpointStore.
 func NewEndpointStore(
-	modelRepo *repository.SQLModelRepository,
-	providerRepo *repository.SQLProviderRepository,
+	modelRepo endpointStoreModelRepository,
+	providerRepo endpointStoreProviderRepository,
 	logger *zap.Logger,
 ) *EndpointStore {
 	return &EndpointStore{
@@ -83,11 +90,17 @@ func (s *EndpointStore) ReloadAndNotify(ctx context.Context) {
 	}
 }
 
-// GetEndpoints returns the current endpoint snapshot (zero-copy).
+// GetEndpoints returns the current endpoint snapshot.
+// It returns a copy of slice header to prevent external mutation of internal storage.
 func (s *EndpointStore) GetEndpoints() []*models.Endpoint {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.endpoints
+	if len(s.endpoints) == 0 {
+		return nil
+	}
+	snapshot := make([]*models.Endpoint, len(s.endpoints))
+	copy(snapshot, s.endpoints)
+	return snapshot
 }
 
 func (s *EndpointStore) loadFromDB(ctx context.Context) ([]*models.Endpoint, error) {

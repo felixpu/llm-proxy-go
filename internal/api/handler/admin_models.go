@@ -37,14 +37,15 @@ type ModelUpdate struct {
 
 // ModelHandler handles model management API endpoints.
 type ModelHandler struct {
-	repo          *repository.SQLModelRepository
+	repo          repository.ModelRepository
 	endpointStore *service.EndpointStore
 }
 
 // NewModelHandler creates a new ModelHandler.
-func NewModelHandler(repo *repository.SQLModelRepository, endpointStore *service.EndpointStore) *ModelHandler {
+func NewModelHandler(repo repository.ModelRepository, endpointStore *service.EndpointStore) *ModelHandler {
 	return &ModelHandler{repo: repo, endpointStore: endpointStore}
 }
+
 // ListModels returns all models.
 func (h *ModelHandler) ListModels(c *gin.Context) {
 	list, err := h.repo.FindAll(c.Request.Context())
@@ -115,16 +116,17 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 		errorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	updates := make(map[string]any)
-	if req.Name != nil { updates["name"] = *req.Name }
-	if req.Role != nil { updates["role"] = *req.Role }
-	if req.CostPerMtokInput != nil { updates["cost_per_mtok_input"] = *req.CostPerMtokInput }
-	if req.CostPerMtokOutput != nil { updates["cost_per_mtok_output"] = *req.CostPerMtokOutput }
-	if req.BillingMultiplier != nil { updates["billing_multiplier"] = *req.BillingMultiplier }
-	if req.SupportsThinking != nil { updates["supports_thinking"] = *req.SupportsThinking }
-	if req.Enabled != nil { updates["enabled"] = *req.Enabled }
-	if req.Weight != nil { updates["weight"] = *req.Weight }
-	if err := h.repo.Update(c.Request.Context(), id, updates); err != nil {
+	patch := repository.ModelPatch{
+		Name:              req.Name,
+		Role:              req.Role,
+		CostPerMtokInput:  req.CostPerMtokInput,
+		CostPerMtokOutput: req.CostPerMtokOutput,
+		BillingMultiplier: req.BillingMultiplier,
+		SupportsThinking:  req.SupportsThinking,
+		Enabled:           req.Enabled,
+		Weight:            req.Weight,
+	}
+	if err := h.repo.UpdatePatch(c.Request.Context(), id, patch); err != nil {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}

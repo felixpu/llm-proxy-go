@@ -10,19 +10,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/user/llm-proxy-go/internal/api/middleware"
 	"github.com/user/llm-proxy-go/internal/models"
-	"github.com/user/llm-proxy-go/internal/repository"
 	"github.com/user/llm-proxy-go/internal/service"
 	"go.uber.org/zap"
 )
 
 // ProxyHandler handles proxy requests.
 type ProxyHandler struct {
-	proxyService      *service.ProxyService
-	authService       *service.AuthService
-	endpointSelector  *service.EndpointSelector
-	routingConfigRepo *repository.RoutingConfigRepository
-	logger            *zap.Logger
+	proxyService     *service.ProxyService
+	authService      *service.AuthService
+	endpointSelector *service.EndpointSelector
+	configProvider   service.RoutingConfigProvider
+	contentPolicy    *ContentLoggingPolicy
+	logger           *zap.Logger
 }
 
 // NewProxyHandler creates a new ProxyHandler.
@@ -30,15 +31,16 @@ func NewProxyHandler(
 	ps *service.ProxyService,
 	as *service.AuthService,
 	es *service.EndpointSelector,
-	rcr *repository.RoutingConfigRepository,
+	configProvider service.RoutingConfigProvider,
 	logger *zap.Logger,
 ) *ProxyHandler {
 	return &ProxyHandler{
-		proxyService:      ps,
-		authService:       as,
-		endpointSelector:  es,
-		routingConfigRepo: rcr,
-		logger:            logger,
+		proxyService:     ps,
+		authService:      as,
+		endpointSelector: es,
+		configProvider:   configProvider,
+		contentPolicy:    NewContentLoggingPolicy(configProvider, logger),
+		logger:           logger,
 	}
 }
 
@@ -100,9 +102,8 @@ func (h *ProxyHandler) Messages(c *gin.Context) {
 		return
 	}
 
-	// Get endpoints from context
-	endpoints, ok := c.Get("endpoints")
-	if !ok || endpoints == nil {
+	eps, ok := getEndpointsFromContext(c)
+	if !ok {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"type": "error",
 			"error": gin.H{
@@ -113,7 +114,9 @@ func (h *ProxyHandler) Messages(c *gin.Context) {
 		return
 	}
 
-	eps := endpoints.([]*models.Endpoint)
+	// Preload request-scoped routing config once for selector/router/logging path.
+	ctx, _, _ := service.GetOrLoadRoutingConfig(c.Request.Context(), h.configProvider)
+	c.Request = c.Request.WithContext(ctx)
 
 	// Check if streaming is requested
 	if req.Stream {
@@ -123,6 +126,18 @@ func (h *ProxyHandler) Messages(c *gin.Context) {
 
 	// Non-streaming request
 	h.handleNonStreamRequest(c, &req, eps, user)
+}
+
+func getEndpointsFromContext(c *gin.Context) ([]*models.Endpoint, bool) {
+	value, ok := c.Get(middleware.ContextKeyEndpoints)
+	if !ok || value == nil {
+		return nil, false
+	}
+	eps, ok := value.([]*models.Endpoint)
+	if !ok {
+		return nil, false
+	}
+	return eps, true
 }
 
 // handleNonStreamRequest handles non-streaming proxy requests.
@@ -405,17 +420,7 @@ func extractAPIKey(c *gin.Context) string {
 
 // attachContent attaches full request/response content to metadata if configured.
 func (h *ProxyHandler) attachContent(ctx context.Context, meta *service.ProxyMetadata, req *models.AnthropicRequest, resp *models.AnthropicResponse) {
-	if h.routingConfigRepo == nil {
-		return
-	}
-
-	cfg, err := h.routingConfigRepo.GetConfig(ctx)
-	if err != nil {
-		h.logger.Warn("failed to get routing config for content logging", zap.Error(err))
-		return
-	}
-
-	if !cfg.LogFullContent {
+	if h.contentPolicy == nil || !h.contentPolicy.ShouldLogFullContent(ctx) {
 		return
 	}
 
@@ -435,17 +440,7 @@ func (h *ProxyHandler) attachContent(ctx context.Context, meta *service.ProxyMet
 // attachStreamContent attaches request content to stream metadata if configured.
 // Response content is not available for streaming requests.
 func (h *ProxyHandler) attachStreamContent(ctx context.Context, meta *service.ProxyMetadata, req *models.AnthropicRequest) {
-	if h.routingConfigRepo == nil {
-		return
-	}
-
-	cfg, err := h.routingConfigRepo.GetConfig(ctx)
-	if err != nil {
-		h.logger.Warn("failed to get routing config for content logging", zap.Error(err))
-		return
-	}
-
-	if !cfg.LogFullContent {
+	if h.contentPolicy == nil || !h.contentPolicy.ShouldLogFullContent(ctx) {
 		return
 	}
 

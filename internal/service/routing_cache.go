@@ -81,7 +81,7 @@ type RoutingCache struct {
 // NewRoutingCache creates a new RoutingCache.
 func NewRoutingCache(maxSize int, logger *zap.Logger) *RoutingCache {
 	if maxSize <= 0 {
-		maxSize = 10000
+		maxSize = DefaultRoutingCacheSize
 	}
 	return &RoutingCache{
 		cache:   make(map[string]*routingCacheEntry),

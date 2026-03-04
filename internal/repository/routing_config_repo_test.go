@@ -141,7 +141,7 @@ func TestRoutingConfigRepository_UpdateConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := repo.UpdateConfig(ctx, tt.updates)
+			err := repo.UpdateConfigPatch(ctx, routingConfigPatchFromMap(tt.updates))
 			require.NoError(t, err)
 
 			if len(tt.updates) > 0 {
@@ -159,8 +159,8 @@ func TestRoutingConfigRepository_UpdateConfig_ClearModelID(t *testing.T) {
 	ctx := context.Background()
 
 	// First set a model ID
-	err := repo.UpdateConfig(ctx, map[string]any{
-		"primary_model_id": int64(1),
+	err := repo.UpdateConfigPatch(ctx, RoutingConfigPatch{
+		PrimaryModelID: ptrInt64RoutingConfig(1),
 	})
 	require.NoError(t, err)
 
@@ -169,8 +169,8 @@ func TestRoutingConfigRepository_UpdateConfig_ClearModelID(t *testing.T) {
 	require.NotNil(t, config.PrimaryModelID)
 
 	// Clear model ID by setting to 0 or negative
-	err = repo.UpdateConfig(ctx, map[string]any{
-		"primary_model_id": int64(0),
+	err = repo.UpdateConfigPatch(ctx, RoutingConfigPatch{
+		PrimaryModelID: ptrInt64RoutingConfig(0),
 	})
 	require.NoError(t, err)
 
@@ -194,72 +194,116 @@ func TestRoutingConfigRepository_GetConfig_WrappedNoRowsError(t *testing.T) {
 	assert.True(t, config.CacheEnabled)
 }
 
-func TestRoutingConfigRepository_UpdateConfig_RejectsInvalidColumnNames(t *testing.T) {
-	// Test for C-1: SQL column name injection prevention
+func TestRoutingConfigRepository_UpdateConfigPatch_TypeSafeColumns(t *testing.T) {
 	db := testutil.NewTestDBWithDefaults(t)
 	repo := NewRoutingConfigRepository(db, zap.NewNop())
 	ctx := context.Background()
 
-	tests := []struct {
-		name        string
-		updates     map[string]any
-		shouldError bool
-	}{
-		{
-			name: "valid column name",
-			updates: map[string]any{
-				"enabled": true,
-			},
-			shouldError: false,
-		},
-		{
-			name: "invalid column name - SQL injection attempt",
-			updates: map[string]any{
-				"enabled; DROP TABLE routing_llm_config; --": true,
-			},
-			shouldError: true,
-		},
-		{
-			name: "invalid column name - non-existent field",
-			updates: map[string]any{
-				"malicious_field": "value",
-			},
-			shouldError: true,
-		},
-		{
-			name: "invalid column name - with quotes",
-			updates: map[string]any{
-				"enabled' OR '1'='1": true,
-			},
-			shouldError: true,
-		},
-		{
-			name: "multiple valid columns",
-			updates: map[string]any{
-				"enabled":           true,
-				"cache_enabled":     false,
-				"cache_ttl_seconds": 600,
-			},
-			shouldError: false,
-		},
-		{
-			name: "one valid, one invalid",
-			updates: map[string]any{
-				"enabled":        true,
-				"invalid_column": "value",
-			},
-			shouldError: true,
-		},
+	enabled := true
+	ttl := 600
+	require.NoError(t, repo.UpdateConfigPatch(ctx, RoutingConfigPatch{
+		Enabled:         &enabled,
+		CacheTTLSeconds: &ttl,
+	}))
+
+	cfg, err := repo.GetConfig(ctx)
+	require.NoError(t, err)
+	assert.True(t, cfg.Enabled)
+	assert.Equal(t, 600, cfg.CacheTTLSeconds)
+}
+
+func TestRoutingConfigRepository_UpdateConfigPatch(t *testing.T) {
+	db := testutil.NewTestDBWithDefaults(t)
+	repo := NewRoutingConfigRepository(db, zap.NewNop())
+	ctx := context.Background()
+
+	enabled := true
+	ttl := 900
+	logFull := false
+	patch := RoutingConfigPatch{
+		Enabled:         &enabled,
+		CacheTTLSeconds: &ttl,
+		LogFullContent:  &logFull,
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := repo.UpdateConfig(ctx, tt.updates)
-			if tt.shouldError {
-				assert.Error(t, err, "should reject invalid column name")
-			} else {
-				assert.NoError(t, err, "should accept valid column names")
-			}
-		})
+	require.NoError(t, repo.UpdateConfigPatch(ctx, patch))
+
+	cfg, err := repo.GetConfig(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, cfg)
+	assert.True(t, cfg.Enabled)
+	assert.Equal(t, 900, cfg.CacheTTLSeconds)
+	assert.False(t, cfg.LogFullContent)
+}
+
+func routingConfigPatchFromMap(updates map[string]any) RoutingConfigPatch {
+	patch := RoutingConfigPatch{}
+	if v, ok := updates["enabled"].(bool); ok {
+		patch.Enabled = &v
 	}
+	if v, ok := updates["primary_model_id"].(int64); ok {
+		patch.PrimaryModelID = &v
+	}
+	if v, ok := updates["fallback_model_id"].(int64); ok {
+		patch.FallbackModelID = &v
+	}
+	if v, ok := updates["timeout_seconds"].(int); ok {
+		patch.TimeoutSeconds = &v
+	}
+	if v, ok := updates["cache_enabled"].(bool); ok {
+		patch.CacheEnabled = &v
+	}
+	if v, ok := updates["cache_ttl_seconds"].(int); ok {
+		patch.CacheTTLSeconds = &v
+	}
+	if v, ok := updates["cache_ttl_l3_seconds"].(int); ok {
+		patch.CacheTTLL3Seconds = &v
+	}
+	if v, ok := updates["max_tokens"].(int); ok {
+		patch.MaxTokens = &v
+	}
+	if v, ok := updates["temperature"].(float64); ok {
+		patch.Temperature = &v
+	}
+	if v, ok := updates["retry_count"].(int); ok {
+		patch.RetryCount = &v
+	}
+	if v, ok := updates["semantic_cache_enabled"].(bool); ok {
+		patch.SemanticCacheEnabled = &v
+	}
+	if v, ok := updates["embedding_model_id"].(int64); ok {
+		patch.EmbeddingModelID = &v
+	}
+	if v, ok := updates["similarity_threshold"].(float64); ok {
+		patch.SimilarityThreshold = &v
+	}
+	if v, ok := updates["local_embedding_model"].(string); ok {
+		patch.LocalEmbeddingModel = &v
+	}
+	if v, ok := updates["force_smart_routing"].(bool); ok {
+		patch.ForceSmartRouting = &v
+	}
+	if v, ok := updates["rule_based_routing_enabled"].(bool); ok {
+		patch.RuleBasedRoutingEnabled = &v
+	}
+	if v, ok := updates["rule_fallback_strategy"].(string); ok {
+		patch.RuleFallbackStrategy = &v
+	}
+	if v, ok := updates["rule_fallback_task_type"].(string); ok {
+		patch.RuleFallbackTaskType = &v
+	}
+	if v, ok := updates["rule_fallback_model_id"].(int64); ok {
+		patch.RuleFallbackModelID = &v
+	}
+	if v, ok := updates["cross_role_fallback_enabled"].(bool); ok {
+		patch.CrossRoleFallbackEnabled = &v
+	}
+	if v, ok := updates["log_full_content"].(bool); ok {
+		patch.LogFullContent = &v
+	}
+	return patch
+}
+
+func ptrInt64RoutingConfig(v int64) *int64 {
+	return &v
 }

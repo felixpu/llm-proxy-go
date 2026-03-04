@@ -58,7 +58,7 @@ const maxEndpointRetries = 3
 type ProxyService struct {
 	healthChecker *HealthChecker
 	loadBalancer  *LoadBalancer
-	logRepo       repository.RequestLogRepository
+	logRepo       repository.RequestLogWriteRepository
 	logger        *zap.Logger
 	client        *http.Client
 	streamClient  *http.Client // Separate client for streaming with longer timeout
@@ -68,7 +68,7 @@ type ProxyService struct {
 func NewProxyService(
 	hc *HealthChecker,
 	lb *LoadBalancer,
-	logRepo repository.RequestLogRepository,
+	logRepo repository.RequestLogWriteRepository,
 	logger *zap.Logger,
 ) *ProxyService {
 	return &ProxyService{
@@ -77,7 +77,7 @@ func NewProxyService(
 		logRepo:       logRepo,
 		logger:        logger,
 		client: &http.Client{
-			Timeout: 120 * time.Second,
+			Timeout: DefaultProxyHTTPTimeout,
 			Transport: &http.Transport{
 				MaxIdleConns:        100,
 				MaxIdleConnsPerHost: 20,
@@ -436,11 +436,11 @@ func (s *ProxyService) SaveRequestLog(ctx context.Context, meta *ProxyMetadata, 
 
 	// Generate message preview from request content
 	if meta.RequestContent != "" {
-		entry.MessagePreview = truncateStr(meta.RequestContent, 200)
+		entry.MessagePreview = truncateStr(meta.RequestContent, DefaultContentPreviewMaxChars)
 	}
 
 	go func() {
-		saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		saveCtx, cancel := context.WithTimeout(context.Background(), DefaultAsyncRepoTimeout)
 		defer cancel()
 		if _, err := s.logRepo.Insert(saveCtx, entry); err != nil {
 			s.logger.Error("failed to save request log",

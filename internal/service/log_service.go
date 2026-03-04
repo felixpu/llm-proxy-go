@@ -19,6 +19,7 @@ type LogService struct {
 	logChan       chan *models.RequestLogEntry
 	done          chan struct{}
 	wg            sync.WaitGroup
+	stopOnce      sync.Once
 	batchSize     int
 	flushInterval time.Duration
 }
@@ -51,7 +52,7 @@ func (ls *LogService) LogRequest(entry *models.RequestLogEntry) {
 	case ls.logChan <- entry:
 	default:
 		ls.logger.Warn("log channel full, writing synchronously")
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultAsyncRepoTimeout)
 		defer cancel()
 		if _, err := ls.repo.Insert(ctx, entry); err != nil {
 			ls.logger.Error("failed to insert log", zap.Error(err))
@@ -100,9 +101,11 @@ func (ls *LogService) batchWriter() {
 
 // Stop gracefully stops the log service
 func (ls *LogService) Stop() {
-	close(ls.done)
-	ls.wg.Wait()
-	ls.logger.Info("log service stopped")
+	ls.stopOnce.Do(func() {
+		close(ls.done)
+		ls.wg.Wait()
+		ls.logger.Info("log service stopped")
+	})
 }
 
 // ListLogs retrieves request logs with filtering and pagination

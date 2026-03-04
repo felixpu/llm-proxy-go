@@ -30,8 +30,9 @@ func TestSystemConfigRepository_UpdateRoutingConfig(t *testing.T) {
 	repo := NewSystemConfigRepository(db)
 	ctx := context.Background()
 
-	err := repo.UpdateRoutingConfig(ctx, map[string]any{
-		"default_role": "simple",
+	defaultRole := "simple"
+	err := repo.UpdateRoutingConfigPatch(ctx, SystemRoutingConfigPatch{
+		DefaultRole: &defaultRole,
 	})
 	require.NoError(t, err)
 
@@ -57,8 +58,9 @@ func TestSystemConfigRepository_UpdateLoadBalanceConfig(t *testing.T) {
 	repo := NewSystemConfigRepository(db)
 	ctx := context.Background()
 
-	err := repo.UpdateLoadBalanceConfig(ctx, map[string]any{
-		"strategy": "round_robin",
+	strategy := "round_robin"
+	err := repo.UpdateLoadBalanceConfigPatch(ctx, SystemLoadBalanceConfigPatch{
+		Strategy: &strategy,
 	})
 	require.NoError(t, err)
 
@@ -86,10 +88,13 @@ func TestSystemConfigRepository_UpdateHealthCheckConfig(t *testing.T) {
 	repo := NewSystemConfigRepository(db)
 	ctx := context.Background()
 
-	err := repo.UpdateHealthCheckConfig(ctx, map[string]any{
-		"enabled":          0,
-		"interval_seconds": 120,
-		"timeout_seconds":  30,
+	enabled := false
+	interval := 120
+	timeout := 30
+	err := repo.UpdateHealthCheckConfigPatch(ctx, SystemHealthCheckConfigPatch{
+		Enabled:         &enabled,
+		IntervalSeconds: &interval,
+		TimeoutSeconds:  &timeout,
 	})
 	require.NoError(t, err)
 
@@ -118,9 +123,11 @@ func TestSystemConfigRepository_UpdateUIConfig(t *testing.T) {
 	repo := NewSystemConfigRepository(db)
 	ctx := context.Background()
 
-	err := repo.UpdateUIConfig(ctx, map[string]any{
-		"dashboard_refresh_seconds": 60,
-		"logs_refresh_seconds":      15,
+	dashboardRefresh := 60
+	logsRefresh := 15
+	err := repo.UpdateUIConfigPatch(ctx, SystemUIConfigPatch{
+		DashboardRefreshSeconds: &dashboardRefresh,
+		LogsRefreshSeconds:      &logsRefresh,
 	})
 	require.NoError(t, err)
 
@@ -136,16 +143,16 @@ func TestSystemConfigRepository_EmptyUpdates(t *testing.T) {
 	ctx := context.Background()
 
 	// Empty updates should not error
-	err := repo.UpdateRoutingConfig(ctx, map[string]any{})
+	err := repo.UpdateRoutingConfigPatch(ctx, SystemRoutingConfigPatch{})
 	assert.NoError(t, err)
 
-	err = repo.UpdateLoadBalanceConfig(ctx, map[string]any{})
+	err = repo.UpdateLoadBalanceConfigPatch(ctx, SystemLoadBalanceConfigPatch{})
 	assert.NoError(t, err)
 
-	err = repo.UpdateHealthCheckConfig(ctx, map[string]any{})
+	err = repo.UpdateHealthCheckConfigPatch(ctx, SystemHealthCheckConfigPatch{})
 	assert.NoError(t, err)
 
-	err = repo.UpdateUIConfig(ctx, map[string]any{})
+	err = repo.UpdateUIConfigPatch(ctx, SystemUIConfigPatch{})
 	assert.NoError(t, err)
 }
 

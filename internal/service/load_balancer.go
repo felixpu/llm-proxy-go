@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/user/llm-proxy-go/internal/models"
-	"github.com/user/llm-proxy-go/internal/repository"
 )
 
 // Thread-safe random source for load balancing.
@@ -30,7 +29,7 @@ type Balancer interface {
 
 // LoadBalancer dynamically selects strategy from database and delegates endpoint selection.
 type LoadBalancer struct {
-	configRepo *repository.SystemConfigRepository
+	configRepo loadBalanceConfigRepository
 
 	// Strategy cache to avoid DB query on every request
 	mu             sync.RWMutex
@@ -42,8 +41,12 @@ type LoadBalancer struct {
 	roundRobin *roundRobinBalancer
 }
 
+type loadBalanceConfigRepository interface {
+	GetLoadBalanceConfig(ctx context.Context) (map[string]any, error)
+}
+
 // NewLoadBalancer creates a LoadBalancer that dynamically reads strategy from database.
-func NewLoadBalancer(configRepo *repository.SystemConfigRepository) *LoadBalancer {
+func NewLoadBalancer(configRepo loadBalanceConfigRepository) *LoadBalancer {
 	return &LoadBalancer{
 		configRepo:     configRepo,
 		cacheTTL:       5 * time.Second,
@@ -177,8 +180,8 @@ func selectConversationHash(endpoints []*models.Endpoint, req *models.AnthropicR
 	for _, part := range first.Content.GetParts() {
 		if part.Text != "" {
 			text := part.Text
-			if len(text) > 200 {
-				text = text[:200]
+			if len(text) > DefaultContentPreviewMaxChars {
+				text = text[:DefaultContentPreviewMaxChars]
 			}
 			content += text
 			break

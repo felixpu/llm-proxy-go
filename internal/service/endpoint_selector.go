@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/user/llm-proxy-go/internal/models"
-	"github.com/user/llm-proxy-go/internal/repository"
 	"go.uber.org/zap"
 )
 
@@ -26,7 +25,7 @@ type EndpointSelector struct {
 	healthChecker     *HealthChecker
 	loadBalancer      *LoadBalancer
 	llmRouter         *LLMRouter
-	routingConfigRepo *repository.RoutingConfigRepository
+	routingConfigRepo RoutingConfigProvider
 	logger            *zap.Logger
 }
 
@@ -36,7 +35,7 @@ func NewEndpointSelector(
 	hc *HealthChecker,
 	lb *LoadBalancer,
 	lr *LLMRouter,
-	rcr *repository.RoutingConfigRepository,
+	rcr RoutingConfigProvider,
 	logger *zap.Logger,
 ) *EndpointSelector {
 	return &EndpointSelector{
@@ -63,7 +62,7 @@ func (s *EndpointSelector) SelectEndpoint(
 	endpoints []*models.Endpoint,
 ) (*EndpointSelectionResult, error) {
 	// Get routing config
-	cfg, err := s.routingConfigRepo.GetConfig(ctx)
+	ctx, cfg, err := GetOrLoadRoutingConfig(ctx, s.routingConfigRepo)
 	if err != nil {
 		s.logger.Warn("failed to load routing config, using defaults",
 			zap.Error(err))

@@ -56,6 +56,17 @@ func TestLogService_LogRequest_NoBlock(t *testing.T) {
 	ls.Stop()
 }
 
+func TestLogService_Stop_Idempotent(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	logger := zap.NewNop()
+
+	ls := NewLogService(db, logger)
+	ls.Stop()
+
+	// Second stop should not panic.
+	ls.Stop()
+}
+
 // seedLogUser ensures a test user exists for foreign key constraints
 func seedLogUser(t *testing.T, db *sql.DB) {
 	t.Helper()

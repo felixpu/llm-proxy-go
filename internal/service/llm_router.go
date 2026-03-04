@@ -18,14 +18,40 @@ import (
 var jsonBlockRe = regexp.MustCompile("(?s)```(?:json)?\\s*\\n?(.*?)\\n?```")
 var jsonObjectRe = regexp.MustCompile(`\{[^{}]*"task_type"\s*:\s*"[^"]+?"[^{}]*\}`)
 
+type routingConfigProvider interface {
+	GetConfig(ctx context.Context) (*models.RoutingConfig, error)
+}
+
+type routingModelProvider interface {
+	GetModelWithProvider(ctx context.Context, id int64) (*models.RoutingModelWithProvider, error)
+}
+
+type routingEmbeddingCache interface {
+	GetExactMatch(ctx context.Context, contentHash string, ttlSeconds int) (*repository.EmbeddingCacheEntry, error)
+	UpdateHitCountByHash(ctx context.Context, contentHash string) error
+	SaveCache(ctx context.Context, contentHash, contentPreview string, embedding []float64, taskType, reason string) error
+}
+
+// LLMRouterDeps defines dependencies for creating an LLMRouter.
+type LLMRouterDeps struct {
+	ConfigRepo    routingConfigProvider
+	ModelRepo     routingModelProvider
+	EmbeddingRepo routingEmbeddingCache
+	RoutingCache  *RoutingCache
+	EmbeddingSvc  *EmbeddingService
+	RuleRepo      repository.RoutingRuleRepository
+	Logger        *zap.Logger
+	HTTPClient    *http.Client
+}
+
 // LLMRouter performs intelligent routing by calling an LLM to infer task type.
 type LLMRouter struct {
-	configRepo    *repository.RoutingConfigRepository
-	modelRepo     *repository.RoutingModelRepository
-	embeddingRepo *repository.EmbeddingCacheRepository
-	routingCache  *RoutingCache
+	configRepo    routingConfigProvider
+	modelRepo     routingModelProvider
+	decisionCache routingDecisionCache
+	routingCache  *RoutingCache // retained for compatibility with existing tests
 	embeddingSvc  *EmbeddingService
-	ruleRepo      *repository.RoutingRuleRepo
+	ruleRepo      repository.RoutingRuleRepository
 	logger        *zap.Logger
 	client        *http.Client
 }
@@ -36,17 +62,44 @@ func NewLLMRouter(
 	embeddingSvc *EmbeddingService,
 	logger *zap.Logger,
 ) *LLMRouter {
-	return &LLMRouter{
-		configRepo:    repository.NewRoutingConfigRepository(db, logger),
-		modelRepo:     repository.NewRoutingModelRepository(db, logger),
-		embeddingRepo: repository.NewEmbeddingCacheRepository(db, logger),
-		routingCache:  NewRoutingCache(10000, logger),
-		embeddingSvc:  embeddingSvc,
-		ruleRepo:      repository.NewRoutingRuleRepository(db, logger),
-		logger:        logger,
-		client: &http.Client{
+	return NewLLMRouterWithDeps(LLMRouterDeps{
+		ConfigRepo:    repository.NewRoutingConfigRepository(db, logger),
+		ModelRepo:     repository.NewRoutingModelRepository(db, logger),
+		EmbeddingRepo: repository.NewEmbeddingCacheRepository(db, logger),
+		RoutingCache:  NewRoutingCache(DefaultRoutingCacheSize, logger),
+		EmbeddingSvc:  embeddingSvc,
+		RuleRepo:      repository.NewRoutingRuleRepository(db, logger),
+		Logger:        logger,
+		HTTPClient: &http.Client{
 			Timeout: 15 * time.Second,
 		},
+	})
+}
+
+// NewLLMRouterWithDeps creates a new LLMRouter with injected dependencies.
+func NewLLMRouterWithDeps(deps LLMRouterDeps) *LLMRouter {
+	logger := deps.Logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	cache := deps.RoutingCache
+	if cache == nil {
+		cache = NewRoutingCache(DefaultRoutingCacheSize, logger)
+	}
+	client := deps.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+
+	return &LLMRouter{
+		configRepo:    deps.ConfigRepo,
+		modelRepo:     deps.ModelRepo,
+		decisionCache: newHybridRoutingDecisionCache(cache, deps.EmbeddingRepo, logger),
+		routingCache:  cache,
+		embeddingSvc:  deps.EmbeddingSvc,
+		ruleRepo:      deps.RuleRepo,
+		logger:        logger,
+		client:        client,
 	}
 }
 
@@ -56,7 +109,7 @@ func NewLLMRouter(
 // On any failure, returns (ModelRoleDefault, nil, nil) as safe fallback.
 func (r *LLMRouter) InferTaskType(ctx context.Context, req *models.AnthropicRequest) (models.ModelRole, *models.RoutingDecision, error) {
 	// Step 1: Get routing configuration
-	cfg, err := r.configRepo.GetConfig(ctx)
+	ctx, cfg, err := r.loadRoutingConfig(ctx)
 	if err != nil {
 		r.logger.Warn("failed to get routing config", zap.Error(err))
 		return models.ModelRoleDefault, nil, nil
@@ -96,62 +149,36 @@ func (r *LLMRouter) InferTaskType(ctx context.Context, req *models.AnthropicRequ
 	}
 
 	// Step 4: L1 memory cache lookup
-	cacheTTL := cfg.CacheTTLSeconds
 	cacheKey := GetCacheKey(systemContent, userMessage)
-	if cfg.CacheEnabled {
-		if taskType, hit := r.routingCache.Get(cacheKey, cacheTTL); hit {
-			decision := &models.RoutingDecision{
-				TaskType:  taskType,
-				FromCache: true,
-				CacheType: "L1",
-			}
-			return taskType, decision, nil
-		}
-	}
-
-	// Step 5: L2 persistent cache lookup (exact match)
-	if cfg.CacheEnabled {
-		entry, err := r.embeddingRepo.GetExactMatch(ctx, cacheKey, cacheTTL)
-		if err != nil {
-			r.logger.Warn("L2 cache lookup failed", zap.Error(err))
-		} else if entry != nil {
-			taskType := parseModelRole(entry.TaskType)
-			// Promote to L1
-			r.routingCache.Set(cacheKey, taskType)
-			// Update hit count async with timeout
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				if err := r.embeddingRepo.UpdateHitCountByHash(ctx, cacheKey); err != nil {
-					r.logger.Warn("failed to update cache hit count", zap.Error(err))
-				}
-			}()
-
-			decision := &models.RoutingDecision{
-				TaskType:  taskType,
-				Reason:    entry.Reason,
-				FromCache: true,
-				CacheType: "L2",
-			}
-			return taskType, decision, nil
-		}
+	if taskType, decision, hit := r.decisionCache.Lookup(ctx, cacheKey, cfg.CacheTTLSeconds); hit {
+		return taskType, decision, nil
 	}
 
 	// Step 6: Call routing LLM model with retry
 	taskType, decision := r.callRoutingWithRetry(ctx, cfg, systemContent, userMessage)
 
 	// Step 7: Save to caches
-	if decision != nil && cfg.CacheEnabled {
-		r.routingCache.Set(cacheKey, taskType)
-
-		contentPreview := userMessage
-		if len(contentPreview) > 200 {
-			contentPreview = contentPreview[:200]
-		}
-		_ = r.embeddingRepo.SaveCache(ctx, cacheKey, contentPreview, nil, string(taskType), decision.Reason)
-	}
+	r.persistDecisionCaches(ctx, cfg, cacheKey, userMessage, taskType, decision)
 
 	return taskType, decision, nil
+}
+
+func (r *LLMRouter) loadRoutingConfig(ctx context.Context) (context.Context, *models.RoutingConfig, error) {
+	return GetOrLoadRoutingConfig(ctx, r.configRepo)
+}
+
+func (r *LLMRouter) persistDecisionCaches(
+	ctx context.Context,
+	cfg *models.RoutingConfig,
+	cacheKey string,
+	userMessage string,
+	taskType models.ModelRole,
+	decision *models.RoutingDecision,
+) {
+	if decision == nil || !cfg.CacheEnabled {
+		return
+	}
+	_ = r.decisionCache.Store(ctx, cacheKey, userMessage, taskType, decision.Reason)
 }
 
 // classifyWithRules runs rule-based classification.
@@ -169,7 +196,7 @@ func (r *LLMRouter) classifyWithRules(ctx context.Context, cfg *models.RoutingCo
 	// Increment hit count for matched rule async with timeout
 	if result.Rule != nil && result.Rule.ID > 0 {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), DefaultAsyncRepoTimeout)
 			defer cancel()
 			if err := r.ruleRepo.IncrementHitCount(ctx, result.Rule.ID); err != nil {
 				r.logger.Warn("failed to increment rule hit count",
@@ -301,7 +328,7 @@ func (r *LLMRouter) callRoutingModel(
 		},
 		Client:     r.client,
 		Logger:     r.logger,
-		LogContext:  "routing",
+		LogContext: "routing",
 	})
 	if err != nil {
 		return nil, err
@@ -314,7 +341,7 @@ func (r *LLMRouter) callRoutingModel(
 func parseRoutingDecision(text string) (*models.RoutingDecision, error) {
 	jsonStr := extractJSON(text)
 	if jsonStr == "" {
-		return nil, fmt.Errorf("no JSON found in routing response: %s", truncate(text, 200))
+		return nil, fmt.Errorf("no JSON found in routing response: %s", truncate(text, DefaultContentPreviewMaxChars))
 	}
 
 	var result struct {

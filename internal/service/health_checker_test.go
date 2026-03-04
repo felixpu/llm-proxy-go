@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -415,6 +416,76 @@ func TestHealthChecker_StartStop(t *testing.T) {
 
 	// Stop should not hang
 	hc.Stop()
+}
+
+func TestHealthChecker_Stop_Idempotent(t *testing.T) {
+	cfg := config.HealthCheckConfig{
+		Enabled:         true,
+		IntervalSeconds: 1,
+		TimeoutSeconds:  1,
+	}
+
+	hc := NewHealthChecker(cfg, zap.NewNop())
+
+	// Stop before Start should be no-op.
+	assert.NotPanics(t, func() {
+		hc.Stop()
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	ep := &models.Endpoint{
+		Provider: &models.Provider{Name: "test-provider", BaseURL: server.URL, APIKey: "test-key"},
+		Model:    &models.Model{Name: "test-model"},
+	}
+	hc.Start([]*models.Endpoint{ep})
+	time.Sleep(50 * time.Millisecond)
+
+	// Repeated Stop should not panic or block.
+	assert.NotPanics(t, func() {
+		hc.Stop()
+		hc.Stop()
+	})
+}
+
+func TestHealthChecker_Start_Idempotent_NoLeakedLoopAfterStop(t *testing.T) {
+	var checks int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt64(&checks, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	cfg := config.HealthCheckConfig{
+		Enabled:         true,
+		IntervalSeconds: 1,
+		TimeoutSeconds:  1,
+	}
+
+	hc := NewHealthChecker(cfg, zap.NewNop())
+	ep := &models.Endpoint{
+		Provider: &models.Provider{Name: "test-provider", BaseURL: server.URL, APIKey: "test-key"},
+		Model:    &models.Model{Name: "test-model"},
+	}
+	endpoints := []*models.Endpoint{ep}
+
+	// Start twice should not create two long-running loops.
+	hc.Start(endpoints)
+	time.Sleep(100 * time.Millisecond)
+	hc.Start(endpoints)
+	time.Sleep(100 * time.Millisecond)
+
+	hc.Stop()
+
+	// Allow in-flight check to settle, then assert no new checks keep happening.
+	time.Sleep(200 * time.Millisecond)
+	afterStop := atomic.LoadInt64(&checks)
+	time.Sleep(1500 * time.Millisecond)
+	finalChecks := atomic.LoadInt64(&checks)
+	assert.Equal(t, afterStop, finalChecks, "health checker loop should be fully stopped")
 }
 
 func TestEndpointStateSnapshot(t *testing.T) {

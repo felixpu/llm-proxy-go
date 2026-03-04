@@ -1,16 +1,27 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/user/llm-proxy-go/internal/api/handler"
 	"github.com/user/llm-proxy-go/internal/api/middleware"
+	"github.com/user/llm-proxy-go/internal/models"
 	"github.com/user/llm-proxy-go/internal/repository"
 	"github.com/user/llm-proxy-go/internal/service"
 	"go.uber.org/zap"
 )
+
+func registerCacheRoutes(group *gin.RouterGroup, cacheHandler *handler.CacheHandler) {
+	group.GET("/stats", cacheHandler.GetStats)
+	group.GET("/stats/timeseries", cacheHandler.GetTimeseries)
+	group.GET("/entries", cacheHandler.GetEntries)
+	group.POST("/clear", cacheHandler.Clear)
+	group.POST("/stats/reset", cacheHandler.ResetStats)
+}
 
 // Server wraps the HTTP server and dependencies.
 type Server struct {
@@ -18,30 +29,106 @@ type Server struct {
 	logger *zap.Logger
 }
 
+type routingConfigRepository interface {
+	GetConfig(ctx context.Context) (*models.RoutingConfig, error)
+	UpdateConfigPatch(ctx context.Context, patch repository.RoutingConfigPatch) error
+}
+
+type modelRepository interface {
+	FindByID(ctx context.Context, id int64) (*models.Model, error)
+	FindByName(ctx context.Context, name string) (*models.Model, error)
+	FindByRole(ctx context.Context, role models.ModelRole) ([]*models.Model, error)
+	FindAllEnabled(ctx context.Context) ([]*models.Model, error)
+	FindAll(ctx context.Context) ([]*models.Model, error)
+	Insert(ctx context.Context, m *models.Model) (int64, error)
+	UpdatePatch(ctx context.Context, id int64, patch repository.ModelPatch) error
+	Delete(ctx context.Context, id int64) error
+}
+
+type providerRepository interface {
+	FindByID(ctx context.Context, id int64) (*models.Provider, error)
+	FindByModelID(ctx context.Context, modelID int64) ([]*models.Provider, error)
+	FindAllEnabled(ctx context.Context) ([]*models.Provider, error)
+	FindAll(ctx context.Context) ([]*models.Provider, error)
+	Insert(ctx context.Context, p *models.Provider, modelIDs []int64) (int64, error)
+	UpdatePatch(ctx context.Context, id int64, patch repository.ProviderPatch, modelIDs []int64) error
+	Delete(ctx context.Context, id int64) error
+	GetModelIDsForProvider(ctx context.Context, providerID int64) ([]int64, error)
+}
+
+type routingModelRepository interface {
+	ListModels(ctx context.Context, providerID *int64) ([]*models.RoutingModel, error)
+	GetModel(ctx context.Context, id int64) (*models.RoutingModel, error)
+	AddModel(ctx context.Context, m *models.RoutingModel) (int64, error)
+	UpdateModelPatch(ctx context.Context, id int64, patch repository.RoutingModelPatch) error
+	DeleteModel(ctx context.Context, id int64) error
+}
+
+type embeddingModelRepository interface {
+	ListModels(ctx context.Context, enabledOnly bool) ([]*models.EmbeddingModel, error)
+	GetModelByName(ctx context.Context, name string) (*models.EmbeddingModel, error)
+	AddModel(ctx context.Context, m *models.EmbeddingModel) (int64, error)
+	UpdateModelPatch(ctx context.Context, id int64, patch repository.EmbeddingModelPatch) error
+	DeleteModel(ctx context.Context, id int64) error
+}
+
+type embeddingCacheRepository interface {
+	Count(ctx context.Context) (int64, error)
+	GetStats(ctx context.Context) (map[string]interface{}, error)
+	GetTopEntries(ctx context.Context, sortBy string, limit int) ([]*repository.EmbeddingCacheEntry, error)
+	DeleteAll(ctx context.Context) (int64, error)
+}
+
+type systemConfigRepository interface {
+	GetRoutingConfig(ctx context.Context) (map[string]any, error)
+	UpdateRoutingConfigPatch(ctx context.Context, patch repository.SystemRoutingConfigPatch) error
+	GetLoadBalanceConfig(ctx context.Context) (map[string]any, error)
+	UpdateLoadBalanceConfigPatch(ctx context.Context, patch repository.SystemLoadBalanceConfigPatch) error
+	GetHealthCheckConfig(ctx context.Context) (map[string]any, error)
+	UpdateHealthCheckConfigPatch(ctx context.Context, patch repository.SystemHealthCheckConfigPatch) error
+	GetUIConfig(ctx context.Context) (map[string]any, error)
+	UpdateUIConfigPatch(ctx context.Context, patch repository.SystemUIConfigPatch) error
+}
+
+type analysisReportRepository interface {
+	List(ctx context.Context, limit, offset int) ([]*models.AnalysisReport, int, error)
+	GetByID(ctx context.Context, id int64) (*models.AnalysisReport, error)
+	Delete(ctx context.Context, id int64) error
+}
+
+type routingAnalysisLogRepository interface {
+	repository.RequestLogQueryRepository
+	repository.RequestLogAnalyticsRepository
+	repository.RequestLogWriteRepository
+}
+
 // ServerDeps holds all dependencies for the API server.
 type ServerDeps struct {
-	ProxyService     *service.ProxyService
-	AuthService      *service.AuthService
-	HealthChecker    *service.HealthChecker
-	RoutingCache     *service.RoutingCache
-	LLMRouter        *service.LLMRouter
-	RoutingAnalyzer  *service.RoutingAnalyzer
-	UserRepo         repository.UserRepository
-	KeyRepo          repository.APIKeyRepository
-	LogRepo          repository.RequestLogRepository
-	EmbeddingRepo    *repository.EmbeddingModelRepository
-	ModelRepo        *repository.SQLModelRepository
-	ProviderRepo     *repository.SQLProviderRepository
-	RoutingModelRepo *repository.RoutingModelRepository
-	RoutingConfigRepo *repository.RoutingConfigRepository
-	RoutingRuleRepo   *repository.RoutingRuleRepo
-	EmbeddingCacheRepo *repository.EmbeddingCacheRepository
-	SystemConfigRepo *repository.SystemConfigRepository
-	AnalysisReportRepo *repository.AnalysisReportRepository
-	EndpointStore    *service.EndpointStore
-	RateLimit        *middleware.RateLimitConfig
-	DB               *sql.DB
-	Logger           *zap.Logger
+	ProxyService       *service.ProxyService
+	AuthService        *service.AuthService
+	HealthChecker      *service.HealthChecker
+	RoutingCache       *service.RoutingCache
+	LLMRouter          *service.LLMRouter
+	RoutingAnalyzer    *service.RoutingAnalyzer
+	UserRepo           repository.UserRepository
+	KeyRepo            repository.APIKeyRepository
+	LogWriteRepo       repository.RequestLogWriteRepository
+	LogQueryRepo       repository.RequestLogQueryRepository
+	LogAnalyticsRepo   repository.RequestLogAnalyticsRepository
+	LogRoutingRepo     routingAnalysisLogRepository
+	EmbeddingRepo      embeddingModelRepository
+	ModelRepo          modelRepository
+	ProviderRepo       providerRepository
+	RoutingModelRepo   routingModelRepository
+	RoutingConfigRepo  routingConfigRepository
+	RoutingRuleRepo    repository.RoutingRuleRepository
+	EmbeddingCacheRepo embeddingCacheRepository
+	SystemConfigRepo   systemConfigRepository
+	AnalysisReportRepo analysisReportRepository
+	EndpointStore      *service.EndpointStore
+	RateLimit          *middleware.RateLimitConfig
+	DB                 *sql.DB
+	Logger             *zap.Logger
 }
 
 // NewServer creates a new API server with all routes configured.
@@ -52,30 +139,54 @@ func NewServer(deps ServerDeps) *Server {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 
-	// Global middleware.
+	registerGlobalMiddleware(r, deps, logger)
+	registerPublicRoutes(r, deps.HealthChecker)
+
+	endpointSelector := newEndpointSelector(deps, logger)
+	registerProxyRoutes(r, deps, authService, endpointSelector, logger)
+	registerAuthRoutes(r, authService, logger)
+	registerUserRoutes(r, deps, authService)
+	registerAPIKeyRoutes(r, deps, authService)
+
+	routingAnalysisHandler := registerLogAndAnalysisRoutes(r, deps, authService, logger)
+	if deps.RoutingAnalyzer != nil {
+		routingAnalysisHandler.SetAnalyzer(deps.RoutingAnalyzer, deps.AnalysisReportRepo)
+	}
+
+	registerSystemLogRoutes(r, authService)
+	registerStatusRoutes(r, deps, authService)
+	registerConfigRoutes(r, deps, authService, logger)
+	registerCacheCompatibilityRoutes(r, deps, authService)
+	registerNoRouteHandler(r)
+
+	return &Server{
+		router: r,
+		logger: logger,
+	}
+}
+
+func registerGlobalMiddleware(r *gin.Engine, deps ServerDeps, logger *zap.Logger) {
 	r.Use(gin.Recovery())
 	r.Use(middleware.Logger(logger))
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.RateLimit(deps.RateLimit))
 	r.Use(middleware.CSRF(nil))
-
-	// Inject endpoints into context for proxy handler (dynamic per-request).
 	r.Use(func(c *gin.Context) {
-		c.Set("endpoints", deps.EndpointStore.GetEndpoints())
+		c.Set(middleware.ContextKeyEndpoints, deps.EndpointStore.GetEndpoints())
 		c.Next()
 	})
+}
 
-	// OpenAPI spec (no auth, public documentation).
+func registerPublicRoutes(r *gin.Engine, healthChecker *service.HealthChecker) {
 	r.GET("/api/docs/openapi.yaml", handler.ServeOpenAPISpec)
-
-	// Health check (no auth).
-	healthHandler := handler.NewHealthHandler(deps.HealthChecker)
+	healthHandler := handler.NewHealthHandler(healthChecker)
 	r.GET("/api/health", healthHandler.Health)
+}
 
-	// Create ModelSelector and EndpointSelector
+func newEndpointSelector(deps ServerDeps, logger *zap.Logger) *service.EndpointSelector {
 	modelSelector := service.NewModelSelector(deps.HealthChecker, logger)
 	loadBalancer := service.NewLoadBalancer(deps.SystemConfigRepo)
-	endpointSelector := service.NewEndpointSelector(
+	return service.NewEndpointSelector(
 		modelSelector,
 		deps.HealthChecker,
 		loadBalancer,
@@ -83,15 +194,17 @@ func NewServer(deps ServerDeps) *Server {
 		deps.RoutingConfigRepo,
 		logger,
 	)
+}
 
-	// Proxy endpoint (API key auth).
+func registerProxyRoutes(r *gin.Engine, deps ServerDeps, authService *service.AuthService, endpointSelector *service.EndpointSelector, logger *zap.Logger) {
 	proxyHandler := handler.NewProxyHandler(deps.ProxyService, authService, endpointSelector, deps.RoutingConfigRepo, logger)
 	v1 := r.Group("/v1")
 	{
 		v1.POST("/messages", proxyHandler.Messages)
 	}
+}
 
-	// Auth endpoints.
+func registerAuthRoutes(r *gin.Engine, authService *service.AuthService, logger *zap.Logger) {
 	authHandler := handler.NewAuthHandler(authService, logger)
 	authGroup := r.Group("/api/auth")
 	{
@@ -100,8 +213,9 @@ func NewServer(deps ServerDeps) *Server {
 		authGroup.GET("/me", middleware.RequireAuth(authService), authHandler.GetMe)
 		authGroup.POST("/refresh", middleware.RequireAuth(authService), authHandler.Refresh)
 	}
+}
 
-	// User management endpoints.
+func registerUserRoutes(r *gin.Engine, deps ServerDeps, authService *service.AuthService) {
 	userHandler := handler.NewUserHandler(deps.UserRepo, authService)
 	userGroup := r.Group("/api/users")
 	userGroup.Use(middleware.RequireAuth(authService))
@@ -119,8 +233,9 @@ func NewServer(deps ServerDeps) *Server {
 			adminGroup.POST("/:id/password", userHandler.AdminChangePassword)
 		}
 	}
+}
 
-	// API Key management endpoints.
+func registerAPIKeyRoutes(r *gin.Engine, deps ServerDeps, authService *service.AuthService) {
 	keyHandler := handler.NewAPIKeyHandler(deps.KeyRepo)
 	keyGroup := r.Group("/api/keys")
 	keyGroup.Use(middleware.RequireAuth(authService))
@@ -132,10 +247,11 @@ func NewServer(deps ServerDeps) *Server {
 		keyGroup.POST("/:id/toggle", keyHandler.ToggleAPIKey)
 		keyGroup.DELETE("/:id", keyHandler.DeleteAPIKey)
 	}
+}
 
-	// Logs endpoints (admin only).
-	logsHandler := handler.NewLogsHandler(deps.LogRepo, logger)
-	routingAnalysisHandler := handler.NewRoutingAnalysisHandler(deps.LogRepo, deps.RoutingRuleRepo, logger)
+func registerLogAndAnalysisRoutes(r *gin.Engine, deps ServerDeps, authService *service.AuthService, logger *zap.Logger) *handler.RoutingAnalysisHandler {
+	logsHandler := handler.NewLogsHandler(deps.LogQueryRepo, logger)
+	routingAnalysisHandler := handler.NewRoutingAnalysisHandler(deps.LogRoutingRepo, deps.RoutingRuleRepo, logger)
 	logsGroup := r.Group("/api/logs")
 	logsGroup.Use(middleware.RequireAuth(authService))
 	logsGroup.Use(middleware.RequireAdmin())
@@ -161,13 +277,10 @@ func NewServer(deps ServerDeps) *Server {
 		routingAnalysisGroup.GET("/reports/:id", routingAnalysisHandler.GetAnalysisReport)
 		routingAnalysisGroup.DELETE("/reports/:id", routingAnalysisHandler.DeleteAnalysisReport)
 	}
+	return routingAnalysisHandler
+}
 
-	// Set analyzer on handler after route registration.
-	if deps.RoutingAnalyzer != nil {
-		routingAnalysisHandler.SetAnalyzer(deps.RoutingAnalyzer, deps.AnalysisReportRepo)
-	}
-
-	// System logs endpoints.
+func registerSystemLogRoutes(r *gin.Engine, authService *service.AuthService) {
 	systemLogsGroup := r.Group("/api/system-logs")
 	systemLogsGroup.Use(middleware.RequireAuth(authService))
 	{
@@ -179,9 +292,10 @@ func NewServer(deps ServerDeps) *Server {
 			adminSystemLogsGroup.POST("/clear", handler.ClearSystemLogEntries)
 		}
 	}
+}
 
-	// Admin status endpoints.
-	statusHandler := handler.NewStatusHandler(deps.HealthChecker, deps.ModelRepo, deps.LogRepo, deps.LLMRouter, deps.EndpointStore)
+func registerStatusRoutes(r *gin.Engine, deps ServerDeps, authService *service.AuthService) {
+	statusHandler := handler.NewStatusHandler(deps.HealthChecker, deps.ModelRepo, deps.LogAnalyticsRepo, deps.LLMRouter, deps.EndpointStore)
 	statusGroup := r.Group("/api")
 	statusGroup.Use(middleware.RequireAuth(authService))
 	{
@@ -194,8 +308,9 @@ func NewServer(deps ServerDeps) *Server {
 			adminStatusGroup.POST("/health/check-now", statusHandler.TriggerHealthCheck)
 		}
 	}
+}
 
-	// Admin config endpoints (admin only).
+func registerConfigRoutes(r *gin.Engine, deps ServerDeps, authService *service.AuthService, logger *zap.Logger) {
 	configHandler := handler.NewConfigHandler(deps.SystemConfigRepo)
 	routingHandler := handler.NewRoutingHandler(deps.RoutingModelRepo, deps.RoutingConfigRepo)
 	modelHandler := handler.NewModelHandler(deps.ModelRepo, deps.EndpointStore)
@@ -276,33 +391,35 @@ func NewServer(deps ServerDeps) *Server {
 
 		// Cache monitoring
 		cacheHandler := handler.NewCacheHandler(deps.RoutingCache, deps.EmbeddingCacheRepo)
-		configGroup.GET("/cache/stats", cacheHandler.GetStats)
-		configGroup.GET("/cache/stats/timeseries", cacheHandler.GetTimeseries)
-		configGroup.GET("/cache/entries", cacheHandler.GetEntries)
-		configGroup.POST("/cache/clear", cacheHandler.Clear)
-		configGroup.POST("/cache/stats/reset", cacheHandler.ResetStats)
+		registerCacheRoutes(configGroup.Group("/cache"), cacheHandler)
 	}
+}
 
-	// Cache monitoring routes (frontend uses /api/cache/ path).
+func registerCacheCompatibilityRoutes(r *gin.Engine, deps ServerDeps, authService *service.AuthService) {
 	cacheGroup := r.Group("/api/cache")
 	cacheGroup.Use(middleware.RequireAuth(authService))
 	cacheGroup.Use(middleware.RequireAdmin())
 	{
-		cachePublicHandler := handler.NewCacheHandler(deps.RoutingCache, deps.EmbeddingCacheRepo)
-		cacheGroup.GET("/stats", cachePublicHandler.GetStats)
-		cacheGroup.GET("/stats/timeseries", cachePublicHandler.GetTimeseries)
-		cacheGroup.GET("/entries", cachePublicHandler.GetEntries)
-		cacheGroup.POST("/clear", cachePublicHandler.Clear)
-		cacheGroup.POST("/stats/reset", cachePublicHandler.ResetStats)
+		cacheHandler := handler.NewCacheHandler(deps.RoutingCache, deps.EmbeddingCacheRepo)
+		registerCacheRoutes(cacheGroup, cacheHandler)
 	}
+}
 
-	// SPA frontend: all unmatched routes serve index.html.
-	r.NoRoute(handler.ServeFrontend())
+func registerNoRouteHandler(r *gin.Engine) {
+	serveFrontend := handler.ServeFrontend()
 
-	return &Server{
-		router: r,
-		logger: logger,
-	}
+	r.NoRoute(func(c *gin.Context) {
+		if isAPIPath(c.Request.URL.Path) {
+			c.JSON(http.StatusNotFound, gin.H{"detail": "route not found"})
+			return
+		}
+
+		serveFrontend(c)
+	})
+}
+
+func isAPIPath(path string) bool {
+	return path == "/api" || strings.HasPrefix(path, "/api/")
 }
 
 // ServeHTTP implements http.Handler.

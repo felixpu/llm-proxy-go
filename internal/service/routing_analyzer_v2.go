@@ -21,7 +21,14 @@ const (
 	StrategyBatched AnalysisStrategy = "batched"
 
 	// StrategyHierarchical: First aggregate statistics, then deep-dive on issues
-	StrategyHierarchical AnalysisStrategy = "hierarchical"
+	StrategyHierarchical               AnalysisStrategy = "hierarchical"
+	analysisSinglePassThreshold                         = 200
+	defaultAnalysisMaxLogsPerBatch                      = 500
+	defaultAnalysisMaxPromptTokens                      = 150000
+	defaultAnalysisMaxNormalLogs                        = 200
+	defaultAnalysisPreviewChars                         = 500
+	defaultAnalysisRawResponseLogChars                  = 200
+	defaultAnalysisMaxMemoryIncreaseMB                  = 500
 )
 
 // AnalysisConfig controls analysis behavior.
@@ -42,10 +49,48 @@ type AnalysisConfig struct {
 // DefaultAnalysisConfig returns sensible defaults for Claude Opus/Sonnet.
 func DefaultAnalysisConfig() AnalysisConfig {
 	return AnalysisConfig{
-		MaxLogsPerBatch:      500,  // Increased from 200
-		MaxPromptTokens:      150000, // ~75% of 200K context for Claude
+		MaxLogsPerBatch:      defaultAnalysisMaxLogsPerBatch, // Increased from 200
+		MaxPromptTokens:      defaultAnalysisMaxPromptTokens, // ~75% of 200K context for Claude
 		Strategy:             StrategyHierarchical,
 		PrioritizeInaccurate: true,
+	}
+}
+
+func resolveAnalysisStrategy(config AnalysisConfig, entryCount int) AnalysisStrategy {
+	switch config.Strategy {
+	case StrategySinglePass:
+		return StrategySinglePass
+	case StrategyBatched:
+		return StrategyBatched
+	case StrategyHierarchical:
+		if entryCount <= analysisSinglePassThreshold {
+			return StrategySinglePass
+		}
+		return StrategyBatched
+	default:
+		if entryCount <= analysisSinglePassThreshold {
+			return StrategySinglePass
+		}
+		return StrategyBatched
+	}
+}
+
+func (a *RoutingAnalyzer) executeAnalysis(
+	ctx context.Context,
+	taskID string,
+	rules []*models.RoutingRule,
+	entries []*models.ExtractedLogEntry,
+	totalLogs int,
+	modelCfg *models.RoutingModelWithProvider,
+	config AnalysisConfig,
+) (*models.AnalysisReport, error) {
+	switch resolveAnalysisStrategy(config, len(entries)) {
+	case StrategySinglePass:
+		return a.runSinglePassAnalysis(ctx, taskID, rules, entries, totalLogs, modelCfg, config)
+	case StrategyBatched:
+		return a.runBatchedAnalysis(ctx, taskID, rules, entries, totalLogs, modelCfg, config)
+	default:
+		return a.runBatchedAnalysis(ctx, taskID, rules, entries, totalLogs, modelCfg, config)
 	}
 }
 
@@ -189,7 +234,7 @@ func formatLogsWithPriority(entries []*models.ExtractedLogEntry, config Analysis
 	// Show sample of normal logs
 	if len(normal) > 0 {
 		b.WriteString("\n### 正常日志样本\n\n")
-		maxNormal := 200 // Show up to 200 normal logs for better analysis coverage
+		maxNormal := defaultAnalysisMaxNormalLogs
 		if config.MaxPromptTokens > 0 {
 			// Dynamic limit based on token budget: reserve ~40% for normal logs
 			tokenBudget := config.MaxPromptTokens * 40 / 100
@@ -233,8 +278,8 @@ func formatDetailedEntry(idx int, e *models.ExtractedLogEntry, showFullMessage b
 	}
 
 	msg := e.UserMessage
-	if !showFullMessage && len(msg) > 500 {
-		msg = msg[:500] + "..."
+	if !showFullMessage && len(msg) > defaultAnalysisPreviewChars {
+		msg = msg[:defaultAnalysisPreviewChars] + "..."
 	}
 	b.WriteString(fmt.Sprintf("- **消息内容**: %s\n", msg))
 
@@ -273,7 +318,7 @@ func (a *RoutingAnalyzer) runSinglePassAnalysis(
 	a.logger.Debug("LLM analysis raw response",
 		zap.String("task_id", taskID),
 		zap.Int("response_length", len(llmResponse)),
-		zap.String("response_preview", truncateForLog(llmResponse, 500)),
+		zap.String("response_preview", truncateForLog(llmResponse, defaultAnalysisPreviewChars)),
 	)
 
 	// Parse response
@@ -302,8 +347,6 @@ func (a *RoutingAnalyzer) runBatchedAnalysis(
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 	baselineAlloc := memStats.Alloc
-	const maxMemoryIncreaseMB = 500 // 500MB threshold
-
 	a.logger.Info("starting batched analysis",
 		zap.String("task_id", taskID),
 		zap.Int("total_entries", len(entries)),
@@ -338,7 +381,7 @@ func (a *RoutingAnalyzer) runBatchedAnalysis(
 			memoryIncreaseMB = 0
 		}
 
-		if memoryIncreaseMB > maxMemoryIncreaseMB {
+		if memoryIncreaseMB > defaultAnalysisMaxMemoryIncreaseMB {
 			warning := fmt.Sprintf("⚠️ 内存使用超过阈值 (%d MB)，在批次 %d/%d 处提前终止分析",
 				memoryIncreaseMB, i+1, numBatches)
 			warnings = append(warnings, warning)
@@ -379,8 +422,8 @@ func (a *RoutingAnalyzer) runBatchedAnalysis(
 			if firstError == nil {
 				firstError = fmt.Errorf("response parse failed: %w", err)
 				// Truncate response for logging
-				if len(llmResponse) > 500 {
-					firstRawResponse = llmResponse[:500] + "..."
+				if len(llmResponse) > defaultAnalysisPreviewChars {
+					firstRawResponse = llmResponse[:defaultAnalysisPreviewChars] + "..."
 				} else {
 					firstRawResponse = llmResponse
 				}
@@ -390,7 +433,7 @@ func (a *RoutingAnalyzer) runBatchedAnalysis(
 			a.logger.Warn("failed to parse batch response",
 				zap.Int("batch", i+1),
 				zap.Error(err),
-				zap.String("raw_response_preview", truncateString(llmResponse, 200)))
+				zap.String("raw_response_preview", truncateString(llmResponse, defaultAnalysisRawResponseLogChars)))
 			continue
 		}
 

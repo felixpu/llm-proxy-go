@@ -16,7 +16,7 @@ type ModelRepository interface {
 	FindAllEnabled(ctx context.Context) ([]*models.Model, error)
 	FindAll(ctx context.Context) ([]*models.Model, error)
 	Insert(ctx context.Context, m *models.Model) (int64, error)
-	Update(ctx context.Context, id int64, updates map[string]any) error
+	UpdatePatch(ctx context.Context, id int64, patch ModelPatch) error
 	Delete(ctx context.Context, id int64) error
 }
 
@@ -27,7 +27,7 @@ type ProviderRepository interface {
 	FindAllEnabled(ctx context.Context) ([]*models.Provider, error)
 	FindAll(ctx context.Context) ([]*models.Provider, error)
 	Insert(ctx context.Context, p *models.Provider, modelIDs []int64) (int64, error)
-	Update(ctx context.Context, id int64, updates map[string]any, modelIDs []int64) error
+	UpdatePatch(ctx context.Context, id int64, patch ProviderPatch, modelIDs []int64) error
 	Delete(ctx context.Context, id int64) error
 	GetModelIDsForProvider(ctx context.Context, providerID int64) ([]int64, error)
 }
@@ -64,7 +64,7 @@ type RoutingRuleRepository interface {
 	ListRules(ctx context.Context, enabledOnly bool) ([]*models.RoutingRule, error)
 	GetRule(ctx context.Context, id int64) (*models.RoutingRule, error)
 	AddRule(ctx context.Context, rule *models.RoutingRule) (int64, error)
-	UpdateRule(ctx context.Context, id int64, updates map[string]any) error
+	UpdateRulePatch(ctx context.Context, id int64, patch RoutingRulePatch) error
 	DeleteRule(ctx context.Context, id int64) error
 	IncrementHitCount(ctx context.Context, id int64) error
 	GetStats(ctx context.Context) (*models.RuleStats, error)
@@ -72,15 +72,23 @@ type RoutingRuleRepository interface {
 	ListCustomRules(ctx context.Context) ([]*models.RoutingRule, error)
 }
 
-// RequestLogRepository provides access to request log data.
-type RequestLogRepository interface {
+// RequestLogWriteRepository provides write-path operations for request logs.
+type RequestLogWriteRepository interface {
 	Insert(ctx context.Context, entry *models.RequestLogEntry) (int64, error)
+	MarkInaccurate(ctx context.Context, id int64, inaccurate bool) error
+}
+
+// RequestLogQueryRepository provides read/query operations for request logs.
+type RequestLogQueryRepository interface {
 	GetByID(ctx context.Context, id int64) (*models.RequestLog, error)
 	List(ctx context.Context, limit, offset int, userID *int64, modelName, endpointName *string, startTime, endTime *time.Time, success *bool) ([]*models.RequestLog, int64, error)
 	GetStatistics(ctx context.Context, startTime, endTime *time.Time, userID *int64, modelName, endpointName *string, success *bool) (*LogStatistics, error)
 	Count(ctx context.Context, modelName, endpointName *string, startTime, endTime *time.Time) (int64, error)
 	Delete(ctx context.Context, modelName, endpointName *string, startTime, endTime *time.Time) (int64, error)
-	MarkInaccurate(ctx context.Context, id int64, inaccurate bool) error
+}
+
+// RequestLogAnalyticsRepository provides analytics-oriented log operations.
+type RequestLogAnalyticsRepository interface {
 	// GetRoutingAggregation returns routing method/rule counts via SQL aggregation.
 	GetRoutingAggregation(ctx context.Context, startTime, endTime *time.Time) (*RoutingAggregation, error)
 	// ListInaccurate returns inaccurate logs with pagination (SQL-level filtering).
@@ -91,4 +99,12 @@ type RequestLogRepository interface {
 	CountForAnalysis(ctx context.Context, startTime, endTime *time.Time) (int, error)
 	// GetEndpointModelStats returns historical stats grouped by endpoint_name/model_name.
 	GetEndpointModelStats(ctx context.Context) (map[string]*EndpointModelStats, error)
+}
+
+// RequestLogRepository is the legacy full-surface repository.
+// New code should depend on the narrower interfaces above when possible.
+type RequestLogRepository interface {
+	RequestLogWriteRepository
+	RequestLogQueryRepository
+	RequestLogAnalyticsRepository
 }

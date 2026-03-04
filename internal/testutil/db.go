@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"testing"
 
-	_ "modernc.org/sqlite"
 	"github.com/stretchr/testify/require"
+	_ "modernc.org/sqlite"
 )
 
 // NewTestDB creates an in-memory SQLite database with full schema for testing.
@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS providers (
     max_concurrent INTEGER DEFAULT 10,
     enabled INTEGER DEFAULT 1,
     description TEXT,
-    custom_headers TEXT,
+    custom_headers TEXT DEFAULT '' NOT NULL,
     api_type TEXT DEFAULT 'auto' NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -177,6 +177,7 @@ CREATE TABLE IF NOT EXISTS routing_llm_config (
     rule_fallback_strategy TEXT DEFAULT 'default',
     rule_fallback_task_type TEXT DEFAULT 'default',
     rule_fallback_model_id INTEGER,
+    cross_role_fallback_enabled INTEGER DEFAULT 0,
     log_full_content INTEGER DEFAULT 1
 );
 

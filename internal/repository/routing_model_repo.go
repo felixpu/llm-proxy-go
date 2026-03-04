@@ -17,6 +17,18 @@ type RoutingModelRepository struct {
 	logger *zap.Logger
 }
 
+// RoutingModelPatch is a typed partial update payload for routing models.
+type RoutingModelPatch struct {
+	ProviderID        *int64
+	ModelName         *string
+	Enabled           *bool
+	Priority          *int
+	CostPerMtokInput  *float64
+	CostPerMtokOutput *float64
+	BillingMultiplier *float64
+	Description       *string
+}
+
 // NewRoutingModelRepository creates a new RoutingModelRepository.
 func NewRoutingModelRepository(db *sql.DB, logger *zap.Logger) *RoutingModelRepository {
 	return &RoutingModelRepository{db: db, logger: logger}
@@ -172,7 +184,7 @@ func (r *RoutingModelRepository) AddModel(ctx context.Context, m *models.Routing
 }
 
 // UpdateModel dynamically updates a routing model.
-func (r *RoutingModelRepository) UpdateModel(ctx context.Context, id int64, updates map[string]any) error {
+func (r *RoutingModelRepository) updateWithMap(ctx context.Context, id int64, updates map[string]any) error {
 	if len(updates) == 0 {
 		return nil
 	}
@@ -202,6 +214,36 @@ func (r *RoutingModelRepository) UpdateModel(ctx context.Context, id int64, upda
 		return fmt.Errorf("failed to update routing model: %w", err)
 	}
 	return nil
+}
+
+// UpdateModelPatch updates a routing model using a typed patch payload.
+func (r *RoutingModelRepository) UpdateModelPatch(ctx context.Context, id int64, patch RoutingModelPatch) error {
+	updates := make(map[string]any)
+	if patch.ProviderID != nil {
+		updates["provider_id"] = *patch.ProviderID
+	}
+	if patch.ModelName != nil {
+		updates["model_name"] = *patch.ModelName
+	}
+	if patch.Enabled != nil {
+		updates["enabled"] = *patch.Enabled
+	}
+	if patch.Priority != nil {
+		updates["priority"] = *patch.Priority
+	}
+	if patch.CostPerMtokInput != nil {
+		updates["cost_per_mtok_input"] = *patch.CostPerMtokInput
+	}
+	if patch.CostPerMtokOutput != nil {
+		updates["cost_per_mtok_output"] = *patch.CostPerMtokOutput
+	}
+	if patch.BillingMultiplier != nil {
+		updates["billing_multiplier"] = *patch.BillingMultiplier
+	}
+	if patch.Description != nil {
+		updates["description"] = *patch.Description
+	}
+	return r.updateWithMap(ctx, id, updates)
 }
 
 // DeleteModel deletes a routing model by ID.

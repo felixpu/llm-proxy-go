@@ -16,6 +16,31 @@ type RoutingConfigRepository struct {
 	logger *zap.Logger
 }
 
+// RoutingConfigPatch is a typed partial update payload for routing_llm_config.
+type RoutingConfigPatch struct {
+	Enabled                  *bool
+	PrimaryModelID           *int64
+	FallbackModelID          *int64
+	TimeoutSeconds           *int
+	CacheEnabled             *bool
+	CacheTTLSeconds          *int
+	CacheTTLL3Seconds        *int
+	MaxTokens                *int
+	Temperature              *float64
+	RetryCount               *int
+	SemanticCacheEnabled     *bool
+	EmbeddingModelID         *int64
+	SimilarityThreshold      *float64
+	LocalEmbeddingModel      *string
+	ForceSmartRouting        *bool
+	RuleBasedRoutingEnabled  *bool
+	RuleFallbackStrategy     *string
+	RuleFallbackTaskType     *string
+	RuleFallbackModelID      *int64
+	CrossRoleFallbackEnabled *bool
+	LogFullContent           *bool
+}
+
 // NewRoutingConfigRepository creates a new RoutingConfigRepository.
 func NewRoutingConfigRepository(db *sql.DB, logger *zap.Logger) *RoutingConfigRepository {
 	return &RoutingConfigRepository{db: db, logger: logger}
@@ -187,7 +212,7 @@ func (r *RoutingConfigRepository) GetConfig(ctx context.Context) (*models.Routin
 }
 
 // UpdateConfig dynamically updates routing configuration fields.
-func (r *RoutingConfigRepository) UpdateConfig(ctx context.Context, updates map[string]any) error {
+func (r *RoutingConfigRepository) updateWithMap(ctx context.Context, updates map[string]any) error {
 	if len(updates) == 0 {
 		return nil
 	}
@@ -228,6 +253,75 @@ func (r *RoutingConfigRepository) UpdateConfig(ctx context.Context, updates map[
 	rows, _ := result.RowsAffected()
 	r.logger.Debug("routing config updated", zap.Int64("rows_affected", rows))
 	return nil
+}
+
+// UpdateConfigPatch updates routing config using a typed patch payload.
+func (r *RoutingConfigRepository) UpdateConfigPatch(ctx context.Context, patch RoutingConfigPatch) error {
+	updates := make(map[string]any)
+	if patch.Enabled != nil {
+		updates["enabled"] = *patch.Enabled
+	}
+	if patch.PrimaryModelID != nil {
+		updates["primary_model_id"] = *patch.PrimaryModelID
+	}
+	if patch.FallbackModelID != nil {
+		updates["fallback_model_id"] = *patch.FallbackModelID
+	}
+	if patch.TimeoutSeconds != nil {
+		updates["timeout_seconds"] = *patch.TimeoutSeconds
+	}
+	if patch.CacheEnabled != nil {
+		updates["cache_enabled"] = *patch.CacheEnabled
+	}
+	if patch.CacheTTLSeconds != nil {
+		updates["cache_ttl_seconds"] = *patch.CacheTTLSeconds
+	}
+	if patch.CacheTTLL3Seconds != nil {
+		updates["cache_ttl_l3_seconds"] = *patch.CacheTTLL3Seconds
+	}
+	if patch.MaxTokens != nil {
+		updates["max_tokens"] = *patch.MaxTokens
+	}
+	if patch.Temperature != nil {
+		updates["temperature"] = *patch.Temperature
+	}
+	if patch.RetryCount != nil {
+		updates["retry_count"] = *patch.RetryCount
+	}
+	if patch.SemanticCacheEnabled != nil {
+		updates["semantic_cache_enabled"] = *patch.SemanticCacheEnabled
+	}
+	if patch.EmbeddingModelID != nil {
+		updates["embedding_model_id"] = *patch.EmbeddingModelID
+	}
+	if patch.SimilarityThreshold != nil {
+		updates["similarity_threshold"] = *patch.SimilarityThreshold
+	}
+	if patch.LocalEmbeddingModel != nil {
+		updates["local_embedding_model"] = *patch.LocalEmbeddingModel
+	}
+	if patch.ForceSmartRouting != nil {
+		updates["force_smart_routing"] = *patch.ForceSmartRouting
+	}
+	if patch.RuleBasedRoutingEnabled != nil {
+		updates["rule_based_routing_enabled"] = *patch.RuleBasedRoutingEnabled
+	}
+	if patch.RuleFallbackStrategy != nil {
+		updates["rule_fallback_strategy"] = *patch.RuleFallbackStrategy
+	}
+	if patch.RuleFallbackTaskType != nil {
+		updates["rule_fallback_task_type"] = *patch.RuleFallbackTaskType
+	}
+	if patch.RuleFallbackModelID != nil {
+		updates["rule_fallback_model_id"] = *patch.RuleFallbackModelID
+	}
+	if patch.CrossRoleFallbackEnabled != nil {
+		updates["cross_role_fallback_enabled"] = *patch.CrossRoleFallbackEnabled
+	}
+	if patch.LogFullContent != nil {
+		updates["log_full_content"] = *patch.LogFullContent
+	}
+	return r.updateWithMap(ctx, updates)
 }
 
 // joinStrings joins strings with a separator.

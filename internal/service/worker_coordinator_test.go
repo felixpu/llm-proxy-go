@@ -194,3 +194,20 @@ func TestWorkerCoordinator_StartTwice(t *testing.T) {
 
 	wc.Stop()
 }
+
+func TestWorkerCoordinator_Unregister_AfterStop(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	logger := zap.NewNop()
+	ctx := context.Background()
+
+	wc := NewWorkerCoordinator(db, logger)
+	err := wc.Register(ctx)
+	require.NoError(t, err)
+
+	wc.Start(ctx)
+	wc.Stop()
+
+	// Unregister after Stop should not panic or attempt double-close.
+	err = wc.Unregister(ctx)
+	require.NoError(t, err)
+}

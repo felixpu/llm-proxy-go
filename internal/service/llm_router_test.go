@@ -20,9 +20,16 @@ func TestNewLLMRouter(t *testing.T) {
 	assert.NotNil(t, router)
 	assert.NotNil(t, router.configRepo)
 	assert.NotNil(t, router.modelRepo)
-	assert.NotNil(t, router.embeddingRepo)
-	assert.NotNil(t, router.routingCache)
+	assert.NotNil(t, router.decisionCache)
 	assert.NotNil(t, router.ruleRepo)
+	assert.NotNil(t, router.client)
+}
+
+func TestNewLLMRouterWithDeps_Defaults(t *testing.T) {
+	router := NewLLMRouterWithDeps(LLMRouterDeps{})
+	assert.NotNil(t, router)
+	assert.NotNil(t, router.logger)
+	assert.NotNil(t, router.decisionCache)
 	assert.NotNil(t, router.client)
 }
 
