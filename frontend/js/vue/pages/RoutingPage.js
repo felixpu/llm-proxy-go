@@ -1,6 +1,11 @@
 /**
  * 路由配置页面
- * 支持规则路由配置、LLM 路由配置、路由模型管理、规则管理、路由测试
+ * 包含三个 Tab：
+ * 1. 路由配置 - 规则路由配置、LLM 路由配置、路由模型管理
+ * 2. 路由规则 - 规则列表、CRUD、分析、规则测试
+ * 3. 缓存 - 缓存配置
+ *
+ * Tab 外还有一个全局路由测试区域，用于测试完整的路由决策流程
  */
 window.VuePages = window.VuePages || {};
 
@@ -443,14 +448,18 @@ window.VuePages = window.VuePages || {};
           });
       }
 
+      var rulesLoaded = ref(false);
+
       function switchTab(tabName) {
         activeTab.value = tabName;
+        openDropdown.value = null;
         if (
-          tabName === "routing-config" &&
-          builtinRules.value.length === 0 &&
-          customRules.value.length === 0
+          tabName === "routing-rules" &&
+          !rulesLoaded.value
         ) {
-          loadRules();
+          loadRules().then(function () {
+            rulesLoaded.value = true;
+          });
         }
       }
 
@@ -1528,11 +1537,7 @@ window.VuePages = window.VuePages || {};
             closeDropdowns();
           }
         });
-        loadData().then(function () {
-          if (activeTab.value === "routing-config") {
-            loadRules();
-          }
-        });
+        loadData();
       });
 
       onUnmounted(function () {
@@ -1656,6 +1661,7 @@ window.VuePages = window.VuePages || {};
 <div class="routing-page">\
     <div class="tabs">\
         <button class="tab-btn" :class="{\'active\': activeTab === \'routing-config\'}" @click="switchTab(\'routing-config\')">路由配置</button>\
+        <button class="tab-btn" :class="{\'active\': activeTab === \'routing-rules\'}" @click="switchTab(\'routing-rules\')">路由规则</button>\
         <button class="tab-btn" :class="{\'active\': activeTab === \'cache\'}" @click="switchTab(\'cache\')">缓存</button>\
     </div>\
     <div class="tab-content">\
@@ -1870,7 +1876,8 @@ window.VuePages = window.VuePages || {};
             </div>\
                 </div>\
             </div>\
-\
+        </div>\
+        <div class="tab-pane" :class="{\'active\': activeTab === \'routing-rules\'}">\
             <div class="resource-section">\
                 <div class="resource-header">\
                     <h4>路由规则</h4>\

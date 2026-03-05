@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -550,6 +551,9 @@ func (h *BackupHandler) importProviders(ctx context.Context, tx *sql.Tx, provide
 	return nil
 }
 
+// safeColumnName matches safe SQL column identifiers (letters, digits, underscores).
+var safeColumnName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
 // importSingletonTable updates a single-row config table with the given values.
 func (h *BackupHandler) importSingletonTable(ctx context.Context, tx *sql.Tx, table string, values map[string]any) error {
 	if len(values) == 0 {
@@ -560,6 +564,10 @@ func (h *BackupHandler) importSingletonTable(ctx context.Context, tx *sql.Tx, ta
 	for col, val := range values {
 		if col == "id" {
 			continue
+		}
+		// Validate column name to prevent SQL injection
+		if !safeColumnName.MatchString(col) {
+			return fmt.Errorf("invalid column name: %q", col)
 		}
 		setClauses = append(setClauses, col+" = ?")
 		params = append(params, val)
