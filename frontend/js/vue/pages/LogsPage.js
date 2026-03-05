@@ -241,23 +241,8 @@ window.VuePages = window.VuePages || {};
           stats.totalCost = data.total_cost || 0;
           stats.avgLatency = data.avg_latency || 0;
           stats.successRate = data.success_rate || 0;
-
-          // 计算缓存统计（从当前日志列表）
-          if (logs.value && logs.value.length > 0) {
-            var totalCacheReadTokens = 0;
-            var requestsWithCacheHit = 0;
-            logs.value.forEach(function(log) {
-              totalCacheReadTokens += (log.cache_read_input_tokens || 0);
-              if ((log.cache_read_input_tokens || 0) > 0) {
-                requestsWithCacheHit++;
-              }
-            });
-            stats.totalCacheReadTokens = totalCacheReadTokens;
-            stats.cacheHitRate = logs.value.length > 0 ? requestsWithCacheHit / logs.value.length : 0;
-          } else {
-            stats.totalCacheReadTokens = 0;
-            stats.cacheHitRate = 0;
-          }
+          stats.totalCacheReadTokens = data.total_cache_read_tokens || 0;
+          stats.cacheHitRate = (data.cache_hit_rate || 0) / 100;
 
           // Extract filter options from the same response
           filterOptions.models = (data.by_model || []).map(function (item) {

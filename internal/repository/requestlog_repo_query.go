@@ -98,6 +98,11 @@ func (r *RequestLogRepositoryImpl) getOverallStats(ctx context.Context, whereSQL
 				THEN SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*)
 				ELSE 0
 			END as success_rate,
+			CASE WHEN COUNT(*) > 0
+				THEN SUM(CASE WHEN COALESCE(cache_read_input_tokens, 0) > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*)
+				ELSE 0
+			END as cache_hit_rate,
+			COALESCE(SUM(cache_read_input_tokens), 0) as total_cache_read_tokens,
 			COALESCE(SUM(input_tokens), 0) as total_input_tokens,
 			COALESCE(SUM(output_tokens), 0) as total_output_tokens
 		FROM request_logs
@@ -105,13 +110,15 @@ func (r *RequestLogRepositoryImpl) getOverallStats(ctx context.Context, whereSQL
 	`, whereSQL)
 	if err := r.readDB.QueryRowContext(ctx, overallQuery, params...).Scan(
 		&stats.TotalRequests, &stats.TotalCost, &stats.AvgLatency,
-		&stats.SuccessRate, &stats.TotalInputTokens, &stats.TotalOutputTokens,
+		&stats.SuccessRate, &stats.CacheHitRate, &stats.TotalCacheReadTokens,
+		&stats.TotalInputTokens, &stats.TotalOutputTokens,
 	); err != nil {
 		return fmt.Errorf("failed to get overall statistics: %w", err)
 	}
 	stats.TotalCost = roundToPlaces(stats.TotalCost, 6)
 	stats.AvgLatency = roundToPlaces(stats.AvgLatency, 2)
 	stats.SuccessRate = roundToPlaces(stats.SuccessRate, 2)
+	stats.CacheHitRate = roundToPlaces(stats.CacheHitRate, 2)
 	return nil
 }
 

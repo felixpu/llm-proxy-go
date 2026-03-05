@@ -2,14 +2,16 @@ package repository
 
 // LogStatistics contains aggregated log statistics.
 type LogStatistics struct {
-	TotalRequests     int64                `json:"total_requests"`
-	TotalCost         float64              `json:"total_cost"`
-	AvgLatency        float64              `json:"avg_latency"`
-	SuccessRate       float64              `json:"success_rate"`
-	TotalInputTokens  int64                `json:"total_input_tokens"`
-	TotalOutputTokens int64                `json:"total_output_tokens"`
-	ByModel           []ModelStatistics    `json:"by_model"`
-	ByEndpoint        []EndpointStatistics `json:"by_endpoint"`
+	TotalRequests        int64                `json:"total_requests"`
+	TotalCost            float64              `json:"total_cost"`
+	AvgLatency           float64              `json:"avg_latency"`
+	SuccessRate          float64              `json:"success_rate"`
+	CacheHitRate         float64              `json:"cache_hit_rate"`
+	TotalCacheReadTokens int64                `json:"total_cache_read_tokens"`
+	TotalInputTokens     int64                `json:"total_input_tokens"`
+	TotalOutputTokens    int64                `json:"total_output_tokens"`
+	ByModel              []ModelStatistics    `json:"by_model"`
+	ByEndpoint           []EndpointStatistics `json:"by_endpoint"`
 }
 
 // ModelStatistics contains per-model statistics.
