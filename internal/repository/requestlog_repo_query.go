@@ -79,7 +79,16 @@ func (r *RequestLogRepositoryImpl) GetStatistics(
 	whereSQL, params := r.buildWhere(userID, modelName, endpointName, startTime, endTime, success)
 
 	var stats LogStatistics
+	if err := r.getOverallStats(ctx, whereSQL, params, &stats); err != nil {
+		return nil, err
+	}
+	if err := r.getGroupedStats(ctx, whereSQL, params, &stats); err != nil {
+		return nil, err
+	}
+	return &stats, nil
+}
 
+func (r *RequestLogRepositoryImpl) getOverallStats(ctx context.Context, whereSQL string, params []any, stats *LogStatistics) error {
 	overallQuery := fmt.Sprintf(`
 		SELECT
 			COUNT(*) as total_requests,
@@ -98,12 +107,15 @@ func (r *RequestLogRepositoryImpl) GetStatistics(
 		&stats.TotalRequests, &stats.TotalCost, &stats.AvgLatency,
 		&stats.SuccessRate, &stats.TotalInputTokens, &stats.TotalOutputTokens,
 	); err != nil {
-		return nil, fmt.Errorf("failed to get overall statistics: %w", err)
+		return fmt.Errorf("failed to get overall statistics: %w", err)
 	}
 	stats.TotalCost = roundToPlaces(stats.TotalCost, 6)
 	stats.AvgLatency = roundToPlaces(stats.AvgLatency, 2)
 	stats.SuccessRate = roundToPlaces(stats.SuccessRate, 2)
+	return nil
+}
 
+func (r *RequestLogRepositoryImpl) getGroupedStats(ctx context.Context, whereSQL string, params []any, stats *LogStatistics) error {
 	unionQuery := fmt.Sprintf(`
 		SELECT 'model' AS kind, model_name AS name,
 			COUNT(*) AS requests, COALESCE(SUM(cost),0) AS cost,
@@ -130,7 +142,7 @@ func (r *RequestLogRepositoryImpl) GetStatistics(
 
 	rows, err := r.readDB.QueryContext(ctx, unionQuery, unionParams...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get grouped statistics: %w", err)
+		return fmt.Errorf("failed to get grouped statistics: %w", err)
 	}
 	defer rows.Close()
 
@@ -139,7 +151,7 @@ func (r *RequestLogRepositoryImpl) GetStatistics(
 		var requests, inputTokens, outputTokens int64
 		var cost, avgLatency, successRate float64
 		if err := rows.Scan(&kind, &name, &requests, &cost, &avgLatency, &inputTokens, &outputTokens, &successRate); err != nil {
-			return nil, fmt.Errorf("failed to scan grouped statistics: %w", err)
+			return fmt.Errorf("failed to scan grouped statistics: %w", err)
 		}
 		switch kind {
 		case "model":
@@ -162,10 +174,9 @@ func (r *RequestLogRepositoryImpl) GetStatistics(
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("failed to iterate grouped statistics: %w", err)
+		return fmt.Errorf("failed to iterate grouped statistics: %w", err)
 	}
-
-	return &stats, nil
+	return nil
 }
 
 // Count counts logs matching the filters.
