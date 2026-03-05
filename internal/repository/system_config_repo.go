@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -102,6 +103,9 @@ func (r *SystemConfigRepository) getConfig(ctx context.Context, table string) (m
 	return result, nil
 }
 
+// validColumnName matches safe SQL column identifiers (letters, digits, underscores).
+var validColumnName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
 // updateConfig dynamically updates fields in a single-row config table.
 func (r *SystemConfigRepository) updateConfig(ctx context.Context, table string, updates map[string]any) error {
 	if len(updates) == 0 {
@@ -110,6 +114,10 @@ func (r *SystemConfigRepository) updateConfig(ctx context.Context, table string,
 	setClauses := make([]string, 0, len(updates))
 	params := make([]any, 0, len(updates))
 	for field, value := range updates {
+		// Validate column name to prevent SQL injection
+		if !validColumnName.MatchString(field) {
+			return fmt.Errorf("invalid column name: %q", field)
+		}
 		setClauses = append(setClauses, field+" = ?")
 		// Convert bool to int for SQLite INTEGER columns
 		if b, ok := value.(bool); ok {

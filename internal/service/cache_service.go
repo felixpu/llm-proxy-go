@@ -77,6 +77,7 @@ type CacheService struct {
 	l1Mu      sync.RWMutex
 	l2Repo    *repository.EmbeddingCacheRepository
 	logger    *zap.Logger
+	done      chan struct{}
 }
 
 // NewCacheService creates a new CacheService
@@ -90,6 +91,7 @@ func NewCacheService(db *sql.DB, config *CacheConfig, logger *zap.Logger) *Cache
 		l1Cache: make(map[string]*l1Entry),
 		l2Repo:  repository.NewEmbeddingCacheRepository(db, logger),
 		logger:  logger,
+		done:    make(chan struct{}),
 	}
 
 	// Start background cleanup goroutine
@@ -130,7 +132,9 @@ func (cs *CacheService) Get(ctx context.Context, content string, embedding []flo
 	} else if entry != nil {
 		// Update hit count asynchronously
 		go func() {
-			_ = cs.l2Repo.UpdateHitCountByHash(context.Background(), cacheKey)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = cs.l2Repo.UpdateHitCountByHash(ctx, cacheKey)
 		}()
 
 		// Promote to L1
@@ -308,7 +312,9 @@ func (cs *CacheService) getL3Semantic(ctx context.Context, queryEmbedding []floa
 
 	// Update hit count asynchronously
 	go func() {
-		_ = cs.l2Repo.UpdateHitCount(context.Background(), bestMatch.ID)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = cs.l2Repo.UpdateHitCount(ctx, bestMatch.ID)
 	}()
 
 	return &CacheEntry{
@@ -338,13 +344,23 @@ func cosineSimilarity(a, b []float64) float64 {
 	return dotProduct / (math.Sqrt(normA) * math.Sqrt(normB))
 }
 
+// Stop stops the background cleanup goroutine.
+func (cs *CacheService) Stop() {
+	close(cs.done)
+}
+
 // cleanupLoop periodically cleans up expired entries
 func (cs *CacheService) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		cs.cleanupL1()
+	for {
+		select {
+		case <-ticker.C:
+			cs.cleanupL1()
+		case <-cs.done:
+			return
+		}
 	}
 }
 

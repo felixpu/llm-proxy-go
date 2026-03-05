@@ -16,6 +16,7 @@ type RateLimitConfig struct {
 	MaxRequests   int
 	WindowSeconds int
 	ExemptPaths   []string
+	StopCh        <-chan struct{} // Optional: close to stop background cleanup goroutine
 }
 
 // DefaultRateLimitConfig returns the default rate limit configuration.
@@ -100,8 +101,20 @@ func RateLimit(cfg *RateLimitConfig) gin.HandlerFunc {
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
-		for range ticker.C {
-			limiter.cleanup()
+		for {
+			if cfg.StopCh != nil {
+				select {
+				case <-ticker.C:
+					limiter.cleanup()
+				case <-cfg.StopCh:
+					return
+				}
+			} else {
+				select {
+				case <-ticker.C:
+					limiter.cleanup()
+				}
+			}
 		}
 	}()
 

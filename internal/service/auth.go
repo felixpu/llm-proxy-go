@@ -60,6 +60,7 @@ func (s *AuthService) ValidateAPIKey(ctx context.Context, rawKey string) (*Curre
 
 	apiKey, err := s.keyRepo.FindByKeyHash(ctx, keyHash)
 	if err != nil {
+		s.logger.Debug("API key lookup failed", zap.Error(err))
 		return nil, fmt.Errorf("invalid API key")
 	}
 
@@ -69,6 +70,7 @@ func (s *AuthService) ValidateAPIKey(ctx context.Context, rawKey string) (*Curre
 
 	user, err := s.userRepo.FindByID(ctx, apiKey.UserID)
 	if err != nil {
+		s.logger.Debug("user lookup failed for API key", zap.Int64("user_id", apiKey.UserID), zap.Error(err))
 		return nil, fmt.Errorf("user not found for API key")
 	}
 
@@ -100,6 +102,7 @@ func (s *AuthService) ValidateAPIKey(ctx context.Context, rawKey string) (*Curre
 func (s *AuthService) AuthenticateUser(ctx context.Context, username, password string) (*models.User, error) {
 	user, err := s.userRepo.FindByUsernameWithHash(ctx, username)
 	if err != nil {
+		s.logger.Debug("user lookup failed during authentication", zap.String("username", username), zap.Error(err))
 		return nil, fmt.Errorf("invalid credentials")
 	}
 
