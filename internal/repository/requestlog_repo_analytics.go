@@ -88,20 +88,20 @@ func (r *RequestLogRepositoryImpl) ListInaccurate(ctx context.Context, limit, of
 	}
 
 	query := `
-		SELECT
-			request_logs.id, request_logs.request_id, request_logs.user_id,
-			COALESCE(u.username, '未知用户') as username,
+			SELECT
+				request_logs.id, request_logs.request_id, request_logs.user_id,
+				COALESCE(u.username, '未知用户') as username,
 			request_logs.api_key_id, request_logs.model_name, request_logs.endpoint_name,
 			request_logs.task_type, request_logs.input_tokens, request_logs.output_tokens,
 			request_logs.latency_ms, request_logs.cost, request_logs.status_code,
-			request_logs.success, request_logs.stream, request_logs.created_at,
-			COALESCE(request_logs.cache_creation_input_tokens, 0),
-			COALESCE(request_logs.cache_read_input_tokens, 0),
-			'' as message_preview, '' as request_content, '' as response_content,
-			request_logs.routing_method, request_logs.routing_reason,
-			request_logs.matched_rule_id, request_logs.matched_rule_name, request_logs.all_matches,
-			request_logs.is_inaccurate
-		FROM request_logs
+				request_logs.success, request_logs.stream, request_logs.created_at,
+				COALESCE(request_logs.cache_creation_input_tokens, 0),
+				COALESCE(request_logs.cache_read_input_tokens, 0),
+				request_logs.message_preview, '' as request_content, '' as response_content,
+				request_logs.routing_method, request_logs.routing_reason,
+				request_logs.matched_rule_id, request_logs.matched_rule_name, request_logs.all_matches,
+				request_logs.is_inaccurate
+			FROM request_logs
 		LEFT JOIN users u ON request_logs.user_id = u.id
 		WHERE request_logs.is_inaccurate = 1
 		ORDER BY request_logs.created_at DESC
@@ -204,6 +204,27 @@ func (r *RequestLogRepositoryImpl) CountForAnalysis(ctx context.Context, startTi
 		whereClause = strings.Join(conditions, " AND ")
 	}
 	query := "SELECT COUNT(*) FROM request_logs WHERE " + whereClause
+	var count int
+	err := r.readDB.QueryRowContext(ctx, query, params...).Scan(&count)
+	return count, err
+}
+
+// CountInaccurateForAnalysis returns inaccurate log count in the analysis time range.
+func (r *RequestLogRepositoryImpl) CountInaccurateForAnalysis(ctx context.Context, startTime, endTime *time.Time) (int, error) {
+	var conditions []string
+	var params []any
+
+	conditions = append(conditions, "is_inaccurate = 1")
+	if startTime != nil {
+		conditions = append(conditions, "created_at >= ?")
+		params = append(params, startTime.UTC().Format("2006-01-02 15:04:05"))
+	}
+	if endTime != nil {
+		conditions = append(conditions, "created_at <= ?")
+		params = append(params, endTime.UTC().Format("2006-01-02 15:04:05"))
+	}
+
+	query := "SELECT COUNT(*) FROM request_logs WHERE " + strings.Join(conditions, " AND ")
 	var count int
 	err := r.readDB.QueryRowContext(ctx, query, params...).Scan(&count)
 	return count, err

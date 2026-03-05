@@ -28,21 +28,29 @@ func NewAnalysisReportRepository(db *sql.DB, logger *zap.Logger, readDB ...*sql.
 
 // reportJSON is the JSON structure stored in the report column.
 type reportJSON struct {
-	Summary         *models.AnalysisSummary          `json:"summary"`
-	Issues          []models.AnalysisIssue           `json:"issues"`
-	Recommendations []models.AnalysisRecommendation  `json:"recommendations"`
-	Conclusion      string                           `json:"conclusion"`
-	Warnings        []string                         `json:"warnings,omitempty"`
+	Summary               *models.AnalysisSummary         `json:"summary"`
+	Issues                []models.AnalysisIssue          `json:"issues"`
+	Recommendations       []models.AnalysisRecommendation `json:"recommendations"`
+	Conclusion            string                          `json:"conclusion"`
+	Warnings              []string                        `json:"warnings,omitempty"`
+	FullInaccurateCount   int                             `json:"full_inaccurate_count,omitempty"`
+	FullInaccurateRate    float64                         `json:"full_inaccurate_rate,omitempty"`
+	SampleInaccurateCount int                             `json:"sample_inaccurate_count,omitempty"`
+	SampleInaccurateRate  float64                         `json:"sample_inaccurate_rate,omitempty"`
 }
 
 // Save persists an analysis report and returns its ID.
 func (r *AnalysisReportRepository) Save(ctx context.Context, report *models.AnalysisReport) (int64, error) {
 	rj := reportJSON{
-		Summary:         report.Summary,
-		Issues:          report.Issues,
-		Recommendations: report.Recommendations,
-		Conclusion:      report.Conclusion,
-		Warnings:        report.Warnings,
+		Summary:               report.Summary,
+		Issues:                report.Issues,
+		Recommendations:       report.Recommendations,
+		Conclusion:            report.Conclusion,
+		Warnings:              report.Warnings,
+		FullInaccurateCount:   report.FullInaccurateCount,
+		FullInaccurateRate:    report.FullInaccurateRate,
+		SampleInaccurateCount: report.SampleInaccurateCount,
+		SampleInaccurateRate:  report.SampleInaccurateRate,
 	}
 	reportBytes, err := json.Marshal(rj)
 	if err != nil {
@@ -160,6 +168,10 @@ func (r *AnalysisReportRepository) scanReport(rows *sql.Rows) (*models.AnalysisR
 		rpt.Recommendations = rj.Recommendations
 		rpt.Conclusion = rj.Conclusion
 		rpt.Warnings = rj.Warnings
+		rpt.FullInaccurateCount = rj.FullInaccurateCount
+		rpt.FullInaccurateRate = rj.FullInaccurateRate
+		rpt.SampleInaccurateCount = rj.SampleInaccurateCount
+		rpt.SampleInaccurateRate = rj.SampleInaccurateRate
 	}
 
 	return &rpt, nil

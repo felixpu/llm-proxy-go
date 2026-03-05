@@ -146,6 +146,11 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 		a.failTask(taskID, "no logs found in the specified time range")
 		return
 	}
+	fullInaccurateCount, err := a.logRepo.CountInaccurateForAnalysis(ctx, req.StartTime, req.EndTime)
+	if err != nil {
+		a.failTask(taskID, fmt.Sprintf("count inaccurate logs: %v", err))
+		return
+	}
 
 	// Step 2: Collect logs with intelligent limit based on total count
 	config := DefaultAnalysisConfig()
@@ -173,6 +178,12 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 	entries := make([]*models.ExtractedLogEntry, 0, len(sampled))
 	for _, log := range sampled {
 		entries = append(entries, a.extractor.ExtractFromLog(log))
+	}
+	sampleInaccurateCount := 0
+	for _, e := range entries {
+		if e.IsInaccurate {
+			sampleInaccurateCount++
+		}
 	}
 
 	a.updateTask(taskID, func(t *models.AnalysisTask) {
@@ -217,6 +228,24 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 	report.TimeRangeEnd = req.EndTime
 	report.TotalLogs = totalLogs
 	report.AnalyzedLogs = len(entries)
+	report.FullInaccurateCount = fullInaccurateCount
+	if totalLogs > 0 {
+		report.FullInaccurateRate = float64(fullInaccurateCount) / float64(totalLogs)
+	}
+	report.SampleInaccurateCount = sampleInaccurateCount
+	if len(entries) > 0 {
+		report.SampleInaccurateRate = float64(sampleInaccurateCount) / float64(len(entries))
+	}
+	if report.AnalyzedLogs < report.TotalLogs {
+		report.Warnings = append(
+			report.Warnings,
+			fmt.Sprintf(
+				"口径说明：本报告基于采样（%d/%d），优先包含不准确日志；样本不准确率用于定位问题，不等同于全量不准确率。",
+				report.AnalyzedLogs,
+				report.TotalLogs,
+			),
+		)
+	}
 
 	// Step 8: Persist report
 	reportID, err := a.reportRepo.Save(ctx, report)

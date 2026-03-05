@@ -283,7 +283,13 @@ func (h *RoutingAnalysisHandler) ExportRoutingData(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
 	inaccurateOnly := c.Query("inaccurate_only") == "true"
 
-	logs, _, err := h.logRepo.List(ctx, limit, 0, nil, nil, nil, nil, nil, nil)
+	var logs []*models.RequestLog
+	var err error
+	if inaccurateOnly {
+		logs, _, err = h.logRepo.ListInaccurate(ctx, limit, 0)
+	} else {
+		logs, _, err = h.logRepo.List(ctx, limit, 0, nil, nil, nil, nil, nil, nil)
+	}
 	if err != nil {
 		h.logger.Error("failed to export routing data", zap.Error(err))
 		errorResponse(c, http.StatusInternalServerError, "Failed to export data")
@@ -303,9 +309,6 @@ func (h *RoutingAnalysisHandler) ExportRoutingData(c *gin.Context) {
 
 	var entries []ExportEntry
 	for _, log := range logs {
-		if inaccurateOnly && !log.IsInaccurate {
-			continue
-		}
 		entries = append(entries, ExportEntry{
 			ID:              log.ID,
 			MessagePreview:  log.MessagePreview,
@@ -321,6 +324,15 @@ func (h *RoutingAnalysisHandler) ExportRoutingData(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"entries": entries,
 		"count":   len(entries),
+		"meta": gin.H{
+			"inaccurate_only": inaccurateOnly,
+			"scope_note": func() string {
+				if inaccurateOnly {
+					return "当前导出仅包含已标记不准确日志（is_inaccurate = true）。"
+				}
+				return "当前导出为按时间倒序的请求样本，不代表全量分布。"
+			}(),
+		},
 	})
 }
 

@@ -16,10 +16,10 @@ const (
 type LoadBalanceStrategy string
 
 const (
-	StrategyRoundRobin        LoadBalanceStrategy = "round_robin"
-	StrategyWeighted          LoadBalanceStrategy = "weighted"
-	StrategyLeastConnections  LoadBalanceStrategy = "least_connections"
-	StrategyConversationHash  LoadBalanceStrategy = "conversation_hash"
+	StrategyRoundRobin       LoadBalanceStrategy = "round_robin"
+	StrategyWeighted         LoadBalanceStrategy = "weighted"
+	StrategyLeastConnections LoadBalanceStrategy = "least_connections"
+	StrategyConversationHash LoadBalanceStrategy = "conversation_hash"
 )
 
 // EndpointStatus represents the health status of an endpoint.
@@ -135,22 +135,22 @@ type RequestLogEntry struct {
 
 // RequestLog represents a request log record from the database.
 type RequestLog struct {
-	ID           int64      `json:"id"`
-	RequestID    string     `json:"request_id"`
-	UserID       int64      `json:"user_id"`
-	Username     string     `json:"username"`
-	APIKeyID     *int64     `json:"api_key_id,omitempty"`
-	ModelName    string     `json:"model_name"`
-	EndpointName string     `json:"endpoint_name"`
-	TaskType     string     `json:"task_type"`
-	InputTokens  int        `json:"input_tokens"`
-	OutputTokens int        `json:"output_tokens"`
-	LatencyMs    float64    `json:"latency_ms"`
-	Cost         float64    `json:"cost"`
-	StatusCode   *int       `json:"status_code,omitempty"`
-	Success      bool       `json:"success"`
-	Stream       bool       `json:"stream"`
-	CreatedAt    time.Time  `json:"created_at"`
+	ID           int64     `json:"id"`
+	RequestID    string    `json:"request_id"`
+	UserID       int64     `json:"user_id"`
+	Username     string    `json:"username"`
+	APIKeyID     *int64    `json:"api_key_id,omitempty"`
+	ModelName    string    `json:"model_name"`
+	EndpointName string    `json:"endpoint_name"`
+	TaskType     string    `json:"task_type"`
+	InputTokens  int       `json:"input_tokens"`
+	OutputTokens int       `json:"output_tokens"`
+	LatencyMs    float64   `json:"latency_ms"`
+	Cost         float64   `json:"cost"`
+	StatusCode   *int      `json:"status_code,omitempty"`
+	Success      bool      `json:"success"`
+	Stream       bool      `json:"stream"`
+	CreatedAt    time.Time `json:"created_at"`
 
 	// Cache statistics (Anthropic Prompt Caching)
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
@@ -251,17 +251,17 @@ type RoutingModelWithProvider struct {
 
 // EmbeddingModel represents an embedding model configuration.
 type EmbeddingModel struct {
-	ID                int64     `json:"id"`
-	Name              string    `json:"name"`
-	Dimension         int       `json:"dimension"`
-	Description       string    `json:"description,omitempty"`
-	FastembedSupported bool     `json:"fastembed_supported"`
-	FastembedName     string    `json:"fastembed_name,omitempty"`
-	IsBuiltin         bool      `json:"is_builtin"`
-	Enabled           bool      `json:"enabled"`
-	SortOrder         int       `json:"sort_order"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                 int64     `json:"id"`
+	Name               string    `json:"name"`
+	Dimension          int       `json:"dimension"`
+	Description        string    `json:"description,omitempty"`
+	FastembedSupported bool      `json:"fastembed_supported"`
+	FastembedName      string    `json:"fastembed_name,omitempty"`
+	IsBuiltin          bool      `json:"is_builtin"`
+	Enabled            bool      `json:"enabled"`
+	SortOrder          int       `json:"sort_order"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 // RoutingDecision represents the result of an LLM routing decision.
@@ -279,9 +279,9 @@ type RoutingDecision struct {
 type FallbackStrategy string
 
 const (
-	FallbackDefault    FallbackStrategy = "default"    // Use default model
-	FallbackLLM        FallbackStrategy = "llm"        // Call LLM to decide
-	FallbackUserChoice FallbackStrategy = "user"       // Use user-specified value
+	FallbackDefault    FallbackStrategy = "default" // Use default model
+	FallbackLLM        FallbackStrategy = "llm"     // Call LLM to decide
+	FallbackUserChoice FallbackStrategy = "user"    // Use user-specified value
 )
 
 // RoutingRule represents a routing rule for rule-based classification.
@@ -304,9 +304,9 @@ type RoutingRule struct {
 // RuleMatchResult represents the result of a rule match evaluation.
 type RuleMatchResult struct {
 	Rule     *RoutingRule `json:"matched_rule"`
-	Matches  []*RuleHit  `json:"all_matches"`
-	TaskType string      `json:"final_task_type"`
-	Reason   string      `json:"match_reason"`
+	Matches  []*RuleHit   `json:"all_matches"`
+	TaskType string       `json:"final_task_type"`
+	Reason   string       `json:"match_reason"`
 }
 
 // RuleHit represents a single rule hit during evaluation.
@@ -330,9 +330,9 @@ type FallbackInfo struct {
 
 // RuleStats represents routing rule statistics.
 type RuleStats struct {
-	TotalRequests    int64              `json:"total_requests"`
-	RuleHits         map[int64]HitStat  `json:"rule_hits"`
-	UnmatchedSamples []UnmatchedSample  `json:"unmatched_samples"`
+	TotalRequests    int64             `json:"total_requests"`
+	RuleHits         map[int64]HitStat `json:"rule_hits"`
+	UnmatchedSamples []UnmatchedSample `json:"unmatched_samples"`
 }
 
 // HitStat represents hit statistics for a single rule.
@@ -368,9 +368,9 @@ type SuggestedRule struct {
 
 // RuleExport represents the export format for routing rules.
 type RuleExport struct {
-	Version    string         `json:"version"`
+	Version    string        `json:"version"`
 	ExportedAt time.Time     `json:"exported_at"`
-	Rules      []RoutingRule  `json:"rules"`
+	Rules      []RoutingRule `json:"rules"`
 }
 
 // AnalysisRequest represents parameters for starting a routing analysis.
@@ -393,34 +393,38 @@ type AnalysisTask struct {
 
 // AnalysisReport represents a persisted analysis report.
 type AnalysisReport struct {
-	ID             int64              `json:"id"`
-	ModelUsed      string             `json:"model_used"`
-	TimeRangeStart *time.Time         `json:"time_range_start"`
-	TimeRangeEnd   *time.Time         `json:"time_range_end"`
-	TotalLogs      int                `json:"total_logs"`
-	AnalyzedLogs   int                `json:"analyzed_logs"`
-	Summary        *AnalysisSummary   `json:"summary"`
-	Issues         []AnalysisIssue    `json:"issues"`
-	Recommendations []AnalysisRecommendation `json:"recommendations"`
-	Conclusion     string             `json:"conclusion"`
-	Warnings       []string           `json:"warnings,omitempty"` // Warnings from batched analysis (e.g., failed batches)
-	CreatedAt      time.Time          `json:"created_at"`
+	ID                    int64                    `json:"id"`
+	ModelUsed             string                   `json:"model_used"`
+	TimeRangeStart        *time.Time               `json:"time_range_start"`
+	TimeRangeEnd          *time.Time               `json:"time_range_end"`
+	TotalLogs             int                      `json:"total_logs"`
+	AnalyzedLogs          int                      `json:"analyzed_logs"`
+	FullInaccurateCount   int                      `json:"full_inaccurate_count,omitempty"`
+	FullInaccurateRate    float64                  `json:"full_inaccurate_rate,omitempty"`
+	SampleInaccurateCount int                      `json:"sample_inaccurate_count,omitempty"`
+	SampleInaccurateRate  float64                  `json:"sample_inaccurate_rate,omitempty"`
+	Summary               *AnalysisSummary         `json:"summary"`
+	Issues                []AnalysisIssue          `json:"issues"`
+	Recommendations       []AnalysisRecommendation `json:"recommendations"`
+	Conclusion            string                   `json:"conclusion"`
+	Warnings              []string                 `json:"warnings,omitempty"` // Warnings from batched analysis (e.g., failed batches)
+	CreatedAt             time.Time                `json:"created_at"`
 }
 
 // AnalysisSummary contains statistical overview of routing performance.
 type AnalysisSummary struct {
-	RuleMatchRate    float64 `json:"rule_match_rate"`
-	LLMFallbackRate  float64 `json:"llm_fallback_rate"`
-	InaccurateRate   float64 `json:"inaccurate_rate"`
-	TopTaskTypes     map[string]int `json:"top_task_types"`
+	RuleMatchRate   float64        `json:"rule_match_rate"`
+	LLMFallbackRate float64        `json:"llm_fallback_rate"`
+	InaccurateRate  float64        `json:"inaccurate_rate"`
+	TopTaskTypes    map[string]int `json:"top_task_types"`
 }
 
 // AnalysisIssue represents a detected routing problem.
 type AnalysisIssue struct {
-	Type        string `json:"type"` // false_positive/false_negative/priority_conflict/redundant_rule/overly_broad
-	Severity    string `json:"severity"` // high/medium/low
-	RuleName    string `json:"rule_name,omitempty"`
-	Description string `json:"description"`
+	Type        string   `json:"type"`     // false_positive/false_negative/priority_conflict/redundant_rule/overly_broad
+	Severity    string   `json:"severity"` // high/medium/low
+	RuleName    string   `json:"rule_name,omitempty"`
+	Description string   `json:"description"`
 	Examples    []string `json:"examples,omitempty"`
 }
 

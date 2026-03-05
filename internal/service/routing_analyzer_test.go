@@ -410,6 +410,10 @@ func (m *mockRequestLogRepository) CountForAnalysis(ctx context.Context, startTi
 	return 0, nil
 }
 
+func (m *mockRequestLogRepository) CountInaccurateForAnalysis(ctx context.Context, startTime, endTime *time.Time) (int, error) {
+	return 0, nil
+}
+
 func (m *mockRequestLogRepository) GetEndpointModelStats(ctx context.Context) (map[string]*repository.EndpointModelStats, error) {
 	return nil, nil
 }
