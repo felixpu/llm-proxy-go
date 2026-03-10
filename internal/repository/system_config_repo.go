@@ -11,7 +11,8 @@ import (
 // SystemConfigRepository handles system configuration data access.
 // Operates on routing_config, load_balance_config, health_check_config, ui_config tables.
 type SystemConfigRepository struct {
-	db *sql.DB
+	db     *sql.DB
+	readDB *sql.DB
 }
 
 type SystemRoutingConfigPatch struct {
@@ -34,8 +35,12 @@ type SystemUIConfigPatch struct {
 }
 
 // NewSystemConfigRepository creates a new SystemConfigRepository.
-func NewSystemConfigRepository(db *sql.DB) *SystemConfigRepository {
-	return &SystemConfigRepository{db: db}
+func NewSystemConfigRepository(db *sql.DB, readDB ...*sql.DB) *SystemConfigRepository {
+	repo := &SystemConfigRepository{db: db, readDB: db}
+	if len(readDB) > 0 && readDB[0] != nil {
+		repo.readDB = readDB[0]
+	}
+	return repo
 }
 
 // GetRoutingConfig retrieves the routing configuration (single row, id=1).
@@ -106,7 +111,7 @@ func (r *SystemConfigRepository) UpdateUIConfigPatch(ctx context.Context, patch 
 // getConfig reads a single-row config table and returns all columns as a map.
 func (r *SystemConfigRepository) getConfig(ctx context.Context, table string) (map[string]any, error) {
 	query := fmt.Sprintf("SELECT * FROM %s WHERE id = 1", table)
-	rows, err := r.db.QueryContext(ctx, query)
+	rows, err := r.readDB.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get %s: %w", table, err)
 	}

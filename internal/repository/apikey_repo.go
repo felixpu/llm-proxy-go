@@ -10,16 +10,21 @@ import (
 
 // SQLAPIKeyRepository implements APIKeyRepository using database/sql.
 type SQLAPIKeyRepository struct {
-	db *sql.DB
+	db     *sql.DB
+	readDB *sql.DB
 }
 
 // NewAPIKeyRepository creates a new SQLAPIKeyRepository.
-func NewAPIKeyRepository(db *sql.DB) *SQLAPIKeyRepository {
-	return &SQLAPIKeyRepository{db: db}
+func NewAPIKeyRepository(db *sql.DB, readDB ...*sql.DB) *SQLAPIKeyRepository {
+	repo := &SQLAPIKeyRepository{db: db, readDB: db}
+	if len(readDB) > 0 && readDB[0] != nil {
+		repo.readDB = readDB[0]
+	}
+	return repo
 }
 
 func (r *SQLAPIKeyRepository) FindByKeyHash(ctx context.Context, keyHash string) (*models.APIKey, error) {
-	row := r.db.QueryRowContext(ctx,
+	row := r.readDB.QueryRowContext(ctx,
 		`SELECT id, user_id, key_hash, key_full, key_prefix, name, is_active, created_at, last_used_at, expires_at
 		 FROM api_keys WHERE key_hash = ?`, keyHash)
 
@@ -50,7 +55,7 @@ func (r *SQLAPIKeyRepository) FindByKeyHash(ctx context.Context, keyHash string)
 }
 
 func (r *SQLAPIKeyRepository) FindByID(ctx context.Context, id int64) (*models.APIKey, error) {
-	row := r.db.QueryRowContext(ctx,
+	row := r.readDB.QueryRowContext(ctx,
 		`SELECT id, user_id, key_hash, key_full, key_prefix, name, is_active, created_at, last_used_at, expires_at
 		 FROM api_keys WHERE id = ?`, id)
 
@@ -81,7 +86,7 @@ func (r *SQLAPIKeyRepository) FindByID(ctx context.Context, id int64) (*models.A
 }
 
 func (r *SQLAPIKeyRepository) FindByUserID(ctx context.Context, userID int64) ([]*models.APIKey, error) {
-	rows, err := r.db.QueryContext(ctx,
+	rows, err := r.readDB.QueryContext(ctx,
 		`SELECT id, user_id, key_hash, key_full, key_prefix, name, is_active, created_at, last_used_at, expires_at
 		 FROM api_keys WHERE user_id = ? ORDER BY created_at DESC`, userID)
 	if err != nil {
@@ -119,7 +124,7 @@ func (r *SQLAPIKeyRepository) FindByUserID(ctx context.Context, userID int64) ([
 }
 
 func (r *SQLAPIKeyRepository) FindAll(ctx context.Context) ([]*models.APIKey, error) {
-	rows, err := r.db.QueryContext(ctx,
+	rows, err := r.readDB.QueryContext(ctx,
 		`SELECT id, user_id, key_hash, key_full, key_prefix, name, is_active, created_at, last_used_at, expires_at
 		 FROM api_keys ORDER BY created_at DESC`)
 	if err != nil {
@@ -222,4 +227,3 @@ func (r *SQLAPIKeyRepository) CleanupExpired(ctx context.Context) (int64, error)
 	}
 	return result.RowsAffected()
 }
-

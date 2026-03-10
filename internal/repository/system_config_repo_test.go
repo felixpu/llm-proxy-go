@@ -41,6 +41,19 @@ func TestSystemConfigRepository_UpdateRoutingConfig(t *testing.T) {
 	assert.Equal(t, "simple", config["default_role"])
 }
 
+func TestSystemConfigRepository_ReadsUseReadDB(t *testing.T) {
+	db, readDB := testutil.NewFileBackedTestDBPairWithDefaults(t)
+	repo := NewSystemConfigRepository(db, readDB)
+	ctx := context.Background()
+
+	require.NoError(t, db.Close())
+
+	config, err := repo.GetLoadBalanceConfig(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, config)
+	assert.Equal(t, "conversation_hash", config["strategy"])
+}
+
 func TestSystemConfigRepository_GetLoadBalanceConfig(t *testing.T) {
 	db := testutil.NewTestDBWithDefaults(t)
 	repo := NewSystemConfigRepository(db)

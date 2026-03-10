@@ -5,15 +5,25 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/user/llm-proxy-go/internal/models"
 	"go.uber.org/zap"
 )
 
+const routingConfigCacheTTL = time.Second
+
 // RoutingConfigRepository handles LLM routing config data access (single row, id=1).
 type RoutingConfigRepository struct {
 	db     *sql.DB
+	readDB *sql.DB
 	logger *zap.Logger
+
+	cacheMu    sync.RWMutex
+	cachedCfg  *models.RoutingConfig
+	cachedAt   time.Time
 }
 
 // RoutingConfigPatch is a typed partial update payload for routing_llm_config.
@@ -42,8 +52,12 @@ type RoutingConfigPatch struct {
 }
 
 // NewRoutingConfigRepository creates a new RoutingConfigRepository.
-func NewRoutingConfigRepository(db *sql.DB, logger *zap.Logger) *RoutingConfigRepository {
-	return &RoutingConfigRepository{db: db, logger: logger}
+func NewRoutingConfigRepository(db *sql.DB, logger *zap.Logger, readDB ...*sql.DB) *RoutingConfigRepository {
+	repo := &RoutingConfigRepository{db: db, readDB: db, logger: logger}
+	if len(readDB) > 0 && readDB[0] != nil {
+		repo.readDB = readDB[0]
+	}
+	return repo
 }
 
 // boolFields lists the boolean fields in routing_llm_config.
@@ -86,6 +100,10 @@ var validRoutingConfigColumns = map[string]bool{
 // GetConfig retrieves the LLM routing configuration.
 // Returns default config if no row exists.
 func (r *RoutingConfigRepository) GetConfig(ctx context.Context) (*models.RoutingConfig, error) {
+	if cfg := r.getCachedConfig(time.Now()); cfg != nil {
+		return cfg, nil
+	}
+
 	var cfg models.RoutingConfig
 	var primaryModelID, fallbackModelID, embeddingModelID sql.NullInt64
 	var cacheTTLL3 sql.NullInt64
@@ -107,7 +125,7 @@ func (r *RoutingConfigRepository) GetConfig(ctx context.Context) (*models.Routin
 	// Logging fields
 	var logFullContent sql.NullInt64
 
-	err := r.db.QueryRowContext(ctx, `
+	err := r.readDB.QueryRowContext(ctx, `
 		SELECT enabled, primary_model_id, fallback_model_id, timeout_seconds,
 			cache_enabled, cache_ttl_seconds, cache_ttl_l3_seconds, max_tokens,
 			temperature, retry_count, semantic_cache_enabled, embedding_model_id,
@@ -127,7 +145,15 @@ func (r *RoutingConfigRepository) GetConfig(ctx context.Context) (*models.Routin
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			r.logger.Debug("no routing config found, using defaults")
-			return models.DefaultRoutingConfig(), nil
+			defaultCfg := models.DefaultRoutingConfig()
+			r.storeCachedConfig(defaultCfg, time.Now())
+			return cloneRoutingConfig(defaultCfg), nil
+		}
+		if isSQLiteBusy(err) {
+			if cached := r.getCachedConfig(time.Now()); cached != nil {
+				r.logger.Debug("routing config read hit SQLITE_BUSY, using cached config")
+				return cached, nil
+			}
 		}
 		return nil, fmt.Errorf("failed to get routing config: %w", err)
 	}
@@ -208,7 +234,8 @@ func (r *RoutingConfigRepository) GetConfig(ctx context.Context) (*models.Routin
 		cfg.LogFullContent = defaults.LogFullContent
 	}
 
-	return &cfg, nil
+	r.storeCachedConfig(&cfg, time.Now())
+	return cloneRoutingConfig(&cfg), nil
 }
 
 // UpdateConfig dynamically updates routing configuration fields.
@@ -252,7 +279,66 @@ func (r *RoutingConfigRepository) updateWithMap(ctx context.Context, updates map
 
 	rows, _ := result.RowsAffected()
 	r.logger.Debug("routing config updated", zap.Int64("rows_affected", rows))
+	r.clearCachedConfig()
 	return nil
+}
+
+func (r *RoutingConfigRepository) getCachedConfig(now time.Time) *models.RoutingConfig {
+	r.cacheMu.RLock()
+	defer r.cacheMu.RUnlock()
+	if r.cachedCfg == nil {
+		return nil
+	}
+	if !r.cachedAt.IsZero() && now.Sub(r.cachedAt) > routingConfigCacheTTL {
+		return nil
+	}
+	return cloneRoutingConfig(r.cachedCfg)
+}
+
+func (r *RoutingConfigRepository) storeCachedConfig(cfg *models.RoutingConfig, now time.Time) {
+	if cfg == nil {
+		return
+	}
+	r.cacheMu.Lock()
+	defer r.cacheMu.Unlock()
+	r.cachedCfg = cloneRoutingConfig(cfg)
+	r.cachedAt = now
+}
+
+func (r *RoutingConfigRepository) clearCachedConfig() {
+	r.cacheMu.Lock()
+	defer r.cacheMu.Unlock()
+	r.cachedCfg = nil
+	r.cachedAt = time.Time{}
+}
+
+func cloneRoutingConfig(cfg *models.RoutingConfig) *models.RoutingConfig {
+	if cfg == nil {
+		return nil
+	}
+	cloned := *cfg
+	if cfg.PrimaryModelID != nil {
+		v := *cfg.PrimaryModelID
+		cloned.PrimaryModelID = &v
+	}
+	if cfg.FallbackModelID != nil {
+		v := *cfg.FallbackModelID
+		cloned.FallbackModelID = &v
+	}
+	if cfg.EmbeddingModelID != nil {
+		v := *cfg.EmbeddingModelID
+		cloned.EmbeddingModelID = &v
+	}
+	if cfg.RuleFallbackModelID != nil {
+		v := *cfg.RuleFallbackModelID
+		cloned.RuleFallbackModelID = &v
+	}
+	return &cloned
+}
+
+func isSQLiteBusy(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "SQLITE_BUSY") || strings.Contains(msg, "database is locked")
 }
 
 // UpdateConfigPatch updates routing config using a typed patch payload.

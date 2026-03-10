@@ -10,16 +10,21 @@ import (
 
 // SQLUserRepository implements UserRepository using database/sql.
 type SQLUserRepository struct {
-	db *sql.DB
+	db     *sql.DB
+	readDB *sql.DB
 }
 
 // NewUserRepository creates a new SQLUserRepository.
-func NewUserRepository(db *sql.DB) *SQLUserRepository {
-	return &SQLUserRepository{db: db}
+func NewUserRepository(db *sql.DB, readDB ...*sql.DB) *SQLUserRepository {
+	repo := &SQLUserRepository{db: db, readDB: db}
+	if len(readDB) > 0 && readDB[0] != nil {
+		repo.readDB = readDB[0]
+	}
+	return repo
 }
 
 func (r *SQLUserRepository) FindByID(ctx context.Context, id int64) (*models.User, error) {
-	row := r.db.QueryRowContext(ctx,
+	row := r.readDB.QueryRowContext(ctx,
 		`SELECT id, username, role, is_active, created_at, updated_at
 		 FROM users WHERE id = ?`, id)
 
@@ -38,7 +43,7 @@ func (r *SQLUserRepository) FindByID(ctx context.Context, id int64) (*models.Use
 }
 
 func (r *SQLUserRepository) FindByUsername(ctx context.Context, username string) (*models.User, error) {
-	row := r.db.QueryRowContext(ctx,
+	row := r.readDB.QueryRowContext(ctx,
 		`SELECT id, username, role, is_active, created_at, updated_at
 		 FROM users WHERE username = ?`, username)
 
@@ -57,7 +62,7 @@ func (r *SQLUserRepository) FindByUsername(ctx context.Context, username string)
 }
 
 func (r *SQLUserRepository) FindByUsernameWithHash(ctx context.Context, username string) (*models.User, error) {
-	row := r.db.QueryRowContext(ctx,
+	row := r.readDB.QueryRowContext(ctx,
 		`SELECT id, username, password_hash, role, is_active, created_at, updated_at
 		 FROM users WHERE username = ?`, username)
 
@@ -98,13 +103,13 @@ func (r *SQLUserRepository) Insert(ctx context.Context, user *models.User) (int6
 func (r *SQLUserRepository) FindAll(ctx context.Context, offset, limit int) ([]*models.User, int64, error) {
 	// Get total count
 	var total int64
-	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&total)
+	err := r.readDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&total)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	// Get users
-	rows, err := r.db.QueryContext(ctx,
+	rows, err := r.readDB.QueryContext(ctx,
 		`SELECT id, username, role, is_active, created_at, updated_at
 		 FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
@@ -153,13 +158,13 @@ func (r *SQLUserRepository) Delete(ctx context.Context, id int64) error {
 // CountByRole counts users with a specific role.
 func (r *SQLUserRepository) CountByRole(ctx context.Context, role models.UserRole) (int64, error) {
 	var count int64
-	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = ?`, string(role)).Scan(&count)
+	err := r.readDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE role = ?`, string(role)).Scan(&count)
 	return count, err
 }
 
 // FindByIDWithHash returns a user by ID including password hash (for auth).
 func (r *SQLUserRepository) FindByIDWithHash(ctx context.Context, id int64) (*models.User, error) {
-	row := r.db.QueryRowContext(ctx,
+	row := r.readDB.QueryRowContext(ctx,
 		`SELECT id, username, password_hash, role, is_active, created_at, updated_at
 		 FROM users WHERE id = ?`, id)
 

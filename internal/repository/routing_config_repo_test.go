@@ -6,6 +6,7 @@ package repository
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -45,6 +46,56 @@ func TestRoutingConfigRepository_GetConfig_NoRow(t *testing.T) {
 	// Should return default config
 	assert.False(t, config.Enabled)
 	assert.True(t, config.CacheEnabled)
+}
+
+func TestRoutingConfigRepository_GetConfig_UsesReadDB(t *testing.T) {
+	db, readDB := testutil.NewFileBackedTestDBPairWithDefaults(t)
+	repo := NewRoutingConfigRepository(db, zap.NewNop(), readDB)
+	ctx := context.Background()
+
+	require.NoError(t, db.Close())
+
+	config, err := repo.GetConfig(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, config)
+	assert.False(t, config.Enabled)
+	assert.True(t, config.CacheEnabled)
+}
+
+func TestRoutingConfigRepository_GetConfig_UsesRecentCacheOnReadError(t *testing.T) {
+	db, readDB := testutil.NewFileBackedTestDBPairWithDefaults(t)
+	repo := NewRoutingConfigRepository(db, zap.NewNop(), readDB)
+	ctx := context.Background()
+
+	first, err := repo.GetConfig(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+
+	require.NoError(t, readDB.Close())
+
+	second, err := repo.GetConfig(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, second)
+	assert.Equal(t, first.Enabled, second.Enabled)
+	assert.Equal(t, first.CacheEnabled, second.CacheEnabled)
+}
+
+func TestRoutingConfigRepository_GetConfig_ExpiredCacheDoesNotHideReadError(t *testing.T) {
+	db, readDB := testutil.NewFileBackedTestDBPairWithDefaults(t)
+	repo := NewRoutingConfigRepository(db, zap.NewNop(), readDB)
+	ctx := context.Background()
+
+	_, err := repo.GetConfig(ctx)
+	require.NoError(t, err)
+
+	repo.cacheMu.Lock()
+	repo.cachedAt = time.Now().Add(-routingConfigCacheTTL - time.Millisecond)
+	repo.cacheMu.Unlock()
+
+	require.NoError(t, readDB.Close())
+
+	_, err = repo.GetConfig(ctx)
+	require.Error(t, err)
 }
 
 func TestRoutingConfigRepository_UpdateConfig(t *testing.T) {

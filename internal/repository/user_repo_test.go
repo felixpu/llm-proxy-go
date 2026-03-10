@@ -91,6 +91,20 @@ func TestUserRepository_FindByUsernameWithHash(t *testing.T) {
 	assert.Equal(t, models.UserRoleAdmin, user.Role)
 }
 
+func TestUserRepository_ReadsUseReadDB(t *testing.T) {
+	db, readDB := testutil.NewFileBackedTestDBPair(t)
+	testutil.SeedTestData(t, db)
+	repo := NewUserRepository(db, readDB)
+	ctx := context.Background()
+
+	require.NoError(t, db.Close())
+
+	user, err := repo.FindByUsernameWithHash(ctx, "admin")
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	assert.Equal(t, "admin", user.Username)
+}
+
 func TestUserRepository_Insert(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	repo := NewUserRepository(db)
@@ -167,11 +181,11 @@ func TestUserRepository_FindAll(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name       string
-		offset     int
-		limit      int
-		wantCount  int
-		wantTotal  int64
+		name      string
+		offset    int
+		limit     int
+		wantCount int
+		wantTotal int64
 	}{
 		{"all users", 0, 10, 3, 3},
 		{"first page", 0, 2, 2, 3},

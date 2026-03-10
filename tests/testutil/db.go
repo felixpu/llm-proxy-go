@@ -19,6 +19,18 @@ func NewTestDBWithDefaults(t *testing.T) *sql.DB {
 	return internaltestutil.NewTestDBWithDefaults(t)
 }
 
+// NewFileBackedTestDBPair delegates to internal/testutil to avoid schema drift.
+func NewFileBackedTestDBPair(t *testing.T) (*sql.DB, *sql.DB) {
+	t.Helper()
+	return internaltestutil.NewFileBackedTestDBPair(t)
+}
+
+// NewFileBackedTestDBPairWithDefaults delegates to internal/testutil to avoid schema drift.
+func NewFileBackedTestDBPairWithDefaults(t *testing.T) (*sql.DB, *sql.DB) {
+	t.Helper()
+	return internaltestutil.NewFileBackedTestDBPairWithDefaults(t)
+}
+
 // SeedTestData delegates to internal/testutil to avoid fixture drift.
 func SeedTestData(t *testing.T, db *sql.DB) {
 	t.Helper()
