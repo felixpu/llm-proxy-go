@@ -305,6 +305,32 @@
     position: relative;
 }
 
+.log-card-metric-body {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+}
+
+.log-card-metric-meta {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 2px;
+}
+
+.log-card-metric-meta-time {
+    font-size: 10px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.log-card-metric-meta-user {
+    font-size: var(--font-size-xs);
+    color: var(--text-tertiary);
+    white-space: nowrap;
+}
+
 .log-card-metric-value .token-down {
     color: var(--color-primary);
 }
