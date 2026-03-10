@@ -105,6 +105,34 @@ func TestRequestLogRepository_GetStatistics(t *testing.T) {
 	assert.NotEmpty(t, stats.ByEndpoint)
 }
 
+func TestRequestLogRepository_ModelTraceRoundTrip(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	testutil.SeedTestData(t, db)
+	repo := NewRequestLogRepositoryImpl(db, zap.NewNop())
+	ctx := context.Background()
+
+	entry := testutil.SampleRequestLogEntry(1)
+	entry.ModelName = "claude-sonnet-4-5-20250929"
+	entry.RequestedModel = "claude-sonnet-4-6"
+	entry.ResolvedModel = "claude-sonnet-4-5-20250929"
+
+	id, err := repo.Insert(ctx, entry)
+	require.NoError(t, err)
+
+	logEntry, err := repo.GetByID(ctx, id)
+	require.NoError(t, err)
+	assert.Equal(t, entry.RequestedModel, logEntry.RequestedModel)
+	assert.Equal(t, entry.ResolvedModel, logEntry.ResolvedModel)
+	assert.Equal(t, entry.ModelName, logEntry.ModelName)
+
+	logs, total, err := repo.List(ctx, 10, 0, nil, nil, nil, nil, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	require.Len(t, logs, 1)
+	assert.Equal(t, entry.RequestedModel, logs[0].RequestedModel)
+	assert.Equal(t, entry.ResolvedModel, logs[0].ResolvedModel)
+}
+
 func TestRequestLogRepository_Count(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	testutil.SeedTestData(t, db)

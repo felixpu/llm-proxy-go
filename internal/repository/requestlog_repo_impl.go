@@ -77,6 +77,7 @@ func (r *RequestLogRepositoryImpl) scanLog(rows *sql.Rows) (*models.RequestLog, 
 	var apiKeyID sql.NullInt64
 	var statusCode sql.NullInt64
 	var taskType sql.NullString
+	var requestedModel, resolvedModel sql.NullString
 	var success, stream int
 	var createdAt string
 
@@ -90,7 +91,7 @@ func (r *RequestLogRepositoryImpl) scanLog(rows *sql.Rows) (*models.RequestLog, 
 
 	err := rows.Scan(
 		&log.ID, &log.RequestID, &log.UserID, &log.Username,
-		&apiKeyID, &log.ModelName, &log.EndpointName, &taskType,
+		&apiKeyID, &log.ModelName, &requestedModel, &resolvedModel, &log.EndpointName, &taskType,
 		&log.InputTokens, &log.OutputTokens, &log.LatencyMs, &log.Cost,
 		&statusCode, &success, &stream, &createdAt,
 		&cacheCreationInputTokens, &cacheReadInputTokens,
@@ -112,6 +113,12 @@ func (r *RequestLogRepositoryImpl) scanLog(rows *sql.Rows) (*models.RequestLog, 
 	}
 	if taskType.Valid {
 		log.TaskType = taskType.String
+	}
+	if requestedModel.Valid {
+		log.RequestedModel = requestedModel.String
+	}
+	if resolvedModel.Valid {
+		log.ResolvedModel = resolvedModel.String
 	}
 	log.Success = success == 1
 	log.Stream = stream == 1

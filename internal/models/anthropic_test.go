@@ -175,6 +175,21 @@ func TestContentPart_WithCacheControl_UnmarshalJSON(t *testing.T) {
 	assert.Equal(t, "ephemeral", part.CacheControl.Type)
 }
 
+func TestContentPart_WithThinkingSignature_RoundTrip(t *testing.T) {
+	input := `{"type":"thinking","thinking":"internal reasoning","signature":"sig_123"}`
+	var part ContentPart
+	err := json.Unmarshal([]byte(input), &part)
+
+	require.NoError(t, err)
+	assert.Equal(t, "thinking", part.Type)
+	assert.Equal(t, "internal reasoning", part.Thinking)
+	assert.Equal(t, "sig_123", part.Signature)
+
+	data, err := json.Marshal(part)
+	require.NoError(t, err)
+	assert.JSONEq(t, input, string(data))
+}
+
 func TestTool_WithCacheControl_MarshalJSON(t *testing.T) {
 	tool := Tool{
 		Name:         "get_weather",
@@ -282,4 +297,32 @@ func TestAnthropicRequest_WithCacheControl_RoundTrip(t *testing.T) {
 
 	require.NotNil(t, req2.Tools[0].CacheControl)
 	assert.Equal(t, "ephemeral", req2.Tools[0].CacheControl.Type)
+}
+
+func TestAnthropicRequest_WithAssistantThinkingSignature_RoundTrip(t *testing.T) {
+	input := `{
+		"model":"claude-opus-4-6",
+		"max_tokens":128,
+		"messages":[
+			{
+				"role":"assistant",
+				"content":[
+					{"type":"thinking","thinking":"step-by-step","signature":"sig_abc"},
+					{"type":"text","text":"final answer"}
+				]
+			}
+		]
+	}`
+
+	var req AnthropicRequest
+	err := json.Unmarshal([]byte(input), &req)
+	require.NoError(t, err)
+	require.Len(t, req.Messages, 1)
+	require.True(t, req.Messages[0].Content.IsArray)
+	require.Len(t, req.Messages[0].Content.Parts, 2)
+	assert.Equal(t, "sig_abc", req.Messages[0].Content.Parts[0].Signature)
+
+	data, err := json.Marshal(req)
+	require.NoError(t, err)
+	assert.JSONEq(t, input, string(data))
 }

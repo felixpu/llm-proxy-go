@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -21,6 +22,8 @@ import (
 // ProxyMetadata contains metadata about a proxied request.
 type ProxyMetadata struct {
 	RequestID        string
+	RequestedModel   string
+	ResolvedModel    string
 	SelectedModel    string
 	SelectedEndpoint string
 	InferredTaskType string
@@ -100,6 +103,7 @@ func (s *ProxyService) ProxyRequest(
 	ctx context.Context,
 	req *models.AnthropicRequest,
 	originalHeaders http.Header,
+	originalQuery string,
 	selection *EndpointSelectionResult,
 	endpoints []*models.Endpoint,
 ) (*models.AnthropicResponse, *ProxyMetadata, error) {
@@ -117,7 +121,7 @@ func (s *ProxyService) ProxyRequest(
 		epName := EndpointName(ep)
 		triedEndpoints[epName] = true
 
-		resp, meta, err := s.proxyToEndpoint(ctx, req, originalHeaders, ep, requestID, attemptStart)
+		resp, meta, err := s.proxyToEndpoint(ctx, req, originalHeaders, originalQuery, ep, requestID, attemptStart)
 		if err == nil {
 			meta.FallbackInfo = selection.FallbackInfo
 			return resp, meta, nil
@@ -149,6 +153,7 @@ func (s *ProxyService) proxyToEndpoint(
 	ctx context.Context,
 	req *models.AnthropicRequest,
 	originalHeaders http.Header,
+	originalQuery string,
 	ep *models.Endpoint,
 	requestID string,
 	start time.Time,
@@ -173,7 +178,7 @@ func (s *ProxyService) proxyToEndpoint(
 	}
 	adapter := GetAdapter(apiType)
 
-	upstreamURL := fmt.Sprintf("%s%s", ep.Provider.BaseURL, adapter.GetEndpoint())
+	upstreamURL := buildUpstreamURL(ep.Provider.BaseURL, adapter.GetEndpoint(), originalQuery)
 	upReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, nil, fmt.Errorf("create upstream request: %w", err)
@@ -320,12 +325,26 @@ func copyAnthropicHeaders(src, dst http.Header) {
 		}
 		// Forward Claude Code / Stainless client identification headers
 		if lower == "x-app" || strings.HasPrefix(lower, "x-stainless-") ||
-			strings.HasPrefix(lower, "x-claude-") || lower == "x-client-app" {
+			strings.HasPrefix(lower, "x-claude-") || strings.HasPrefix(lower, "x-client-") {
 			for _, v := range vv {
 				dst.Add(k, v)
 			}
 		}
 	}
+}
+
+func buildUpstreamURL(baseURL, endpointPath, rawQuery string) string {
+	joined := strings.TrimRight(baseURL, "/") + endpointPath
+	if rawQuery == "" {
+		return joined
+	}
+
+	u, err := url.Parse(joined)
+	if err != nil {
+		return joined
+	}
+	u.RawQuery = rawQuery
+	return u.String()
 }
 
 // applyCustomHeaders applies provider-level custom headers to the request.
@@ -391,6 +410,8 @@ func (s *ProxyService) SaveRequestLog(ctx context.Context, meta *ProxyMetadata, 
 		UserID:                   userID,
 		APIKeyID:                 apiKeyID,
 		ModelName:                meta.SelectedModel,
+		RequestedModel:           meta.RequestedModel,
+		ResolvedModel:            meta.ResolvedModel,
 		EndpointName:             meta.SelectedEndpoint,
 		TaskType:                 meta.InferredTaskType,
 		InputTokens:              meta.InputTokens,
@@ -490,6 +511,7 @@ func (s *ProxyService) ProxyStreamRequest(
 	ctx context.Context,
 	req *models.AnthropicRequest,
 	originalHeaders http.Header,
+	originalQuery string,
 	selection *EndpointSelectionResult,
 	endpoints []*models.Endpoint,
 ) (<-chan StreamChunk, *ProxyMetadata, error) {
@@ -507,7 +529,7 @@ func (s *ProxyService) ProxyStreamRequest(
 		epName := EndpointName(ep)
 		triedEndpoints[epName] = true
 
-		resp, err := s.connectStreamEndpoint(ctx, req, originalHeaders, ep, attemptStart)
+		resp, err := s.connectStreamEndpoint(ctx, req, originalHeaders, originalQuery, ep, attemptStart)
 		if err != nil {
 			// Check if the error is non-retryable
 			var ue *UpstreamError
@@ -558,6 +580,7 @@ func (s *ProxyService) connectStreamEndpoint(
 	ctx context.Context,
 	req *models.AnthropicRequest,
 	originalHeaders http.Header,
+	originalQuery string,
 	ep *models.Endpoint,
 	start time.Time,
 ) (*http.Response, error) {
@@ -579,7 +602,7 @@ func (s *ProxyService) connectStreamEndpoint(
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	upstreamURL := fmt.Sprintf("%s%s", ep.Provider.BaseURL, adapter.GetEndpoint())
+	upstreamURL := buildUpstreamURL(ep.Provider.BaseURL, adapter.GetEndpoint(), originalQuery)
 	upReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create upstream request: %w", err)

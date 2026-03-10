@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -140,6 +141,14 @@ func getEndpointsFromContext(c *gin.Context) ([]*models.Endpoint, bool) {
 	return eps, true
 }
 
+func unwrapUpstreamError(err error) *service.UpstreamError {
+	var upstreamErr *service.UpstreamError
+	if errors.As(err, &upstreamErr) {
+		return upstreamErr
+	}
+	return nil
+}
+
 // handleNonStreamRequest handles non-streaming proxy requests.
 func (h *ProxyHandler) handleNonStreamRequest(c *gin.Context, req *models.AnthropicRequest, eps []*models.Endpoint, user *service.CurrentUser) {
 	ctx := c.Request.Context()
@@ -158,9 +167,9 @@ func (h *ProxyHandler) handleNonStreamRequest(c *gin.Context, req *models.Anthro
 		return
 	}
 
-	resp, meta, err := h.proxyService.ProxyRequest(ctx, req, c.Request.Header, selection, eps)
+	resp, meta, err := h.proxyService.ProxyRequest(ctx, req, c.Request.Header, c.Request.URL.RawQuery, selection, eps)
 	if err != nil {
-		if ue, ok := err.(*service.UpstreamError); ok {
+		if ue := unwrapUpstreamError(err); ue != nil {
 			// Save error request log with proper RequestID
 			if meta == nil {
 				meta = &service.ProxyMetadata{
@@ -174,6 +183,7 @@ func (h *ProxyHandler) handleNonStreamRequest(c *gin.Context, req *models.Anthro
 			meta.InferredTaskType = string(selection.TaskType)
 			meta.RoutingDecision = selection.RoutingDecision
 			meta.RuleMatchResult = selection.RuleMatchResult
+			attachModelTrace(meta, req, selection)
 			h.attachContent(ctx, meta, req, nil)
 			// Save upstream error response body (always, regardless of LogFullContent)
 			meta.ResponseContent = string(ue.Body)
@@ -197,6 +207,7 @@ func (h *ProxyHandler) handleNonStreamRequest(c *gin.Context, req *models.Anthro
 		meta.InferredTaskType = string(selection.TaskType)
 		meta.RoutingDecision = selection.RoutingDecision
 		meta.RuleMatchResult = selection.RuleMatchResult
+		attachModelTrace(meta, req, selection)
 		h.attachContent(ctx, meta, req, nil)
 		// Save error message as response content
 		meta.ResponseContent = err.Error()
@@ -218,6 +229,7 @@ func (h *ProxyHandler) handleNonStreamRequest(c *gin.Context, req *models.Anthro
 	meta.RoutingDecision = selection.RoutingDecision
 	meta.RuleMatchResult = selection.RuleMatchResult
 	meta.InferredTaskType = string(selection.TaskType)
+	attachModelTrace(meta, req, selection)
 
 	// Attach full content if configured
 	h.attachContent(ctx, meta, req, resp)
@@ -248,9 +260,9 @@ func (h *ProxyHandler) handleStreamRequest(c *gin.Context, req *models.Anthropic
 		return
 	}
 
-	chunkChan, meta, err := h.proxyService.ProxyStreamRequest(ctx, req, c.Request.Header, selection, eps)
+	chunkChan, meta, err := h.proxyService.ProxyStreamRequest(ctx, req, c.Request.Header, c.Request.URL.RawQuery, selection, eps)
 	if err != nil {
-		if ue, ok := err.(*service.UpstreamError); ok {
+		if ue := unwrapUpstreamError(err); ue != nil {
 			// Save error request log with proper RequestID
 			if meta == nil {
 				meta = &service.ProxyMetadata{
@@ -265,6 +277,7 @@ func (h *ProxyHandler) handleStreamRequest(c *gin.Context, req *models.Anthropic
 			meta.InferredTaskType = string(selection.TaskType)
 			meta.RoutingDecision = selection.RoutingDecision
 			meta.RuleMatchResult = selection.RuleMatchResult
+			attachModelTrace(meta, req, selection)
 			h.attachStreamContent(ctx, meta, req)
 			// Save upstream error response body (always, regardless of LogFullContent)
 			meta.ResponseContent = string(ue.Body)
@@ -289,6 +302,7 @@ func (h *ProxyHandler) handleStreamRequest(c *gin.Context, req *models.Anthropic
 		meta.InferredTaskType = string(selection.TaskType)
 		meta.RoutingDecision = selection.RoutingDecision
 		meta.RuleMatchResult = selection.RuleMatchResult
+		attachModelTrace(meta, req, selection)
 		h.attachStreamContent(ctx, meta, req)
 		// Save error message as response content
 		meta.ResponseContent = err.Error()
@@ -309,6 +323,7 @@ func (h *ProxyHandler) handleStreamRequest(c *gin.Context, req *models.Anthropic
 	meta.RuleMatchResult = selection.RuleMatchResult
 	meta.FallbackInfo = selection.FallbackInfo
 	meta.InferredTaskType = string(selection.TaskType)
+	attachModelTrace(meta, req, selection)
 
 	// Attach request content if configured
 	h.attachStreamContent(ctx, meta, req)
@@ -351,6 +366,7 @@ func (h *ProxyHandler) handleStreamRequest(c *gin.Context, req *models.Anthropic
 					chunk.Meta.RoutingDecision = meta.RoutingDecision
 					chunk.Meta.RuleMatchResult = meta.RuleMatchResult
 					chunk.Meta.RequestContent = meta.RequestContent
+					attachModelTrace(chunk.Meta, req, selection)
 					h.proxyService.SaveRequestLog(c.Request.Context(), chunk.Meta, user.UserID, user.APIKeyID)
 				}
 				return
@@ -363,6 +379,7 @@ func (h *ProxyHandler) handleStreamRequest(c *gin.Context, req *models.Anthropic
 					chunk.Meta.RoutingDecision = meta.RoutingDecision
 					chunk.Meta.RuleMatchResult = meta.RuleMatchResult
 					chunk.Meta.RequestContent = meta.RequestContent
+					attachModelTrace(chunk.Meta, req, selection)
 					// Save request log
 					h.proxyService.SaveRequestLog(c.Request.Context(), chunk.Meta, user.UserID, user.APIKeyID)
 
@@ -401,6 +418,16 @@ func setProxyHeaders(c *gin.Context, meta *service.ProxyMetadata) {
 	c.Header("X-Proxy-Cost", strconv.FormatFloat(meta.Cost, 'f', -1, 64))
 	c.Header("X-Proxy-Input-Tokens", strconv.Itoa(meta.InputTokens))
 	c.Header("X-Proxy-Output-Tokens", strconv.Itoa(meta.OutputTokens))
+}
+
+func attachModelTrace(meta *service.ProxyMetadata, req *models.AnthropicRequest, selection *service.EndpointSelectionResult) {
+	if meta == nil || req == nil {
+		return
+	}
+	meta.RequestedModel = req.Model
+	if selection != nil && selection.Model != nil {
+		meta.ResolvedModel = selection.Model.Name
+	}
 }
 
 // extractAPIKey extracts the API key from x-api-key header or Authorization bearer.

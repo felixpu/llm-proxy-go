@@ -31,7 +31,8 @@ func (r *RequestLogRepositoryImpl) List(
 		SELECT
 			request_logs.id, request_logs.request_id, request_logs.user_id,
 			COALESCE(u.username, '未知用户') as username,
-			request_logs.api_key_id, request_logs.model_name, request_logs.endpoint_name,
+			request_logs.api_key_id, request_logs.model_name, request_logs.requested_model,
+			request_logs.resolved_model, request_logs.endpoint_name,
 			request_logs.task_type, request_logs.input_tokens, request_logs.output_tokens,
 			request_logs.latency_ms, request_logs.cost, request_logs.status_code,
 			request_logs.success, request_logs.stream, request_logs.created_at,
@@ -234,7 +235,8 @@ func (r *RequestLogRepositoryImpl) GetByID(ctx context.Context, id int64) (*mode
 		SELECT
 			request_logs.id, request_logs.request_id, request_logs.user_id,
 			COALESCE(u.username, '未知用户') as username,
-			request_logs.api_key_id, request_logs.model_name, request_logs.endpoint_name,
+			request_logs.api_key_id, request_logs.model_name, request_logs.requested_model,
+			request_logs.resolved_model, request_logs.endpoint_name,
 			request_logs.task_type, request_logs.input_tokens, request_logs.output_tokens,
 			request_logs.latency_ms, request_logs.cost, request_logs.status_code,
 			request_logs.success, request_logs.stream, request_logs.created_at,
