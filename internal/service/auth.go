@@ -79,7 +79,7 @@ func (s *AuthService) ValidateAPIKey(ctx context.Context, rawKey string) (*Curre
 	}
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), DefaultAsyncRepoTimeout)
 		defer cancel()
 		if err := s.keyRepo.UpdateLastUsed(ctx, apiKey.ID); err != nil {
 			s.logger.Debug("failed to update API key last used", zap.Error(err))

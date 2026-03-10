@@ -3,10 +3,12 @@ package testutil
 
 import (
 	"database/sql"
+	"path/filepath"
 	"testing"
 
-	_ "modernc.org/sqlite"
 	"github.com/stretchr/testify/require"
+	"github.com/user/llm-proxy-go/internal/database"
+	_ "modernc.org/sqlite"
 )
 
 // NewTestDB creates an in-memory SQLite database with full schema for testing.
@@ -38,6 +40,38 @@ func NewTestDBWithDefaults(t *testing.T) *sql.DB {
 	require.NoError(t, err, "failed to insert defaults")
 
 	return db
+}
+
+// NewFileBackedTestDBPair creates a file-backed SQLite write/read pair with full schema.
+func NewFileBackedTestDBPair(t *testing.T) (*sql.DB, *sql.DB) {
+	t.Helper()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := database.New(dbPath)
+	require.NoError(t, err, "failed to open writable test database")
+
+	err = createSchema(db)
+	require.NoError(t, err, "failed to create schema")
+
+	readDB, err := database.NewReadOnly(dbPath)
+	require.NoError(t, err, "failed to open read-only test database")
+
+	t.Cleanup(func() {
+		readDB.Close()
+		db.Close()
+	})
+
+	return db, readDB
+}
+
+// NewFileBackedTestDBPairWithDefaults creates a file-backed SQLite pair with default config rows.
+func NewFileBackedTestDBPairWithDefaults(t *testing.T) (*sql.DB, *sql.DB) {
+	t.Helper()
+
+	db, readDB := NewFileBackedTestDBPair(t)
+	err := insertDefaults(db)
+	require.NoError(t, err, "failed to insert defaults")
+	return db, readDB
 }
 
 // createSchema creates all tables for testing.
@@ -84,6 +118,17 @@ CREATE TABLE IF NOT EXISTS models (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Model aliases table
+CREATE TABLE IF NOT EXISTS model_aliases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alias_name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    target_model_id INTEGER NOT NULL,
+    enabled INTEGER DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (target_model_id) REFERENCES models(id) ON DELETE CASCADE
+);
+
 -- Providers table
 CREATE TABLE IF NOT EXISTS providers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -94,7 +139,7 @@ CREATE TABLE IF NOT EXISTS providers (
     max_concurrent INTEGER DEFAULT 10,
     enabled INTEGER DEFAULT 1,
     description TEXT,
-    custom_headers TEXT,
+    custom_headers TEXT DEFAULT '' NOT NULL,
     api_type TEXT DEFAULT 'auto' NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -177,6 +222,7 @@ CREATE TABLE IF NOT EXISTS routing_llm_config (
     rule_fallback_strategy TEXT DEFAULT 'default',
     rule_fallback_task_type TEXT DEFAULT 'default',
     rule_fallback_model_id INTEGER,
+    cross_role_fallback_enabled INTEGER DEFAULT 0,
     log_full_content INTEGER DEFAULT 1
 );
 
@@ -237,6 +283,8 @@ CREATE TABLE IF NOT EXISTS request_logs (
     user_id INTEGER NOT NULL,
     api_key_id INTEGER,
     model_name TEXT NOT NULL,
+    requested_model TEXT DEFAULT '',
+    resolved_model TEXT DEFAULT '',
     endpoint_name TEXT NOT NULL,
     task_type TEXT,
     input_tokens INTEGER DEFAULT 0,
@@ -311,6 +359,7 @@ CREATE TABLE IF NOT EXISTS routing_rules (
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_provider_models_provider_id ON provider_models(provider_id);
 CREATE INDEX IF NOT EXISTS idx_provider_models_model_id ON provider_models(model_id);
+CREATE INDEX IF NOT EXISTS idx_model_aliases_target_model_id ON model_aliases(target_model_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash);

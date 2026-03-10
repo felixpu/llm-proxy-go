@@ -197,6 +197,155 @@ func TestStartAnalysis_ConcurrentRequests(t *testing.T) {
 	assert.Equal(t, 1, len(successIDs), "exactly one analysis should start")
 }
 
+// TestSampleLogs_NeverExceedsMaxSamples verifies sampling never returns more than maxSamples,
+// even when inaccurate logs exceed the configured cap.
+func TestSampleLogs_NeverExceedsMaxSamples(t *testing.T) {
+	analyzer := &RoutingAnalyzer{logger: zap.NewNop()}
+
+	var logs []*models.RequestLog
+	for i := 0; i < 10; i++ {
+		logs = append(logs, &models.RequestLog{
+			ID:           int64(i + 1),
+			IsInaccurate: true,
+		})
+	}
+
+	maxSamples := 5
+	sampled := analyzer.sampleLogs(logs, maxSamples)
+	assert.LessOrEqual(t, len(sampled), maxSamples, "sample size must not exceed maxSamples")
+}
+
+func TestRoutingAnalyzer_CleanupTasksLocked_RemovesExpiredTerminalKeepsRunning(t *testing.T) {
+	now := time.Now()
+	analyzer := &RoutingAnalyzer{
+		tasks:          make(map[string]*models.AnalysisTask),
+		logger:         zap.NewNop(),
+		taskTTL:        1 * time.Hour,
+		taskMaxEntries: 100,
+	}
+
+	analyzer.tasks["completed-old"] = &models.AnalysisTask{
+		ID:        "completed-old",
+		Status:    "completed",
+		CreatedAt: now.Add(-2 * time.Hour),
+	}
+	analyzer.tasks["failed-old"] = &models.AnalysisTask{
+		ID:        "failed-old",
+		Status:    "failed",
+		CreatedAt: now.Add(-2 * time.Hour),
+	}
+	analyzer.tasks["running-old"] = &models.AnalysisTask{
+		ID:        "running-old",
+		Status:    "running",
+		CreatedAt: now.Add(-2 * time.Hour),
+	}
+	analyzer.tasks["completed-recent"] = &models.AnalysisTask{
+		ID:        "completed-recent",
+		Status:    "completed",
+		CreatedAt: now.Add(-10 * time.Minute),
+	}
+
+	analyzer.mu.Lock()
+	analyzer.cleanupTasksLocked(now)
+	analyzer.mu.Unlock()
+
+	assert.Nil(t, analyzer.tasks["completed-old"])
+	assert.Nil(t, analyzer.tasks["failed-old"])
+	require.NotNil(t, analyzer.tasks["running-old"], "running task must not be deleted")
+	require.NotNil(t, analyzer.tasks["completed-recent"])
+}
+
+func TestRoutingAnalyzer_CleanupTasksLocked_EnforcesMaxEntriesWithoutDeletingRunning(t *testing.T) {
+	now := time.Now()
+	analyzer := &RoutingAnalyzer{
+		tasks:          make(map[string]*models.AnalysisTask),
+		logger:         zap.NewNop(),
+		taskTTL:        24 * time.Hour,
+		taskMaxEntries: 3,
+	}
+
+	analyzer.tasks["running-1"] = &models.AnalysisTask{ID: "running-1", Status: "running", CreatedAt: now.Add(-10 * time.Minute)}
+	analyzer.tasks["running-2"] = &models.AnalysisTask{ID: "running-2", Status: "running", CreatedAt: now.Add(-9 * time.Minute)}
+	analyzer.tasks["completed-1"] = &models.AnalysisTask{ID: "completed-1", Status: "completed", CreatedAt: now.Add(-8 * time.Minute)}
+	analyzer.tasks["completed-2"] = &models.AnalysisTask{ID: "completed-2", Status: "completed", CreatedAt: now.Add(-7 * time.Minute)}
+	analyzer.tasks["completed-3"] = &models.AnalysisTask{ID: "completed-3", Status: "completed", CreatedAt: now.Add(-6 * time.Minute)}
+	analyzer.tasks["completed-4"] = &models.AnalysisTask{ID: "completed-4", Status: "completed", CreatedAt: now.Add(-5 * time.Minute)}
+
+	analyzer.mu.Lock()
+	analyzer.cleanupTasksLocked(now)
+	analyzer.mu.Unlock()
+
+	assert.Len(t, analyzer.tasks, 3)
+	require.NotNil(t, analyzer.tasks["running-1"], "running task must be retained")
+	require.NotNil(t, analyzer.tasks["running-2"], "running task must be retained")
+	require.NotNil(t, analyzer.tasks["completed-4"], "newest terminal task should remain after trimming")
+}
+
+func TestResolveAnalysisStrategy(t *testing.T) {
+	tests := []struct {
+		name       string
+		config     AnalysisConfig
+		entryCount int
+		want       AnalysisStrategy
+	}{
+		{
+			name: "single pass forced",
+			config: AnalysisConfig{
+				Strategy: StrategySinglePass,
+			},
+			entryCount: 500,
+			want:       StrategySinglePass,
+		},
+		{
+			name: "batched forced",
+			config: AnalysisConfig{
+				Strategy: StrategyBatched,
+			},
+			entryCount: 10,
+			want:       StrategyBatched,
+		},
+		{
+			name: "hierarchical small dataset chooses single pass",
+			config: AnalysisConfig{
+				Strategy: StrategyHierarchical,
+			},
+			entryCount: 100,
+			want:       StrategySinglePass,
+		},
+		{
+			name: "hierarchical large dataset chooses batched",
+			config: AnalysisConfig{
+				Strategy: StrategyHierarchical,
+			},
+			entryCount: 300,
+			want:       StrategyBatched,
+		},
+		{
+			name: "unknown strategy falls back by size small",
+			config: AnalysisConfig{
+				Strategy: AnalysisStrategy("unknown"),
+			},
+			entryCount: 20,
+			want:       StrategySinglePass,
+		},
+		{
+			name: "unknown strategy falls back by size large",
+			config: AnalysisConfig{
+				Strategy: AnalysisStrategy("unknown"),
+			},
+			entryCount: 400,
+			want:       StrategyBatched,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveAnalysisStrategy(tt.config, tt.entryCount)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // Mock repository for testing
 type mockRoutingModelRepository struct {
 	model *models.RoutingModelWithProvider
@@ -258,6 +407,10 @@ func (m *mockRequestLogRepository) ListForAnalysis(ctx context.Context, startTim
 func (m *mockRequestLogRepository) CountForAnalysis(ctx context.Context, startTime, endTime *time.Time) (int, error) {
 	// Block to keep the goroutine running during the test
 	time.Sleep(100 * time.Millisecond)
+	return 0, nil
+}
+
+func (m *mockRequestLogRepository) CountInaccurateForAnalysis(ctx context.Context, startTime, endTime *time.Time) (int, error) {
 	return 0, nil
 }
 

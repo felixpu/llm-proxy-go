@@ -237,7 +237,7 @@ func TestRoutingRuleRepository_UpdateRule(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := repo.UpdateRule(ctx, tt.id, tt.updates)
+			err := repo.UpdateRulePatch(ctx, tt.id, routingRulePatchFromMap(tt.updates))
 			require.NoError(t, err)
 
 			if len(tt.updates) > 0 {
@@ -247,6 +247,63 @@ func TestRoutingRuleRepository_UpdateRule(t *testing.T) {
 			}
 		})
 	}
+}
+
+func routingRulePatchFromMap(updates map[string]any) RoutingRulePatch {
+	patch := RoutingRulePatch{}
+	if v, ok := updates["name"].(string); ok {
+		patch.Name = &v
+	}
+	if v, ok := updates["description"].(string); ok {
+		patch.Description = &v
+	}
+	if v, ok := updates["keywords"].([]string); ok {
+		patch.Keywords = &v
+	}
+	if v, ok := updates["pattern"].(string); ok {
+		patch.Pattern = &v
+	}
+	if v, ok := updates["condition"].(string); ok {
+		patch.Condition = &v
+	}
+	if v, ok := updates["task_type"].(string); ok {
+		patch.TaskType = &v
+	}
+	if v, ok := updates["priority"].(int); ok {
+		patch.Priority = &v
+	}
+	if v, ok := updates["enabled"].(bool); ok {
+		patch.Enabled = &v
+	}
+	if v, ok := updates["is_builtin"].(bool); ok {
+		patch.IsBuiltin = &v
+	}
+	return patch
+}
+
+func TestRoutingRuleRepository_UpdateRulePatch(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	repo := NewRoutingRuleRepository(db, zap.NewNop())
+	ctx := context.Background()
+	seedRoutingRules(t, db)
+
+	name := "typed-updated"
+	enabled := false
+	priority := 321
+	patch := RoutingRulePatch{
+		Name:     &name,
+		Enabled:  &enabled,
+		Priority: &priority,
+	}
+
+	require.NoError(t, repo.UpdateRulePatch(ctx, 1, patch))
+
+	rule, err := repo.GetRule(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, rule)
+	assert.Equal(t, "typed-updated", rule.Name)
+	assert.False(t, rule.Enabled)
+	assert.Equal(t, 321, rule.Priority)
 }
 
 func TestRoutingRuleRepository_DeleteRule(t *testing.T) {

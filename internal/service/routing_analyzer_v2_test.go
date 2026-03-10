@@ -245,13 +245,13 @@ func TestMergeSummaries(t *testing.T) {
 					TopTaskTypes:    map[string]int{"coding": 15, "general": 5},
 				},
 			},
-			totalEntries: 40,
-			validate: func(t *testing.T, result *models.AnalysisSummary) {
-				assert.InDelta(t, 0.7, result.RuleMatchRate, 0.01)
-				assert.InDelta(t, 0.2, result.LLMFallbackRate, 0.01)
-				assert.InDelta(t, 0.1, result.InaccurateRate, 0.01)
-				assert.Equal(t, 25, result.TopTaskTypes["coding"])
-				assert.Equal(t, 5, result.TopTaskTypes["translation"])
+				totalEntries: 40,
+				validate: func(t *testing.T, result *models.AnalysisSummary) {
+					assert.InDelta(t, 0.714, result.RuleMatchRate, 0.01)
+					assert.InDelta(t, 0.186, result.LLMFallbackRate, 0.01)
+					assert.InDelta(t, 0.1, result.InaccurateRate, 0.01)
+					assert.Equal(t, 25, result.TopTaskTypes["coding"])
+					assert.Equal(t, 5, result.TopTaskTypes["translation"])
 				assert.Equal(t, 5, result.TopTaskTypes["general"])
 			},
 		},
@@ -261,6 +261,34 @@ func TestMergeSummaries(t *testing.T) {
 			totalEntries: 0,
 			validate: func(t *testing.T, result *models.AnalysisSummary) {
 				assert.Nil(t, result)
+			},
+		},
+		{
+			name: "merge with uneven batch sizes should be weighted",
+			summaries: []*models.AnalysisSummary{
+				{
+					RuleMatchRate:   0.9,
+					LLMFallbackRate: 0.1,
+					InaccurateRate:  0.2,
+					TopTaskTypes: map[string]int{
+						"default": 90,
+					},
+				},
+				{
+					RuleMatchRate:   0.1,
+					LLMFallbackRate: 0.9,
+					InaccurateRate:  0.4,
+					TopTaskTypes: map[string]int{
+						"default": 10,
+					},
+				},
+			},
+			totalEntries: 100,
+			validate: func(t *testing.T, result *models.AnalysisSummary) {
+				// Expected weighted by sample sizes: (rate1*90 + rate2*10) / 100
+				assert.InDelta(t, 0.82, result.RuleMatchRate, 0.01)
+				assert.InDelta(t, 0.18, result.LLMFallbackRate, 0.01)
+				assert.InDelta(t, 0.22, result.InaccurateRate, 0.01)
 			},
 		},
 	}

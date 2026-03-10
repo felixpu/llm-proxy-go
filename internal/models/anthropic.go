@@ -46,7 +46,8 @@ type ContentPart struct {
 	Content   interface{} `json:"content,omitempty"` // Can be string or []ContentPart
 	IsError   *bool       `json:"is_error,omitempty"`
 	// thinking field (extended thinking)
-	Thinking string `json:"thinking,omitempty"`
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
 }
 
 // MessageContent represents message content that can be either a string or an array of content parts.

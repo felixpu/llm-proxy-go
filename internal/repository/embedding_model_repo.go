@@ -17,6 +17,17 @@ type EmbeddingModelRepository struct {
 	logger *zap.Logger
 }
 
+// EmbeddingModelPatch is a typed partial update payload for embedding models.
+type EmbeddingModelPatch struct {
+	Name               *string
+	Dimension          *int
+	Description        *string
+	Enabled            *bool
+	FastembedSupported *bool
+	FastembedName      *string
+	SortOrder          *int
+}
+
 // NewEmbeddingModelRepository creates a new EmbeddingModelRepository.
 func NewEmbeddingModelRepository(db *sql.DB, logger *zap.Logger) *EmbeddingModelRepository {
 	return &EmbeddingModelRepository{db: db, logger: logger}
@@ -85,7 +96,7 @@ func (r *EmbeddingModelRepository) AddModel(ctx context.Context, m *models.Embed
 }
 
 // UpdateModel dynamically updates an embedding model.
-func (r *EmbeddingModelRepository) UpdateModel(ctx context.Context, id int64, updates map[string]any) error {
+func (r *EmbeddingModelRepository) updateWithMap(ctx context.Context, id int64, updates map[string]any) error {
 	if len(updates) == 0 {
 		return nil
 	}
@@ -120,6 +131,33 @@ func (r *EmbeddingModelRepository) UpdateModel(ctx context.Context, id int64, up
 		return fmt.Errorf("failed to update embedding model: %w", err)
 	}
 	return nil
+}
+
+// UpdateModelPatch updates an embedding model using a typed patch payload.
+func (r *EmbeddingModelRepository) UpdateModelPatch(ctx context.Context, id int64, patch EmbeddingModelPatch) error {
+	updates := make(map[string]any)
+	if patch.Name != nil {
+		updates["name"] = *patch.Name
+	}
+	if patch.Dimension != nil {
+		updates["dimension"] = *patch.Dimension
+	}
+	if patch.Description != nil {
+		updates["description"] = *patch.Description
+	}
+	if patch.Enabled != nil {
+		updates["enabled"] = *patch.Enabled
+	}
+	if patch.FastembedSupported != nil {
+		updates["fastembed_supported"] = *patch.FastembedSupported
+	}
+	if patch.FastembedName != nil {
+		updates["fastembed_name"] = *patch.FastembedName
+	}
+	if patch.SortOrder != nil {
+		updates["sort_order"] = *patch.SortOrder
+	}
+	return r.updateWithMap(ctx, id, updates)
 }
 
 // DeleteModel deletes an embedding model (builtin models cannot be deleted).

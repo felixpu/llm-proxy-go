@@ -713,10 +713,14 @@ window.VuePages = window.VuePages || {};
         // 验证 condition（如果填写了，检查基本语法）
         if (ruleForm.condition.trim()) {
           var cond = ruleForm.condition.trim();
-          // 简单检查：必须包含操作符
-          if (!/[=<>!]/.test(cond)) {
+          // 允许纯函数条件（如 has_code_block(message)）或包含比较操作符
+          var hasComparator = /[=<>!]/.test(cond);
+          var hasDslFunction = /(len|contains|matches|has_code_block|count)\s*\(/i.test(
+            cond,
+          );
+          if (!hasComparator && !hasDslFunction) {
             ruleFormErrors.condition =
-              "条件表达式需要包含比较操作符（=, <, >, !=）";
+              "条件表达式格式无效";
             isValid = false;
           } else {
             ruleFormErrors.condition = "";
@@ -920,6 +924,12 @@ window.VuePages = window.VuePages || {};
         var now = new Date();
         var start = null;
         var end = now.toISOString();
+        function toRFC3339(value) {
+          if (!value) return null;
+          var d = new Date(value);
+          if (isNaN(d.getTime())) return null;
+          return d.toISOString();
+        }
         switch (analysisTimeRange.value) {
           case "1d":
             start = new Date(now.getTime() - 86400000).toISOString();
@@ -931,8 +941,17 @@ window.VuePages = window.VuePages || {};
             start = new Date(now.getTime() - 30 * 86400000).toISOString();
             break;
           case "custom":
-            start = analysisCustomStart.value || null;
-            end = analysisCustomEnd.value || end;
+            if (!analysisCustomStart.value || !analysisCustomEnd.value) {
+              return { error: "请设置完整的开始和结束时间" };
+            }
+            start = toRFC3339(analysisCustomStart.value);
+            end = toRFC3339(analysisCustomEnd.value);
+            if (!start || !end) {
+              return { error: "自定义时间格式无效，请重新选择" };
+            }
+            if (new Date(start).getTime() > new Date(end).getTime()) {
+              return { error: "开始时间不能晚于结束时间" };
+            }
             break;
           default:
             start = new Date(now.getTime() - 7 * 86400000).toISOString();
@@ -945,9 +964,13 @@ window.VuePages = window.VuePages || {};
           toastStore.error("请选择分析模型");
           return;
         }
+        var timeRange = getAnalysisTimeRange();
+        if (timeRange.error) {
+          toastStore.error(timeRange.error);
+          return;
+        }
         analysisStarting.value = true;
         analysisTask.value = null;
-        var timeRange = getAnalysisTimeRange();
         var payload = {
           model_id: parseInt(analysisModelId.value),
           start_time: timeRange.start,
@@ -1121,6 +1144,7 @@ window.VuePages = window.VuePages || {};
       }
 
       var stageOrder = [
+        "initializing",
         "collecting_logs",
         "extracting_messages",
         "loading_rules",
@@ -1129,8 +1153,15 @@ window.VuePages = window.VuePages || {};
         "parsing_result",
         "done",
       ];
+      function normalizeStage(stage) {
+        if (!stage) return "";
+        if (String(stage).indexOf("analyzing_batch_") === 0) {
+          return "calling_llm";
+        }
+        return stage;
+      }
       function isStageCompleted(currentStage, checkStage) {
-        var ci = stageOrder.indexOf(currentStage);
+        var ci = stageOrder.indexOf(normalizeStage(currentStage));
         var si = stageOrder.indexOf(checkStage);
         if (ci === -1 || si === -1) return false;
         return ci > si;
@@ -1163,13 +1194,18 @@ window.VuePages = window.VuePages || {};
       }
 
       function getActionLabel(action) {
+        var normalized = normalizeRecAction(action);
         var map = {
           modify: "修改",
           add: "添加",
           delete: "删除",
           reorder: "调整优先级",
         };
-        return map[action] || action;
+        return map[normalized] || normalized || action;
+      }
+
+      function getActionClass(action) {
+        return "action-" + normalizeRecAction(action);
       }
 
       function getPriorityLabel(priority) {
@@ -1349,16 +1385,32 @@ window.VuePages = window.VuePages || {};
         return null;
       }
 
+      function normalizeRecAction(action) {
+        var value = String(action || "")
+          .toLowerCase()
+          .trim();
+        if (
+          value === "adjust_priority" ||
+          value === "adjust-priority" ||
+          value === "update_priority" ||
+          value === "change_priority"
+        ) {
+          return "reorder";
+        }
+        return value;
+      }
+
       function isRecActionable(rec) {
-        if (rec.action === "add") return !!rec.rule_spec;
-        if (rec.action === "delete") {
-          var found = findRuleByNameFuzzy(rec.rule_name);
+        var action = normalizeRecAction(rec.action);
+        if (action === "add") return !!rec.rule_name && !!rec.rule_spec;
+        if (action === "delete") {
+          var found = findRuleByName(rec.rule_name);
           return found && found.source === "custom";
         }
         // For modify: only need rule_spec (will create new rule if not found)
-        if (rec.action === "modify") return !!rec.rule_spec;
+        if (action === "modify") return !!rec.rule_spec;
         // For reorder: need rule_spec with priority and matching rule
-        if (rec.action === "reorder") {
+        if (action === "reorder") {
           return (
             !!rec.rule_spec &&
             rec.rule_spec.priority != null &&
@@ -1369,19 +1421,21 @@ window.VuePages = window.VuePages || {};
       }
 
       function getRecDisabledReason(rec) {
-        if (rec.action === "add") {
+        var action = normalizeRecAction(rec.action);
+        if (action === "add") {
+          if (!rec.rule_name) return "建议缺少规则名称";
           return rec.rule_spec ? "" : "建议缺少规则参数";
         }
-        if (rec.action === "modify") {
+        if (action === "modify") {
           return rec.rule_spec ? "" : "建议缺少规则参数";
         }
-        if (rec.action === "delete") {
-          var found = findRuleByNameFuzzy(rec.rule_name);
-          if (!found) return "未找到匹配规则: " + (rec.rule_name || "");
+        if (action === "delete") {
+          var found = findRuleByName(rec.rule_name);
+          if (!found) return "未找到精确匹配规则: " + (rec.rule_name || "");
           if (found.source === "builtin") return "内置规则不可删除";
           return "";
         }
-        if (rec.action === "reorder") {
+        if (action === "reorder") {
           if (!rec.rule_spec || rec.rule_spec.priority == null) {
             return "建议未指定目标优先级";
           }
@@ -1398,30 +1452,93 @@ window.VuePages = window.VuePages || {};
       }
 
       function applyRuleSpec(spec) {
-        if (spec.keywords && spec.keywords.length > 0) {
-          ruleForm.keywords = spec.keywords.join(", ");
+        if (Object.prototype.hasOwnProperty.call(spec, "keywords")) {
+          ruleForm.keywords = Array.isArray(spec.keywords)
+            ? spec.keywords.join(", ")
+            : "";
         }
-        if (spec.pattern) ruleForm.pattern = spec.pattern;
-        if (spec.condition) ruleForm.condition = spec.condition;
-        if (spec.task_type) ruleForm.task_type = spec.task_type;
+        if (Object.prototype.hasOwnProperty.call(spec, "pattern")) {
+          ruleForm.pattern = spec.pattern || "";
+        }
+        if (Object.prototype.hasOwnProperty.call(spec, "condition")) {
+          ruleForm.condition = spec.condition || "";
+        }
+        if (Object.prototype.hasOwnProperty.call(spec, "task_type")) {
+          ruleForm.task_type = spec.task_type || "default";
+        }
         if (spec.priority != null) ruleForm.priority = spec.priority;
         if (spec.enabled != null) ruleForm.enabled = spec.enabled;
       }
 
-      function applyRecommendation(rec) {
-        if (!rec.rule_spec && rec.action !== "delete") {
+      async function applyRecommendation(rec) {
+        var action = normalizeRecAction(rec.action);
+        if (!rec.rule_spec && action !== "delete") {
           toastStore.error("该建议无结构化参数，请手动操作");
           return;
         }
 
+        async function ensureOK(response, fallbackMessage) {
+          if (response && response.ok) return;
+          var message = fallbackMessage || "应用失败";
+          if (response) {
+            try {
+              var errData = await response.json();
+              message = errData.detail || errData.error || message;
+            } catch (_) {}
+          }
+          throw new Error(message);
+        }
+
+        function buildRuleSpecPayload(spec) {
+          var payload = {};
+          if (Object.prototype.hasOwnProperty.call(spec, "keywords")) {
+            payload.keywords = Array.isArray(spec.keywords) ? spec.keywords : [];
+          }
+          if (Object.prototype.hasOwnProperty.call(spec, "pattern")) {
+            payload.pattern = spec.pattern || "";
+          }
+          if (Object.prototype.hasOwnProperty.call(spec, "condition")) {
+            payload.condition = spec.condition || "";
+          }
+          if (Object.prototype.hasOwnProperty.call(spec, "task_type")) {
+            payload.task_type = spec.task_type || "default";
+          }
+          if (spec.priority != null) payload.priority = spec.priority;
+          if (spec.enabled != null) payload.enabled = spec.enabled;
+          return payload;
+        }
+
         var found;
-        switch (rec.action) {
+        switch (action) {
           case "add":
-            showAnalysisModal.value = false;
-            showRuleModal(null);
-            ruleForm.name = rec.rule_name || "";
-            ruleForm.description = rec.description || "";
-            applyRuleSpec(rec.rule_spec);
+            if (!rec.rule_name) {
+              toastStore.error("建议缺少规则名称");
+              return;
+            }
+            try {
+              var addPayload = Object.assign(
+                {
+                  name: rec.rule_name,
+                  description: rec.description || "",
+                  keywords: [],
+                  pattern: "",
+                  condition: "",
+                  task_type: "default",
+                  priority: 50,
+                  enabled: true,
+                },
+                buildRuleSpecPayload(rec.rule_spec),
+              );
+              var addResp = await VueApi.request("/api/config/routing/rules", {
+                method: "POST",
+                body: JSON.stringify(addPayload),
+              });
+              await ensureOK(addResp, "创建规则失败");
+              toastStore.success("建议已应用：规则已创建");
+              await loadRules();
+            } catch (error) {
+              toastStore.error("应用失败: " + error.message);
+            }
             break;
 
           case "modify":
@@ -1437,9 +1554,24 @@ window.VuePages = window.VuePages || {};
               break;
             }
             if (found.source === "custom") {
-              showAnalysisModal.value = false;
-              showRuleModal(found.rule);
-              applyRuleSpec(rec.rule_spec);
+              try {
+                var modifyPayload = buildRuleSpecPayload(rec.rule_spec);
+                if (rec.description) {
+                  modifyPayload.description = rec.description;
+                }
+                var modifyResp = await VueApi.request(
+                  "/api/config/routing/rules/" + found.rule.id,
+                  {
+                    method: "PUT",
+                    body: JSON.stringify(modifyPayload),
+                  },
+                );
+                await ensureOK(modifyResp, "更新规则失败");
+                toastStore.success("建议已应用：规则已更新");
+                await loadRules();
+              } catch (error) {
+                toastStore.error("应用失败: " + error.message);
+              }
             } else {
               showAnalysisModal.value = false;
               showRuleModal(null);
@@ -1458,9 +1590,9 @@ window.VuePages = window.VuePages || {};
             break;
 
           case "delete":
-            found = findRuleByNameFuzzy(rec.rule_name);
+            found = findRuleByName(rec.rule_name);
             if (!found) {
-              toastStore.error("未找到规则: " + rec.rule_name);
+              toastStore.error("未找到精确匹配规则: " + rec.rule_name);
               return;
             }
             if (found.source === "builtin") {
@@ -1483,20 +1615,20 @@ window.VuePages = window.VuePages || {};
                 toastStore.error("建议未指定优先级");
                 return;
               }
-              showAnalysisModal.value = false;
-              VueApi.request("/api/config/routing/rules/" + found.rule.id, {
-                method: "PUT",
-                body: JSON.stringify(
-                  Object.assign({}, found.rule, { priority: newPriority }),
-                ),
-              })
-                .then(function () {
-                  toastStore.success("优先级已更新");
-                  return loadRules();
-                })
-                .catch(function (error) {
-                  toastStore.error(error.message);
-                });
+              try {
+                var reorderResp = await VueApi.request(
+                  "/api/config/routing/rules/" + found.rule.id,
+                  {
+                    method: "PUT",
+                    body: JSON.stringify({ priority: newPriority }),
+                  },
+                );
+                await ensureOK(reorderResp, "更新优先级失败");
+                toastStore.success("优先级已更新");
+                await loadRules();
+              } catch (error) {
+                toastStore.error(error.message);
+              }
             } else {
               showAnalysisModal.value = false;
               showRuleModal(null);
@@ -1511,6 +1643,9 @@ window.VuePages = window.VuePages || {};
               ruleForm.enabled = found.rule.enabled !== false;
               toastStore.info("将创建自定义规则覆盖内置规则");
             }
+            break;
+          default:
+            toastStore.error("暂不支持的建议动作: " + (rec.action || "未知"));
             break;
         }
       }
@@ -1646,6 +1781,7 @@ window.VuePages = window.VuePages || {};
         getSeverityLabel: getSeverityLabel,
         getIssueTypeLabel: getIssueTypeLabel,
         getActionLabel: getActionLabel,
+        getActionClass: getActionClass,
         getPriorityLabel: getPriorityLabel,
         getRecDisabledReason: getRecDisabledReason,
         groupedByRule: groupedByRule,
@@ -2335,6 +2471,10 @@ window.VuePages = window.VuePages || {};
                                 <span v-show="currentReport && currentReport.analyzed_logs < currentReport.total_logs"\
                                       style="color:var(--text-secondary);font-size:0.9em"> (采样)</span>\
                             </span>\
+                            <span v-show="currentReport && currentReport.total_logs"\
+                                  :title="\'全量口径: \' + (currentReport ? currentReport.full_inaccurate_count : 0) + \'/\' + (currentReport ? currentReport.total_logs : 0) + \'；样本口径: \' + (currentReport ? currentReport.sample_inaccurate_count : 0) + \'/\' + (currentReport ? currentReport.analyzed_logs : 0)">\
+                                不准确率(全量/样本): {{ currentReport ? ((((currentReport.full_inaccurate_rate || 0) * 100).toFixed(1)) + \'% / \' + (((currentReport.sample_inaccurate_rate || 0) * 100).toFixed(1)) + \'%\') : \'-\' }}\
+                            </span>\
                         </div>\
                     </div>\
 \
@@ -2348,9 +2488,12 @@ window.VuePages = window.VuePages || {};
                             <div class="analysis-summary-value">{{ currentReport && currentReport.summary ? ((currentReport.summary.llm_fallback_rate * 100).toFixed(1) + \'%\') : \'-\' }}</div>\
                         </div>\
                         <div class="analysis-summary-card">\
-                            <div class="analysis-summary-label">不准确率</div>\
+                            <div class="analysis-summary-label">样本不准确率</div>\
                             <div class="analysis-summary-value">{{ currentReport && currentReport.summary ? ((currentReport.summary.inaccurate_rate * 100).toFixed(1) + \'%\') : \'-\' }}</div>\
                         </div>\
+                    </div>\
+                    <div class="analysis-section" v-show="currentReport && currentReport.analyzed_logs < currentReport.total_logs" v-cloak>\
+                        <div class="analysis-warning-item">口径提示：上方统计卡片基于分析样本；全量口径请参考“全量/样本不准确率”。</div>\
                     </div>\
 \
                     <div class="analysis-section" v-show="currentReport && currentReport.warnings && currentReport.warnings.length > 0" v-cloak>\
@@ -2380,7 +2523,7 @@ window.VuePages = window.VuePages || {};
                             </div>\
                             <div v-for="(rec, idx) in group.data.recommendations" :key="\'r-\' + idx" class="analysis-rec-card">\
                                 <div class="analysis-rec-header">\
-                                    <span class="analysis-rec-action" :class="\'action-\' + rec.action">{{ getActionLabel(rec.action) }}</span>\
+                                    <span class="analysis-rec-action" :class="getActionClass(rec.action)">{{ getActionLabel(rec.action) }}</span>\
                                     <span v-show="rec.priority" class="analysis-priority-badge" :class="\'priority-\' + rec.priority">{{ getPriorityLabel(rec.priority) }}</span>\
                                 </div>\
                                 <div class="analysis-rec-desc">{{ rec.description }}</div>\

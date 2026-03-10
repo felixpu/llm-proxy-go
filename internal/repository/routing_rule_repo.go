@@ -18,6 +18,19 @@ type RoutingRuleRepo struct {
 	logger *zap.Logger
 }
 
+// RoutingRulePatch is a typed partial update for routing rules.
+type RoutingRulePatch struct {
+	Name        *string
+	Description *string
+	Keywords    *[]string
+	Pattern     *string
+	Condition   *string
+	TaskType    *string
+	Priority    *int
+	Enabled     *bool
+	IsBuiltin   *bool
+}
+
 // NewRoutingRuleRepository creates a new RoutingRuleRepo.
 func NewRoutingRuleRepository(db *sql.DB, logger *zap.Logger) *RoutingRuleRepo {
 	return &RoutingRuleRepo{db: db, logger: logger}
@@ -96,7 +109,7 @@ func (r *RoutingRuleRepo) AddRule(ctx context.Context, rule *models.RoutingRule)
 }
 
 // UpdateRule dynamically updates a routing rule.
-func (r *RoutingRuleRepo) UpdateRule(ctx context.Context, id int64, updates map[string]any) error {
+func (r *RoutingRuleRepo) updateWithMap(ctx context.Context, id int64, updates map[string]any) error {
 	if len(updates) == 0 {
 		return nil
 	}
@@ -135,6 +148,39 @@ func (r *RoutingRuleRepo) UpdateRule(ctx context.Context, id int64, updates map[
 		return fmt.Errorf("failed to update routing rule: %w", err)
 	}
 	return nil
+}
+
+// UpdateRulePatch updates a routing rule using a typed patch.
+func (r *RoutingRuleRepo) UpdateRulePatch(ctx context.Context, id int64, patch RoutingRulePatch) error {
+	updates := make(map[string]any)
+	if patch.Name != nil {
+		updates["name"] = *patch.Name
+	}
+	if patch.Description != nil {
+		updates["description"] = *patch.Description
+	}
+	if patch.Keywords != nil {
+		updates["keywords"] = *patch.Keywords
+	}
+	if patch.Pattern != nil {
+		updates["pattern"] = *patch.Pattern
+	}
+	if patch.Condition != nil {
+		updates["condition"] = *patch.Condition
+	}
+	if patch.TaskType != nil {
+		updates["task_type"] = *patch.TaskType
+	}
+	if patch.Priority != nil {
+		updates["priority"] = *patch.Priority
+	}
+	if patch.Enabled != nil {
+		updates["enabled"] = *patch.Enabled
+	}
+	if patch.IsBuiltin != nil {
+		updates["is_builtin"] = *patch.IsBuiltin
+	}
+	return r.updateWithMap(ctx, id, updates)
 }
 
 // DeleteRule deletes a routing rule by ID.

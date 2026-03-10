@@ -42,8 +42,8 @@ func TestEmbeddingService_GetEmbedding_Disabled(t *testing.T) {
 	// Default config has semantic_cache_enabled = true, but let's ensure
 	// the service handles the case where it's disabled
 	// First, disable semantic cache
-	err := configRepo.UpdateConfig(ctx, map[string]any{
-		"semantic_cache_enabled": false,
+	err := configRepo.UpdateConfigPatch(ctx, repository.RoutingConfigPatch{
+		SemanticCacheEnabled: ptrBool(false),
 	})
 	require.NoError(t, err)
 
@@ -61,8 +61,8 @@ func TestEmbeddingService_GetEmbedding_NoModelConfigured(t *testing.T) {
 	modelRepo := repository.NewEmbeddingModelRepository(db, logger)
 
 	// Enable semantic cache but don't configure embedding model
-	err := configRepo.UpdateConfig(ctx, map[string]any{
-		"semantic_cache_enabled": true,
+	err := configRepo.UpdateConfigPatch(ctx, repository.RoutingConfigPatch{
+		SemanticCacheEnabled: ptrBool(true),
 	})
 	require.NoError(t, err)
 
@@ -194,4 +194,8 @@ func TestEmbeddingService_CallEmbeddingAPI_Unreachable(t *testing.T) {
 	embedding, err := es.CallEmbeddingAPI(ctx, "http://127.0.0.1:1", "test-key", "test-model", "hello world")
 	assert.Error(t, err)
 	assert.Nil(t, embedding)
+}
+
+func ptrBool(v bool) *bool {
+	return &v
 }

@@ -47,7 +47,7 @@ func TestProxyService_ProxyRequest_NoHealthyEndpoints(t *testing.T) {
 	}
 
 	// Nil selection (no endpoint selected)
-	resp, meta, err := ps.ProxyRequest(context.Background(), req, nil, nil, []*models.Endpoint{})
+	resp, meta, err := ps.ProxyRequest(context.Background(), req, nil, "", nil, []*models.Endpoint{})
 	assert.Nil(t, resp)
 	assert.Nil(t, meta)
 	assert.Error(t, err)
@@ -122,7 +122,7 @@ func TestProxyService_ProxyRequest_Success(t *testing.T) {
 		Model:    ep.Model,
 		TaskType: ep.Model.Role,
 	}
-	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, selection, []*models.Endpoint{ep})
+	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, "", selection, []*models.Endpoint{ep})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.NotNil(t, meta)
@@ -169,7 +169,7 @@ func TestProxyService_ProxyRequest_UpstreamError(t *testing.T) {
 		Model:    ep.Model,
 		TaskType: ep.Model.Role,
 	}
-	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, selection, []*models.Endpoint{ep})
+	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, "", selection, []*models.Endpoint{ep})
 	assert.Nil(t, resp)
 	assert.Nil(t, meta)
 	assert.Error(t, err)
@@ -208,7 +208,7 @@ func TestProxyService_ProxyRequest_ServerError(t *testing.T) {
 		Model:    ep.Model,
 		TaskType: ep.Model.Role,
 	}
-	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, selection, []*models.Endpoint{ep})
+	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, "", selection, []*models.Endpoint{ep})
 	assert.Nil(t, resp)
 	assert.Nil(t, meta)
 	assert.Error(t, err)
@@ -235,7 +235,7 @@ func TestProxyService_ProxyStreamRequest_NoHealthyEndpoints(t *testing.T) {
 		},
 	}
 
-	ch, meta, err := ps.ProxyStreamRequest(context.Background(), req, nil, nil, []*models.Endpoint{})
+	ch, meta, err := ps.ProxyStreamRequest(context.Background(), req, nil, "", nil, []*models.Endpoint{})
 	assert.Nil(t, ch)
 	assert.Nil(t, meta)
 	assert.Error(t, err)
@@ -269,7 +269,7 @@ func TestProxyService_ProxyStreamRequest_UpstreamError(t *testing.T) {
 		Model:    ep.Model,
 		TaskType: ep.Model.Role,
 	}
-	ch, meta, err := ps.ProxyStreamRequest(context.Background(), req, http.Header{}, selection, []*models.Endpoint{ep})
+	ch, meta, err := ps.ProxyStreamRequest(context.Background(), req, http.Header{}, "", selection, []*models.Endpoint{ep})
 	assert.Nil(t, ch)
 	assert.Nil(t, meta)
 	assert.Error(t, err)
@@ -349,7 +349,7 @@ func TestProxyService_StreamModelNameMapping(t *testing.T) {
 		TaskType: ep.Model.Role,
 	}
 
-	ch, meta, err := ps.ProxyStreamRequest(context.Background(), req, http.Header{}, selection, []*models.Endpoint{ep})
+	ch, meta, err := ps.ProxyStreamRequest(context.Background(), req, http.Header{}, "", selection, []*models.Endpoint{ep})
 	require.NoError(t, err)
 	require.NotNil(t, ch)
 	require.NotNil(t, meta)
@@ -416,6 +416,11 @@ func TestCopyAnthropicHeaders(t *testing.T) {
 		"Anthropic-Version": []string{"2023-06-01"}, // Should NOT be copied
 		"Content-Type":      []string{"application/json"},
 		"Anthropic-Custom":  []string{"custom-value"},
+		"X-Client-App":      []string{"claude-code"},
+		"X-Client-Type":     []string{"cli"},
+		"X-Client-Locale":   []string{"zh-CN"},
+		"X-Claude-Trace":    []string{"trace-123"},
+		"X-Stainless-Lang":  []string{"javascript"},
 	}
 	dst := http.Header{}
 
@@ -423,8 +428,131 @@ func TestCopyAnthropicHeaders(t *testing.T) {
 
 	assert.Equal(t, "beta-feature", dst.Get("Anthropic-Beta"))
 	assert.Equal(t, "custom-value", dst.Get("Anthropic-Custom"))
+	assert.Equal(t, "claude-code", dst.Get("X-Client-App"))
+	assert.Equal(t, "cli", dst.Get("X-Client-Type"))
+	assert.Equal(t, "zh-CN", dst.Get("X-Client-Locale"))
+	assert.Equal(t, "trace-123", dst.Get("X-Claude-Trace"))
+	assert.Equal(t, "javascript", dst.Get("X-Stainless-Lang"))
 	assert.Empty(t, dst.Get("Anthropic-Version")) // Should not be copied
 	assert.Empty(t, dst.Get("Content-Type"))      // Should not be copied
+}
+
+func TestBuildUpstreamURL(t *testing.T) {
+	assert.Equal(t, "https://example.com/v1/messages", buildUpstreamURL("https://example.com", "/v1/messages", ""))
+	assert.Equal(t, "https://example.com/v1/messages?beta=true", buildUpstreamURL("https://example.com/", "/v1/messages", "beta=true"))
+}
+
+func TestProxyService_ProxyRequest_ForwardsOriginalQueryAndClientHeaders(t *testing.T) {
+	var gotQuery string
+	var gotClientApp string
+	var gotClientType string
+	var gotClientLocale string
+	var gotStainlessLang string
+	var gotUserAgent string
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		gotClientApp = r.Header.Get("X-Client-App")
+		gotClientType = r.Header.Get("X-Client-Type")
+		gotClientLocale = r.Header.Get("X-Client-Locale")
+		gotStainlessLang = r.Header.Get("X-Stainless-Lang")
+		gotUserAgent = r.Header.Get("User-Agent")
+
+		resp := models.AnthropicResponse{
+			ID:         "msg_123",
+			Type:       "message",
+			Role:       "assistant",
+			Model:      "claude-3-sonnet",
+			Content:    []models.ContentPart{{Type: "text", Text: "OK"}},
+			StopReason: "end_turn",
+			Usage:      models.Usage{InputTokens: 5, OutputTokens: 3},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer upstream.Close()
+
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{Enabled: true}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ps := NewProxyService(hc, lb, nil, logger)
+
+	ep := createProxyTestEndpoint(upstream.URL)
+	registerHealthyEndpoints(hc, []*models.Endpoint{ep})
+
+	req := &models.AnthropicRequest{
+		Model:     "claude-3-sonnet",
+		MaxTokens: 100,
+		Messages:  []models.Message{{Role: "user", Content: models.MessageContent{Text: "Hello"}}},
+	}
+	headers := http.Header{
+		"X-Client-App":     []string{"claude-code"},
+		"X-Client-Type":    []string{"cli"},
+		"X-Client-Locale":  []string{"zh-CN"},
+		"X-Stainless-Lang": []string{"javascript"},
+		"User-Agent":       []string{"Claude-Code/1.0"},
+	}
+	selection := &EndpointSelectionResult{
+		Endpoint: ep,
+		Model:    ep.Model,
+		TaskType: ep.Model.Role,
+	}
+
+	resp, meta, err := ps.ProxyRequest(context.Background(), req, headers, "beta=true", selection, []*models.Endpoint{ep})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, meta)
+
+	assert.Equal(t, "beta=true", gotQuery)
+	assert.Equal(t, "claude-code", gotClientApp)
+	assert.Equal(t, "cli", gotClientType)
+	assert.Equal(t, "zh-CN", gotClientLocale)
+	assert.Equal(t, "javascript", gotStainlessLang)
+	assert.Equal(t, "Claude-Code/1.0", gotUserAgent)
+}
+
+func TestProxyService_ConnectStreamEndpoint_ForwardsOriginalQueryAndClientHeaders(t *testing.T) {
+	var gotQuery string
+	var gotClientApp string
+	var gotClientType string
+	var gotAccept string
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		gotClientApp = r.Header.Get("X-Client-App")
+		gotClientType = r.Header.Get("X-Client-Type")
+		gotAccept = r.Header.Get("Accept")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{Enabled: true}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ps := NewProxyService(hc, lb, nil, logger)
+
+	ep := createProxyTestEndpoint(upstream.URL)
+	req := &models.AnthropicRequest{
+		Model:     "claude-3-sonnet",
+		MaxTokens: 100,
+		Stream:    true,
+		Messages:  []models.Message{{Role: "user", Content: models.MessageContent{Text: "Hello"}}},
+	}
+	headers := http.Header{
+		"X-Client-App":  []string{"claude-code"},
+		"X-Client-Type": []string{"cli"},
+	}
+
+	resp, err := ps.connectStreamEndpoint(context.Background(), req, headers, "beta=true", ep, time.Now())
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	defer resp.Body.Close()
+
+	assert.Equal(t, "beta=true", gotQuery)
+	assert.Equal(t, "claude-code", gotClientApp)
+	assert.Equal(t, "cli", gotClientType)
+	assert.Equal(t, "text/event-stream", gotAccept)
 }
 
 func TestMsSince(t *testing.T) {
@@ -570,7 +698,7 @@ func TestProxyService_ModelNameMapping(t *testing.T) {
 		TaskType: ep.Model.Role,
 	}
 
-	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, selection, []*models.Endpoint{ep})
+	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, "", selection, []*models.Endpoint{ep})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.NotNil(t, meta)
@@ -725,7 +853,7 @@ func TestProxyService_ProxyRequest_RetryOn403(t *testing.T) {
 		TaskType: model.Role,
 	}
 
-	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, selection, []*models.Endpoint{ep1, ep2})
+	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, "", selection, []*models.Endpoint{ep1, ep2})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.NotNil(t, meta)
@@ -809,7 +937,7 @@ func TestProxyService_ProxyStreamRequest_RetryOn403(t *testing.T) {
 		TaskType: model.Role,
 	}
 
-	ch, meta, err := ps.ProxyStreamRequest(context.Background(), req, http.Header{}, selection, []*models.Endpoint{ep1, ep2})
+	ch, meta, err := ps.ProxyStreamRequest(context.Background(), req, http.Header{}, "", selection, []*models.Endpoint{ep1, ep2})
 	require.NoError(t, err)
 	require.NotNil(t, ch)
 	require.NotNil(t, meta)
@@ -896,7 +1024,7 @@ func TestProxyService_ProxyRequest_NoRetryOn400(t *testing.T) {
 		TaskType: model.Role,
 	}
 
-	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, selection, []*models.Endpoint{ep1, ep2})
+	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, "", selection, []*models.Endpoint{ep1, ep2})
 	assert.Nil(t, resp)
 	assert.Nil(t, meta)
 	assert.Error(t, err)
@@ -1044,7 +1172,7 @@ func TestProxyService_StreamContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	selection := &EndpointSelectionResult{Endpoint: ep, Model: ep.Model, TaskType: ep.Model.Role}
 
-	ch, _, err := ps.ProxyStreamRequest(ctx, req, http.Header{}, selection, []*models.Endpoint{ep})
+	ch, _, err := ps.ProxyStreamRequest(ctx, req, http.Header{}, "", selection, []*models.Endpoint{ep})
 	require.NoError(t, err)
 
 	// Read first data chunk to ensure stream started
@@ -1106,11 +1234,11 @@ func TestProxyService_RetryUsesPerAttemptTiming(t *testing.T) {
 	}
 	ep1 := &models.Endpoint{
 		Provider: &models.Provider{ID: 1, Name: "p1", BaseURL: upstream.URL, APIKey: "k1", Enabled: true},
-		Model: model, Status: models.EndpointHealthy,
+		Model:    model, Status: models.EndpointHealthy,
 	}
 	ep2 := &models.Endpoint{
 		Provider: &models.Provider{ID: 2, Name: "p2", BaseURL: upstream.URL, APIKey: "k2", Enabled: true},
-		Model: model, Status: models.EndpointHealthy,
+		Model:    model, Status: models.EndpointHealthy,
 	}
 	registerHealthyEndpoints(hc, []*models.Endpoint{ep1, ep2})
 
@@ -1120,7 +1248,7 @@ func TestProxyService_RetryUsesPerAttemptTiming(t *testing.T) {
 	}
 	selection := &EndpointSelectionResult{Endpoint: ep1, Model: model, TaskType: model.Role}
 
-	_, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, selection, []*models.Endpoint{ep1, ep2})
+	_, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, "", selection, []*models.Endpoint{ep1, ep2})
 	require.NoError(t, err)
 
 	// The successful retry's latency should be less than the first attempt's 50ms sleep

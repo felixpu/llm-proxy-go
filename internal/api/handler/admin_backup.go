@@ -29,17 +29,18 @@ func NewBackupHandler(db *sql.DB, endpointStore *service.EndpointStore) *BackupH
 
 // BackupData is the top-level export envelope.
 type BackupData struct {
-	Version         int                    `json:"version"`
-	ExportedAt      string                 `json:"exported_at"`
-	Models          []backupModel          `json:"models"`
-	Providers       []backupProvider       `json:"providers"`
-	Users           []backupUser           `json:"users"`
-	APIKeys         []backupAPIKey         `json:"api_keys"`
-	RoutingModels   []backupRoutingModel   `json:"routing_models"`
-	RoutingRules    []backupRoutingRule    `json:"routing_rules"`
-	RoutingLLMConfig map[string]any        `json:"routing_llm_config"`
-	EmbeddingModels []backupEmbeddingModel `json:"embedding_models"`
-	SystemConfig    backupSystemConfig     `json:"system_config"`
+	Version          int                    `json:"version"`
+	ExportedAt       string                 `json:"exported_at"`
+	Models           []backupModel          `json:"models"`
+	ModelAliases     []backupModelAlias     `json:"model_aliases"`
+	Providers        []backupProvider       `json:"providers"`
+	Users            []backupUser           `json:"users"`
+	APIKeys          []backupAPIKey         `json:"api_keys"`
+	RoutingModels    []backupRoutingModel   `json:"routing_models"`
+	RoutingRules     []backupRoutingRule    `json:"routing_rules"`
+	RoutingLLMConfig map[string]any         `json:"routing_llm_config"`
+	EmbeddingModels  []backupEmbeddingModel `json:"embedding_models"`
+	SystemConfig     backupSystemConfig     `json:"system_config"`
 }
 
 type backupModel struct {
@@ -51,6 +52,12 @@ type backupModel struct {
 	SupportsThinking  bool    `json:"supports_thinking"`
 	Enabled           bool    `json:"enabled"`
 	Weight            int     `json:"weight"`
+}
+
+type backupModelAlias struct {
+	AliasName       string `json:"alias_name"`
+	TargetModelName string `json:"target_model_name"`
+	Enabled         bool   `json:"enabled"`
 }
 
 type backupProvider struct {
@@ -132,6 +139,10 @@ func (h *BackupHandler) Export(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("export models: %v", err)})
 		return
 	}
+	if data.ModelAliases, err = h.exportModelAliases(ctx); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("export model_aliases: %v", err)})
+		return
+	}
 	if data.Providers, err = h.exportProviders(ctx); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("export providers: %v", err)})
 		return
@@ -190,7 +201,36 @@ func (h *BackupHandler) exportModels(ctx context.Context) ([]backupModel, error)
 	return result, rows.Err()
 }
 
+func (h *BackupHandler) exportModelAliases(ctx context.Context) ([]backupModelAlias, error) {
+	rows, err := h.db.QueryContext(ctx, `
+		SELECT ma.alias_name, m.name, ma.enabled
+		FROM model_aliases ma
+		JOIN models m ON m.id = ma.target_model_id
+		ORDER BY ma.alias_name COLLATE NOCASE ASC, ma.id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []backupModelAlias
+	for rows.Next() {
+		var alias backupModelAlias
+		var enabled int
+		if err := rows.Scan(&alias.AliasName, &alias.TargetModelName, &enabled); err != nil {
+			return nil, err
+		}
+		alias.Enabled = enabled == 1
+		result = append(result, alias)
+	}
+	return result, rows.Err()
+}
+
 func (h *BackupHandler) exportProviders(ctx context.Context) ([]backupProvider, error) {
+	providerModels, err := h.exportProviderModelNames(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := h.db.QueryContext(ctx, `SELECT id, name, base_url, api_key, weight, max_concurrent, enabled, COALESCE(description,'') FROM providers`)
 	if err != nil {
 		return nil, err
@@ -205,21 +245,31 @@ func (h *BackupHandler) exportProviders(ctx context.Context) ([]backupProvider, 
 			return nil, err
 		}
 		p.Enabled = en == 1
-		// Fetch associated model names
-		mrows, err := h.db.QueryContext(ctx, `SELECT m.name FROM provider_models pm JOIN models m ON pm.model_id = m.id WHERE pm.provider_id = ?`, id)
-		if err != nil {
+		p.ModelNames = providerModels[id]
+		result = append(result, p)
+	}
+	return result, rows.Err()
+}
+
+func (h *BackupHandler) exportProviderModelNames(ctx context.Context) (map[int64][]string, error) {
+	rows, err := h.db.QueryContext(ctx, `
+		SELECT pm.provider_id, m.name
+		FROM provider_models pm
+		JOIN models m ON pm.model_id = m.id
+		ORDER BY pm.provider_id ASC, m.name ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[int64][]string)
+	for rows.Next() {
+		var providerID int64
+		var modelName string
+		if err := rows.Scan(&providerID, &modelName); err != nil {
 			return nil, err
 		}
-		for mrows.Next() {
-			var mn string
-			if err := mrows.Scan(&mn); err != nil {
-				mrows.Close()
-				return nil, err
-			}
-			p.ModelNames = append(p.ModelNames, mn)
-		}
-		mrows.Close()
-		result = append(result, p)
+		result[providerID] = append(result[providerID], modelName)
 	}
 	return result, rows.Err()
 }
@@ -391,7 +441,7 @@ func (h *BackupHandler) Import(c *gin.Context) {
 
 	// 1. Clear dependent tables first (foreign key order)
 	clearTables := []string{
-		"provider_models", "api_keys", "routing_models",
+		"provider_models", "api_keys", "routing_models", "model_aliases",
 		"routing_rules", "embedding_models", "models", "providers", "users",
 	}
 	for _, t := range clearTables {
@@ -415,14 +465,20 @@ func (h *BackupHandler) Import(c *gin.Context) {
 		modelIDs[m.Name] = id
 	}
 
-	// 3. Import providers → build name→ID map, then insert provider_models
+	// 3. Import model aliases (resolve target_model_name -> model_id)
+	if err := h.importModelAliases(ctx, tx, data.ModelAliases, modelIDs); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 4. Import providers → build name→ID map, then insert provider_models
 	providerIDs := make(map[string]int64)
 	if err := h.importProviders(ctx, tx, data.Providers, modelIDs, providerIDs); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 4. Import users → build username→ID map
+	// 5. Import users → build username→ID map
 	userIDs := make(map[string]int64)
 	for _, u := range data.Users {
 		res, err := tx.ExecContext(ctx,
@@ -436,7 +492,7 @@ func (h *BackupHandler) Import(c *gin.Context) {
 		userIDs[u.Username] = id
 	}
 
-	// 5. Import API keys (resolve username → user_id)
+	// 6. Import API keys (resolve username → user_id)
 	for _, k := range data.APIKeys {
 		uid, ok := userIDs[k.Username]
 		if !ok {
@@ -455,7 +511,7 @@ func (h *BackupHandler) Import(c *gin.Context) {
 		}
 	}
 
-	// 6. Import routing models (resolve provider_name → provider_id)
+	// 7. Import routing models (resolve provider_name → provider_id)
 	for _, rm := range data.RoutingModels {
 		pid, ok := providerIDs[rm.ProviderName]
 		if !ok {
@@ -470,7 +526,7 @@ func (h *BackupHandler) Import(c *gin.Context) {
 		}
 	}
 
-	// 7. Import routing rules
+	// 8. Import routing rules
 	for _, r := range data.RoutingRules {
 		kw, _ := json.Marshal(r.Keywords)
 		if _, err := tx.ExecContext(ctx,
@@ -481,7 +537,7 @@ func (h *BackupHandler) Import(c *gin.Context) {
 		}
 	}
 
-	// 8. Import embedding models
+	// 9. Import embedding models
 	for _, m := range data.EmbeddingModels {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO embedding_models (name, dimension, description, fastembed_supported, fastembed_name, is_builtin, enabled, sort_order) VALUES (?,?,?,?,?,?,?,?)`,
@@ -491,7 +547,7 @@ func (h *BackupHandler) Import(c *gin.Context) {
 		}
 	}
 
-	// 9. Update singleton config tables
+	// 10. Update singleton config tables
 	if err := h.importSingletonTable(ctx, tx, "routing_llm_config", data.RoutingLLMConfig); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("update routing_llm_config: %v", err)})
 		return
@@ -521,7 +577,9 @@ func (h *BackupHandler) Import(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "配置导入成功"})
 
 	// Refresh in-memory endpoint store so dashboard reflects imported data immediately.
-	go h.endpointStore.ReloadAndNotify(context.Background())
+	if h.endpointStore != nil {
+		go h.endpointStore.ReloadAndNotify(context.Background())
+	}
 }
 
 // importProviders inserts providers and their provider_models associations.
@@ -546,6 +604,21 @@ func (h *BackupHandler) importProviders(ctx context.Context, tx *sql.Tx, provide
 				`INSERT INTO provider_models (provider_id, model_id) VALUES (?,?)`, pid, mid); err != nil {
 				return fmt.Errorf("insert provider_model %s/%s: %v", p.Name, mn, err)
 			}
+		}
+	}
+	return nil
+}
+
+func (h *BackupHandler) importModelAliases(ctx context.Context, tx *sql.Tx, aliases []backupModelAlias, modelIDs map[string]int64) error {
+	for _, alias := range aliases {
+		targetModelID, ok := modelIDs[alias.TargetModelName]
+		if !ok {
+			return fmt.Errorf("model_alias %s references unknown target model %s", alias.AliasName, alias.TargetModelName)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO model_aliases (alias_name, target_model_id, enabled) VALUES (?, ?, ?)`,
+			alias.AliasName, targetModelID, boolInt(alias.Enabled)); err != nil {
+			return fmt.Errorf("insert model_alias %s: %v", alias.AliasName, err)
 		}
 	}
 	return nil

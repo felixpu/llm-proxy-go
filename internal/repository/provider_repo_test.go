@@ -54,9 +54,9 @@ func TestProviderRepository_FindByModelID(t *testing.T) {
 		modelID   int64
 		wantCount int
 	}{
-		{"model with 2 providers", 1, 2}, // claude-3-haiku linked to 2 providers
-		{"model with 2 providers", 2, 2}, // claude-sonnet-4 linked to 2 providers
-		{"model with 1 provider", 3, 1},  // claude-opus-4 linked to 1 provider
+		{"model with 2 providers", 1, 2},  // claude-3-haiku linked to 2 providers
+		{"model with 2 providers", 2, 2},  // claude-sonnet-4 linked to 2 providers
+		{"model with 1 provider", 3, 1},   // claude-opus-4 linked to 1 provider
 		{"model with no providers", 4, 0}, // disabled-model not linked
 	}
 
@@ -213,7 +213,7 @@ func TestProviderRepository_Update(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := repo.Update(ctx, tt.id, tt.updates, tt.modelIDs)
+			err := repo.UpdatePatch(ctx, tt.id, providerPatchFromMap(tt.updates), tt.modelIDs)
 			require.NoError(t, err)
 
 			provider, err := repo.FindByID(ctx, tt.id)
@@ -227,6 +227,62 @@ func TestProviderRepository_Update(t *testing.T) {
 			}
 		})
 	}
+}
+
+func providerPatchFromMap(updates map[string]any) ProviderPatch {
+	patch := ProviderPatch{}
+	if v, ok := updates["name"].(string); ok {
+		patch.Name = &v
+	}
+	if v, ok := updates["base_url"].(string); ok {
+		patch.BaseURL = &v
+	}
+	if v, ok := updates["api_key"].(string); ok {
+		patch.APIKey = &v
+	}
+	if v, ok := updates["weight"].(int); ok {
+		patch.Weight = &v
+	}
+	if v, ok := updates["max_concurrent"].(int); ok {
+		patch.MaxConcurrent = &v
+	}
+	if v, ok := updates["enabled"].(bool); ok {
+		patch.Enabled = &v
+	}
+	if v, ok := updates["description"].(string); ok {
+		patch.Description = &v
+	}
+	if v, ok := updates["custom_headers"].(map[string]string); ok {
+		patch.CustomHeaders = &v
+	}
+	if v, ok := updates["api_type"].(string); ok {
+		patch.APIType = &v
+	}
+	return patch
+}
+
+func TestProviderRepository_UpdatePatch(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	testutil.SeedTestData(t, db)
+	repo := NewProviderRepository(db)
+	ctx := context.Background()
+
+	name := "typed-provider"
+	enabled := false
+	weight := 7
+	patch := ProviderPatch{
+		Name:    &name,
+		Enabled: &enabled,
+		Weight:  &weight,
+	}
+
+	require.NoError(t, repo.UpdatePatch(ctx, 1, patch, nil))
+
+	provider, err := repo.FindByID(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, "typed-provider", provider.Name)
+	assert.False(t, provider.Enabled)
+	assert.Equal(t, 7, provider.Weight)
 }
 
 func TestProviderRepository_Delete(t *testing.T) {

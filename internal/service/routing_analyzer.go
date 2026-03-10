@@ -13,6 +13,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	defaultAnalysisTaskTTL        = 24 * time.Hour
+	defaultAnalysisTaskMaxEntries = 200
+)
+
 // RoutingModelRepositoryInterface defines the interface for routing model repository operations.
 type RoutingModelRepositoryInterface interface {
 	GetModelWithProviderAny(ctx context.Context, modelID int64) (*models.RoutingModelWithProvider, error)
@@ -20,7 +25,7 @@ type RoutingModelRepositoryInterface interface {
 
 // RoutingAnalyzer performs LLM-based routing rule analysis.
 type RoutingAnalyzer struct {
-	logRepo    repository.RequestLogRepository
+	logRepo    repository.RequestLogAnalyticsRepository
 	ruleRepo   repository.RoutingRuleRepository
 	modelRepo  RoutingModelRepositoryInterface
 	reportRepo *repository.AnalysisReportRepository
@@ -28,28 +33,33 @@ type RoutingAnalyzer struct {
 	logger     *zap.Logger
 	client     *http.Client
 
-	mu       sync.RWMutex
-	tasks    map[string]*models.AnalysisTask
+	mu        sync.RWMutex
+	tasks     map[string]*models.AnalysisTask
 	idCounter int64 // Atomic counter for unique task IDs
+
+	taskTTL        time.Duration
+	taskMaxEntries int
 }
 
 // NewRoutingAnalyzer creates a new RoutingAnalyzer.
 func NewRoutingAnalyzer(
-	logRepo repository.RequestLogRepository,
+	logRepo repository.RequestLogAnalyticsRepository,
 	ruleRepo repository.RoutingRuleRepository,
 	modelRepo *repository.RoutingModelRepository,
 	reportRepo *repository.AnalysisReportRepository,
 	logger *zap.Logger,
 ) *RoutingAnalyzer {
 	return &RoutingAnalyzer{
-		logRepo:    logRepo,
-		ruleRepo:   ruleRepo,
-		modelRepo:  modelRepo,
-		reportRepo: reportRepo,
-		extractor:  &MessageExtractor{},
-		logger:     logger,
-		client:     &http.Client{Timeout: 120 * time.Second},
-		tasks:      make(map[string]*models.AnalysisTask),
+		logRepo:        logRepo,
+		ruleRepo:       ruleRepo,
+		modelRepo:      modelRepo,
+		reportRepo:     reportRepo,
+		extractor:      &MessageExtractor{},
+		logger:         logger,
+		client:         &http.Client{Timeout: 120 * time.Second},
+		tasks:          make(map[string]*models.AnalysisTask),
+		taskTTL:        defaultAnalysisTaskTTL,
+		taskMaxEntries: defaultAnalysisTaskMaxEntries,
 	}
 }
 
@@ -72,6 +82,7 @@ func (a *RoutingAnalyzer) StartAnalysis(ctx context.Context, req *models.Analysi
 	// Use single write lock for check-and-insert to prevent TOCTOU race
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	a.cleanupTasksLocked(time.Now())
 
 	// Limit concurrency: only 1 analysis at a time
 	for _, t := range a.tasks {
@@ -135,6 +146,11 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 		a.failTask(taskID, "no logs found in the specified time range")
 		return
 	}
+	fullInaccurateCount, err := a.logRepo.CountInaccurateForAnalysis(ctx, req.StartTime, req.EndTime)
+	if err != nil {
+		a.failTask(taskID, fmt.Sprintf("count inaccurate logs: %v", err))
+		return
+	}
 
 	// Step 2: Collect logs with intelligent limit based on total count
 	config := DefaultAnalysisConfig()
@@ -163,6 +179,12 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 	for _, log := range sampled {
 		entries = append(entries, a.extractor.ExtractFromLog(log))
 	}
+	sampleInaccurateCount := 0
+	for _, e := range entries {
+		if e.IsInaccurate {
+			sampleInaccurateCount++
+		}
+	}
 
 	a.updateTask(taskID, func(t *models.AnalysisTask) {
 		t.Stage = "loading_rules"
@@ -181,15 +203,8 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 		t.Progress = 35
 	})
 
-	// Step 6: Choose analysis strategy based on data volume
-	var report *models.AnalysisReport
-	if len(entries) <= 200 {
-		// Single-pass analysis for small datasets
-		report, err = a.runSinglePassAnalysis(ctx, taskID, rules, entries, totalLogs, modelCfg, config)
-	} else {
-		// Batched analysis for large datasets
-		report, err = a.runBatchedAnalysis(ctx, taskID, rules, entries, totalLogs, modelCfg, config)
-	}
+	// Step 6: Execute analysis via a single strategy entrypoint.
+	report, err := a.executeAnalysis(ctx, taskID, rules, entries, totalLogs, modelCfg, config)
 
 	if err != nil {
 		a.failTask(taskID, fmt.Sprintf("analysis failed: %v", err))
@@ -213,6 +228,24 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 	report.TimeRangeEnd = req.EndTime
 	report.TotalLogs = totalLogs
 	report.AnalyzedLogs = len(entries)
+	report.FullInaccurateCount = fullInaccurateCount
+	if totalLogs > 0 {
+		report.FullInaccurateRate = float64(fullInaccurateCount) / float64(totalLogs)
+	}
+	report.SampleInaccurateCount = sampleInaccurateCount
+	if len(entries) > 0 {
+		report.SampleInaccurateRate = float64(sampleInaccurateCount) / float64(len(entries))
+	}
+	if report.AnalyzedLogs < report.TotalLogs {
+		report.Warnings = append(
+			report.Warnings,
+			fmt.Sprintf(
+				"口径说明：本报告基于采样（%d/%d），优先包含不准确日志；样本不准确率用于定位问题，不等同于全量不准确率。",
+				report.AnalyzedLogs,
+				report.TotalLogs,
+			),
+		)
+	}
 
 	// Step 8: Persist report
 	reportID, err := a.reportRepo.Save(ctx, report)
@@ -228,6 +261,7 @@ func (a *RoutingAnalyzer) runAnalysis(taskID string, req *models.AnalysisRequest
 		t.Progress = 100
 		t.Report = report
 	})
+	a.cleanupTasks()
 
 	a.logger.Info("routing analysis completed",
 		zap.String("task_id", taskID),
@@ -244,6 +278,57 @@ func (a *RoutingAnalyzer) failTask(taskID, errMsg string) {
 		t.Status = "failed"
 		t.Error = errMsg
 	})
+	a.cleanupTasks()
+}
+
+func (a *RoutingAnalyzer) cleanupTasks() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.cleanupTasksLocked(time.Now())
+}
+
+func (a *RoutingAnalyzer) cleanupTasksLocked(now time.Time) {
+	ttl := a.taskTTL
+	if ttl <= 0 {
+		ttl = defaultAnalysisTaskTTL
+	}
+
+	maxEntries := a.taskMaxEntries
+	if maxEntries <= 0 {
+		maxEntries = defaultAnalysisTaskMaxEntries
+	}
+
+	for id, task := range a.tasks {
+		if !isTerminalTaskStatus(task.Status) {
+			continue
+		}
+		if now.Sub(task.CreatedAt) > ttl {
+			delete(a.tasks, id)
+		}
+	}
+
+	for len(a.tasks) > maxEntries {
+		oldestID := ""
+		var oldestCreatedAt time.Time
+		for id, task := range a.tasks {
+			if !isTerminalTaskStatus(task.Status) {
+				continue
+			}
+			if oldestID == "" || task.CreatedAt.Before(oldestCreatedAt) {
+				oldestID = id
+				oldestCreatedAt = task.CreatedAt
+			}
+		}
+		if oldestID == "" {
+			// Only running tasks remain; never delete active tasks.
+			return
+		}
+		delete(a.tasks, oldestID)
+	}
+}
+
+func isTerminalTaskStatus(status string) bool {
+	return status == "completed" || status == "failed"
 }
 
 // sampleLogs picks up to maxSamples logs, prioritizing inaccurate ones.
@@ -265,6 +350,9 @@ func (a *RoutingAnalyzer) sampleLogs(logs []*models.RequestLog, maxSamples int) 
 	// Include all inaccurate logs first
 	result := make([]*models.RequestLog, 0, maxSamples)
 	result = append(result, inaccurate...)
+	if len(result) >= maxSamples {
+		return result[:maxSamples]
+	}
 
 	// Fill remaining with evenly spaced normal logs
 	remaining := maxSamples - len(result)
@@ -330,6 +418,6 @@ func (a *RoutingAnalyzer) callAnalysisModel(ctx context.Context, userPrompt stri
 		},
 		Client:     a.client,
 		Logger:     a.logger,
-		LogContext:  "analysis",
+		LogContext: "analysis",
 	})
 }

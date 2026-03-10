@@ -135,7 +135,6 @@ func NewHealthChecker(cfg config.HealthCheckConfig, logger *zap.Logger) *HealthC
 		},
 		logger: logger,
 		states: make(map[string]*EndpointState),
-		done:   make(chan struct{}),
 	}
 }
 
@@ -169,12 +168,21 @@ func (hc *HealthChecker) Start(endpoints []*models.Endpoint) {
 		state.Status = models.EndpointUnknown
 		hc.states[name] = state
 	}
-	hc.mu.Unlock()
+
+	// Already started: keep existing loop and only refresh endpoints/states.
+	if hc.cancel != nil {
+		hc.mu.Unlock()
+		hc.logger.Debug("health checker already running; refreshed endpoints")
+		return
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	hc.cancel = cancel
+	hc.done = done
+	hc.mu.Unlock()
 
-	go hc.loop(ctx, endpoints)
+	go hc.loop(ctx, endpoints, done)
 	hc.logger.Info("health checker started",
 		zap.Int("endpoints", len(endpoints)),
 		zap.Int("interval_seconds", hc.cfg.IntervalSeconds),
@@ -183,14 +191,24 @@ func (hc *HealthChecker) Start(endpoints []*models.Endpoint) {
 
 // Stop halts the health checker.
 func (hc *HealthChecker) Stop() {
-	if hc.cancel != nil {
-		hc.cancel()
-		<-hc.done
+	hc.mu.Lock()
+	cancel := hc.cancel
+	done := hc.done
+	hc.cancel = nil
+	hc.done = nil
+	hc.mu.Unlock()
+
+	if cancel == nil {
+		return
+	}
+	cancel()
+	if done != nil {
+		<-done
 	}
 }
 
-func (hc *HealthChecker) loop(ctx context.Context, _ []*models.Endpoint) {
-	defer close(hc.done)
+func (hc *HealthChecker) loop(ctx context.Context, _ []*models.Endpoint, done chan struct{}) {
+	defer close(done)
 
 	// Run an initial check immediately.
 	hc.mu.RLock()
@@ -228,34 +246,8 @@ func (hc *HealthChecker) checkAll(ctx context.Context, endpoints []*models.Endpo
 
 func (hc *HealthChecker) checkEndpoint(ctx context.Context, ep *models.Endpoint) {
 	name := fmt.Sprintf("%s/%s", ep.Provider.Name, ep.Model.Name)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.Provider.BaseURL, nil)
-	if err != nil {
-		hc.updateState(name, models.EndpointUnhealthy, err.Error())
-		return
-	}
-	req.Header.Set("x-api-key", ep.Provider.APIKey)
-
-	resp, err := hc.client.Do(req)
-	if err != nil {
-		hc.updateState(name, models.EndpointUnhealthy, err.Error())
-		return
-	}
-	defer resp.Body.Close()
-
-	// 401 = invalid key, 403 = quota/permission, <400 = healthy, >=400 = unhealthy
-	var status models.EndpointStatus
-	switch {
-	case resp.StatusCode == http.StatusUnauthorized:
-		status = models.EndpointUnhealthy
-	case resp.StatusCode == http.StatusForbidden:
-		status = models.EndpointUnhealthy
-	case resp.StatusCode < 400:
-		status = models.EndpointHealthy
-	default:
-		status = models.EndpointUnhealthy
-	}
-	hc.updateState(name, status, "")
+	status, errMsg := probeEndpointStatus(ctx, hc.client, ep)
+	hc.updateState(name, status, errMsg)
 }
 
 func (hc *HealthChecker) updateState(name string, status models.EndpointStatus, errMsg string) {
@@ -403,101 +395,7 @@ func (hc *HealthChecker) UpdateRequestStatsV2(result RequestResult) {
 		state.AvgResponseTimeMs = state.totalResponseMs / float64(state.TotalRequests)
 	}
 
-	// Handle circuit breaker logic based on current state
-	switch state.CircuitState {
-	case CircuitClosed:
-		if result.Success {
-			// Reset failure counters on success
-			state.ConsecutiveFailures = 0
-			state.ConsecutivePermanent = 0
-		} else {
-			// Increment failure counters
-			state.ConsecutiveFailures++
-			now := time.Now()
-			state.LastFailureTime = &now
-
-			// Classify error type
-			var errorType ErrorType
-			if result.Err != nil {
-				errorType = classifyError(result.Err)
-			} else {
-				errorType = classifyHTTPError(result.StatusCode, result.ResponseBody)
-			}
-
-			if errorType == ErrorTypePermanent {
-				state.ConsecutivePermanent++
-			}
-
-			// Record error
-			errorRecord := ErrorRecord{
-				Timestamp:  now,
-				ErrorType:  errorType,
-				StatusCode: result.StatusCode,
-				Message:    extractErrorMessage(result.Err, result.ResponseBody),
-			}
-			state.RecentErrors = append(state.RecentErrors, errorRecord)
-			if len(state.RecentErrors) > 20 {
-				// Copy to new slice to allow GC of old underlying array
-				trimmed := make([]ErrorRecord, 20)
-				copy(trimmed, state.RecentErrors[len(state.RecentErrors)-20:])
-				state.RecentErrors = trimmed
-			}
-
-			// Check if should transition to open
-			if shouldOpen, reason := shouldTransitionToOpen(state, hc.cfg.CircuitBreaker); shouldOpen {
-				state.CircuitState = CircuitOpen
-				openedAt := time.Now()
-				state.CircuitOpenedAt = &openedAt
-				state.LastError = reason
-				state.Status = models.EndpointUnhealthy
-				hc.logger.Warn("Circuit breaker opened",
-					zap.String("endpoint", result.EndpointName),
-					zap.String("reason", reason),
-					zap.Int("consecutive_failures", state.ConsecutiveFailures),
-					zap.Int("consecutive_permanent", state.ConsecutivePermanent),
-				)
-			}
-		}
-
-	case CircuitHalfOpen:
-		if result.Success {
-			state.HalfOpenSuccesses++
-			state.ConsecutiveFailures = 0
-			state.ConsecutivePermanent = 0
-
-			// If we have enough successful test requests, close the circuit
-			if state.HalfOpenSuccesses >= hc.cfg.CircuitBreaker.HalfOpenMaxRequests {
-				state.CircuitState = CircuitClosed
-				state.HalfOpenSuccesses = 0
-				state.HalfOpenFailures = 0
-				state.Status = models.EndpointHealthy
-				hc.logger.Info("Circuit breaker closed after successful recovery",
-					zap.String("endpoint", result.EndpointName),
-				)
-			}
-		} else {
-			state.HalfOpenFailures++
-
-			// If any test request fails, reopen the circuit
-			state.CircuitState = CircuitOpen
-			now := time.Now()
-			state.CircuitOpenedAt = &now
-			state.HalfOpenSuccesses = 0
-			state.HalfOpenFailures = 0
-			state.Status = models.EndpointUnhealthy
-			hc.logger.Warn("Circuit breaker reopened after failed test request",
-				zap.String("endpoint", result.EndpointName),
-			)
-		}
-
-	case CircuitOpen:
-		// In open state, we don't process requests (they should be blocked)
-		// But if somehow a request comes through, just log it
-		hc.logger.Debug("Request recorded in open circuit state",
-			zap.String("endpoint", result.EndpointName),
-			zap.Bool("success", result.Success),
-		)
-	}
+	applyRequestResultToCircuitState(state, result, hc.cfg.CircuitBreaker, hc.logger)
 }
 
 // GetState returns a snapshot of the named endpoint's state.
@@ -743,6 +641,10 @@ func extractErrorMessage(err error, responseBody []byte) string {
 // shouldTransitionToOpen checks if the circuit breaker should transition to open state.
 // Returns (shouldOpen, reason).
 func shouldTransitionToOpen(state *EndpointState, cfg config.CircuitBreakerConfig) (bool, string) {
+	if !cfg.Enabled {
+		return false, ""
+	}
+
 	// Only transition from closed state
 	if state.CircuitState != CircuitClosed {
 		return false, ""
@@ -763,6 +665,10 @@ func shouldTransitionToOpen(state *EndpointState, cfg config.CircuitBreakerConfi
 
 // shouldTransitionToHalfOpen checks if the circuit breaker should transition to half-open state.
 func shouldTransitionToHalfOpen(state *EndpointState, cfg config.CircuitBreakerConfig) bool {
+	if !cfg.Enabled {
+		return false
+	}
+
 	// Only transition from open state
 	if state.CircuitState != CircuitOpen {
 		return false
@@ -779,6 +685,10 @@ func shouldTransitionToHalfOpen(state *EndpointState, cfg config.CircuitBreakerC
 
 // shouldAllowRequest checks if a request should be allowed based on circuit state.
 func shouldAllowRequest(state *EndpointState, cfg config.CircuitBreakerConfig) bool {
+	if !cfg.Enabled {
+		return true
+	}
+
 	switch state.CircuitState {
 	case CircuitClosed:
 		return true

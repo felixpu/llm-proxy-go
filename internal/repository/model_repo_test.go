@@ -281,7 +281,7 @@ func TestModelRepository_Update(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := repo.Update(ctx, tt.id, tt.updates)
+			err := repo.UpdatePatch(ctx, tt.id, modelPatchFromMap(tt.updates))
 			require.NoError(t, err)
 
 			if len(tt.updates) > 0 {
@@ -291,6 +291,59 @@ func TestModelRepository_Update(t *testing.T) {
 			}
 		})
 	}
+}
+
+func modelPatchFromMap(updates map[string]any) ModelPatch {
+	patch := ModelPatch{}
+	if v, ok := updates["name"].(string); ok {
+		patch.Name = &v
+	}
+	if v, ok := updates["role"].(string); ok {
+		patch.Role = &v
+	}
+	if v, ok := updates["cost_per_mtok_input"].(float64); ok {
+		patch.CostPerMtokInput = &v
+	}
+	if v, ok := updates["cost_per_mtok_output"].(float64); ok {
+		patch.CostPerMtokOutput = &v
+	}
+	if v, ok := updates["billing_multiplier"].(float64); ok {
+		patch.BillingMultiplier = &v
+	}
+	if v, ok := updates["supports_thinking"].(bool); ok {
+		patch.SupportsThinking = &v
+	}
+	if v, ok := updates["enabled"].(bool); ok {
+		patch.Enabled = &v
+	}
+	if v, ok := updates["weight"].(int); ok {
+		patch.Weight = &v
+	}
+	return patch
+}
+
+func TestModelRepository_UpdatePatch(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	testutil.SeedTestData(t, db)
+	repo := NewModelRepository(db)
+	ctx := context.Background()
+
+	name := "typed-model"
+	enabled := false
+	weight := 55
+	patch := ModelPatch{
+		Name:    &name,
+		Enabled: &enabled,
+		Weight:  &weight,
+	}
+
+	require.NoError(t, repo.UpdatePatch(ctx, 1, patch))
+
+	model, err := repo.FindByID(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, "typed-model", model.Name)
+	assert.False(t, model.Enabled)
+	assert.Equal(t, 55, model.Weight)
 }
 
 func TestModelRepository_Delete(t *testing.T) {

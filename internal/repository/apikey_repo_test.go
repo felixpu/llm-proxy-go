@@ -74,6 +74,20 @@ func TestAPIKeyRepository_FindByID(t *testing.T) {
 	}
 }
 
+func TestAPIKeyRepository_ReadsUseReadDB(t *testing.T) {
+	db, readDB := testutil.NewFileBackedTestDBPair(t)
+	testutil.SeedTestData(t, db)
+	repo := NewAPIKeyRepository(db, readDB)
+	ctx := context.Background()
+
+	require.NoError(t, db.Close())
+
+	key, err := repo.FindByKeyHash(ctx, "hash_admin_key_1")
+	require.NoError(t, err)
+	require.NotNil(t, key)
+	assert.Equal(t, "hash_admin_key_1", key.KeyHash)
+}
+
 func TestAPIKeyRepository_FindByUserID(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	testutil.SeedTestData(t, db)

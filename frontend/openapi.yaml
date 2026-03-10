@@ -404,6 +404,10 @@ paths:
       responses:
         '200':
           description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogStatsResponse'
 
   /api/logs/{id}:
     get:
@@ -1044,6 +1048,10 @@ paths:
       responses:
         '200':
           description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoutingAnalysisExportResponse'
 
   # ===== 系统日志 =====
   /api/system-logs:
@@ -1256,3 +1264,66 @@ components:
           type: integer
         page_size:
           type: integer
+
+    LogStatsResponse:
+      type: object
+      properties:
+        total_requests:
+          type: integer
+        total_cost:
+          type: number
+        avg_latency:
+          type: number
+        success_rate:
+          type: number
+        cache_hit_rate:
+          type: number
+          description: 百分比值（0-100）
+        total_cache_read_tokens:
+          type: integer
+        total_input_tokens:
+          type: integer
+        total_output_tokens:
+          type: integer
+        by_model:
+          type: array
+          items:
+            type: object
+        by_endpoint:
+          type: array
+          items:
+            type: object
+
+    RoutingAnalysisExportResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              message_preview:
+                type: string
+              request_content:
+                type: string
+              task_type:
+                type: string
+              routing_method:
+                type: string
+              routing_reason:
+                type: string
+              matched_rule_name:
+                type: string
+              is_inaccurate:
+                type: boolean
+        count:
+          type: integer
+        meta:
+          type: object
+          properties:
+            inaccurate_only:
+              type: boolean
+            scope_note:
+              type: string

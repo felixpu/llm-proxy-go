@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -22,6 +23,26 @@ import (
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
+
+type appRepositories struct {
+	modelRepo          *repository.SQLModelRepository
+	modelAliasRepo     *repository.SQLModelAliasRepository
+	providerRepo       *repository.SQLProviderRepository
+	keyRepo            repository.APIKeyRepository
+	userRepo           repository.UserRepository
+	logWriteRepo       repository.RequestLogWriteRepository
+	logQueryRepo       repository.RequestLogQueryRepository
+	logAnalyticsRepo   repository.RequestLogAnalyticsRepository
+	logRoutingRepo     repository.RequestLogRepository
+	embeddingRepo      *repository.EmbeddingModelRepository
+	routingModelRepo   *repository.RoutingModelRepository
+	routingConfigRepo  *repository.RoutingConfigRepository
+	embeddingCacheRepo *repository.EmbeddingCacheRepository
+	routingRuleRepo    *repository.RoutingRuleRepo
+	systemConfigRepo   *repository.SystemConfigRepository
+	sessionRepo        *repository.SessionRepository
+	analysisReportRepo *repository.AnalysisReportRepository
+}
 
 func main() {
 	if len(os.Args) > 1 {
@@ -81,19 +102,11 @@ func run() error {
 		zap.Int("port", cfg.Proxy.Port),
 	)
 
-	// Initialize database.
-	db, err := database.New(cfg.Database.Path)
+	db, readDB, err := initDatabases(cfg.Database.Path)
 	if err != nil {
-		return fmt.Errorf("init database: %w", err)
+		return err
 	}
 	defer db.Close()
-
-	// Initialize read-only database pool for query-heavy workloads (log stats, list).
-	// This prevents expensive analytical queries from starving proxy auth/write operations.
-	readDB, err := database.NewReadOnly(cfg.Database.Path)
-	if err != nil {
-		return fmt.Errorf("init read-only database: %w", err)
-	}
 	defer readDB.Close()
 
 	// Run migrations.
@@ -101,18 +114,7 @@ func run() error {
 		return fmt.Errorf("run migrations: %w", err)
 	}
 
-	// Initialize repositories.
-	modelRepo := repository.NewModelRepository(db)
-	providerRepo := repository.NewProviderRepository(db)
-	keyRepo := repository.NewAPIKeyRepository(db)
-	userRepo := repository.NewUserRepository(db)
-	logRepo := repository.NewRequestLogRepositoryImpl(db, logger, readDB)
-	embeddingRepo := repository.NewEmbeddingModelRepository(db, logger)
-	routingModelRepo := repository.NewRoutingModelRepository(db, logger)
-	routingConfigRepo := repository.NewRoutingConfigRepository(db, logger)
-	embeddingCacheRepo := repository.NewEmbeddingCacheRepository(db, logger)
-	routingRuleRepo := repository.NewRoutingRuleRepository(db, logger)
-	systemConfigRepo := repository.NewSystemConfigRepository(db)
+	repos := initRepositories(db, readDB, logger)
 
 	// Initialize worker coordinator for multi-worker support.
 	workerCoordinator := service.NewWorkerCoordinator(db, logger)
@@ -131,17 +133,16 @@ func run() error {
 		zap.Bool("is_primary", workerCoordinator.IsPrimary()))
 
 	// Initialize endpoint store.
-	endpointStore := service.NewEndpointStore(modelRepo, providerRepo, logger)
+	endpointStore := service.NewEndpointStore(repos.modelRepo, repos.providerRepo, logger)
 	if err := endpointStore.Load(context.Background()); err != nil {
 		return fmt.Errorf("load endpoints: %w", err)
 	}
 
 	// Initialize services.
-	sessionRepo := repository.NewSessionRepository(db, logger)
 	healthChecker := service.NewHealthChecker(cfg.HealthCheck, logger)
-	loadBalancer := service.NewLoadBalancer(systemConfigRepo)
-	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger)
-	proxyService := service.NewProxyService(healthChecker, loadBalancer, logRepo, logger)
+	loadBalancer := service.NewLoadBalancer(repos.systemConfigRepo)
+	authService := service.NewAuthService(repos.keyRepo, repos.userRepo, repos.sessionRepo, logger)
+	proxyService := service.NewProxyService(healthChecker, loadBalancer, repos.logWriteRepo, logger)
 
 	// Create default admin user if not exists.
 	if err := authService.CreateDefaultAdmin(
@@ -164,49 +165,14 @@ func run() error {
 	llmRouter := service.NewLLMRouter(db, nil, logger)
 
 	// Initialize routing analyzer for rule optimization.
-	analysisReportRepo := repository.NewAnalysisReportRepository(db, logger, readDB)
-	routingAnalyzer := service.NewRoutingAnalyzer(logRepo, routingRuleRepo, routingModelRepo, analysisReportRepo, logger)
+	routingAnalyzer := service.NewRoutingAnalyzer(repos.logAnalyticsRepo, repos.routingRuleRepo, repos.routingModelRepo, repos.analysisReportRepo, logger)
 
 	// Create HTTP server.
-	server := api.NewServer(api.ServerDeps{
-		ProxyService:       proxyService,
-		AuthService:        authService,
-		HealthChecker:      healthChecker,
-		RoutingCache:       routingCache,
-		LLMRouter:          llmRouter,
-		RoutingAnalyzer:    routingAnalyzer,
-		UserRepo:           userRepo,
-		KeyRepo:            keyRepo,
-		LogRepo:            logRepo,
-		EmbeddingRepo:      embeddingRepo,
-		ModelRepo:          modelRepo,
-		ProviderRepo:       providerRepo,
-		RoutingModelRepo:   routingModelRepo,
-		RoutingConfigRepo:  routingConfigRepo,
-		RoutingRuleRepo:    routingRuleRepo,
-		EmbeddingCacheRepo: embeddingCacheRepo,
-		SystemConfigRepo:   systemConfigRepo,
-		AnalysisReportRepo: analysisReportRepo,
-		EndpointStore:      endpointStore,
-		RateLimit: &middleware.RateLimitConfig{
-			Enabled:       cfg.RateLimit.Enabled,
-			MaxRequests:   cfg.RateLimit.MaxRequests,
-			WindowSeconds: cfg.RateLimit.WindowSeconds,
-			ExemptPaths:   middleware.DefaultRateLimitConfig().ExemptPaths,
-		},
-		DB:     db,
-		Logger: logger,
-	})
+	server := api.NewServer(buildServerDeps(cfg, db, logger, repos, proxyService, authService, healthChecker, routingCache, llmRouter, routingAnalyzer, endpointStore))
 
 	// Start server in goroutine.
 	addr := fmt.Sprintf("%s:%d", cfg.Proxy.Host, cfg.Proxy.Port)
-	httpServer := &http.Server{
-		Addr:         addr,
-		Handler:      server,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 300 * time.Second, // streaming responses need a long write timeout
-		IdleTimeout:  120 * time.Second,
-	}
+	httpServer := newHTTPServer(addr, server)
 
 	go func() {
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -232,6 +198,100 @@ func run() error {
 
 	logger.Info("server stopped")
 	return nil
+}
+
+func initDatabases(dbPath string) (*sql.DB, *sql.DB, error) {
+	db, err := database.New(dbPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("init database: %w", err)
+	}
+	readDB, err := database.NewReadOnly(dbPath)
+	if err != nil {
+		db.Close()
+		return nil, nil, fmt.Errorf("init read-only database: %w", err)
+	}
+	return db, readDB, nil
+}
+
+func initRepositories(db, readDB *sql.DB, logger *zap.Logger) appRepositories {
+	logRepoImpl := repository.NewRequestLogRepositoryImpl(db, logger, readDB)
+	return appRepositories{
+		modelRepo:          repository.NewModelRepository(db),
+		modelAliasRepo:     repository.NewModelAliasRepository(db, readDB),
+		providerRepo:       repository.NewProviderRepository(db),
+		keyRepo:            repository.NewAPIKeyRepository(db, readDB),
+		userRepo:           repository.NewUserRepository(db, readDB),
+		logWriteRepo:       logRepoImpl,
+		logQueryRepo:       logRepoImpl,
+		logAnalyticsRepo:   logRepoImpl,
+		logRoutingRepo:     logRepoImpl,
+		embeddingRepo:      repository.NewEmbeddingModelRepository(db, logger),
+		routingModelRepo:   repository.NewRoutingModelRepository(db, logger),
+		routingConfigRepo:  repository.NewRoutingConfigRepository(db, logger, readDB),
+		embeddingCacheRepo: repository.NewEmbeddingCacheRepository(db, logger),
+		routingRuleRepo:    repository.NewRoutingRuleRepository(db, logger),
+		systemConfigRepo:   repository.NewSystemConfigRepository(db, readDB),
+		sessionRepo:        repository.NewSessionRepository(db, logger),
+		analysisReportRepo: repository.NewAnalysisReportRepository(db, logger, readDB),
+	}
+}
+
+func buildServerDeps(
+	cfg *config.Config,
+	db *sql.DB,
+	logger *zap.Logger,
+	repos appRepositories,
+	proxyService *service.ProxyService,
+	authService *service.AuthService,
+	healthChecker *service.HealthChecker,
+	routingCache *service.RoutingCache,
+	llmRouter *service.LLMRouter,
+	routingAnalyzer *service.RoutingAnalyzer,
+	endpointStore *service.EndpointStore,
+) api.ServerDeps {
+	return api.ServerDeps{
+		ProxyService:       proxyService,
+		AuthService:        authService,
+		HealthChecker:      healthChecker,
+		RoutingCache:       routingCache,
+		LLMRouter:          llmRouter,
+		RoutingAnalyzer:    routingAnalyzer,
+		UserRepo:           repos.userRepo,
+		KeyRepo:            repos.keyRepo,
+		LogWriteRepo:       repos.logWriteRepo,
+		LogQueryRepo:       repos.logQueryRepo,
+		LogAnalyticsRepo:   repos.logAnalyticsRepo,
+		LogRoutingRepo:     repos.logRoutingRepo,
+		EmbeddingRepo:      repos.embeddingRepo,
+		ModelRepo:          repos.modelRepo,
+		ModelAliasRepo:     repos.modelAliasRepo,
+		ProviderRepo:       repos.providerRepo,
+		RoutingModelRepo:   repos.routingModelRepo,
+		RoutingConfigRepo:  repos.routingConfigRepo,
+		RoutingRuleRepo:    repos.routingRuleRepo,
+		EmbeddingCacheRepo: repos.embeddingCacheRepo,
+		SystemConfigRepo:   repos.systemConfigRepo,
+		AnalysisReportRepo: repos.analysisReportRepo,
+		EndpointStore:      endpointStore,
+		RateLimit: &middleware.RateLimitConfig{
+			Enabled:       cfg.RateLimit.Enabled,
+			MaxRequests:   cfg.RateLimit.MaxRequests,
+			WindowSeconds: cfg.RateLimit.WindowSeconds,
+			ExemptPaths:   middleware.DefaultRateLimitConfig().ExemptPaths,
+		},
+		DB:     db,
+		Logger: logger,
+	}
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:         addr,
+		Handler:      handler,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 300 * time.Second, // streaming responses need a long write timeout
+		IdleTimeout:  120 * time.Second,
+	}
 }
 
 func newLogger(level string, logDir string, rotation config.LogRotationConfig) (*zap.Logger, error) {

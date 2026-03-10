@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"net/url"
 	"sync"
 
 	_ "modernc.org/sqlite"
@@ -15,17 +16,30 @@ var (
 	once sync.Once
 )
 
+func sqliteDSN(path string, readOnly bool) string {
+	query := url.Values{}
+	if readOnly {
+		query.Set("mode", "ro")
+	} else {
+		query.Add("_pragma", "journal_mode(WAL)")
+	}
+	query.Add("_pragma", "busy_timeout(5000)")
+	query.Add("_pragma", "foreign_keys(ON)")
+	return fmt.Sprintf("file:%s?%s", path, query.Encode())
+}
+
 // New creates a new database connection with the given path.
 func New(path string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON", path)
+	dsn := sqliteDSN(path, false)
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Configure connection pool — leave headroom for the read-only pool.
-	conn.SetMaxOpenConns(15)
-	conn.SetMaxIdleConns(5)
+	// SQLite supports many readers in WAL mode but still only one writer.
+	// Serializing the write pool avoids concurrent writer lock contention.
+	conn.SetMaxOpenConns(1)
+	conn.SetMaxIdleConns(1)
 
 	// Verify connection
 	if err := conn.Ping(); err != nil {
@@ -40,7 +54,7 @@ func New(path string) (*sql.DB, error) {
 // Using a separate pool prevents expensive analytical queries from starving
 // latency-sensitive write operations (e.g. proxy auth, log inserts).
 func NewReadOnly(path string) (*sql.DB, error) {
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=ON&mode=ro", path)
+	dsn := sqliteDSN(path, true)
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open read-only database: %w", err)

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,11 +13,19 @@ import (
 
 // EmbeddingHandler handles embedding model management endpoints.
 type EmbeddingHandler struct {
-	repo *repository.EmbeddingModelRepository
+	repo embeddingModelStore
+}
+
+type embeddingModelStore interface {
+	ListModels(ctx context.Context, enabledOnly bool) ([]*models.EmbeddingModel, error)
+	GetModelByName(ctx context.Context, name string) (*models.EmbeddingModel, error)
+	AddModel(ctx context.Context, m *models.EmbeddingModel) (int64, error)
+	UpdateModelPatch(ctx context.Context, id int64, patch repository.EmbeddingModelPatch) error
+	DeleteModel(ctx context.Context, id int64) error
 }
 
 // NewEmbeddingHandler creates a new EmbeddingHandler.
-func NewEmbeddingHandler(repo *repository.EmbeddingModelRepository) *EmbeddingHandler {
+func NewEmbeddingHandler(repo embeddingModelStore) *EmbeddingHandler {
 	return &EmbeddingHandler{repo: repo}
 }
 
@@ -83,14 +92,14 @@ func (h *EmbeddingHandler) CreateModel(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusCreated, gin.H{
-		"id":                 id,
-		"name":               req.Name,
-		"dimension":          req.Dimension,
-		"description":        req.Description,
+		"id":                  id,
+		"name":                req.Name,
+		"dimension":           req.Dimension,
+		"description":         req.Description,
 		"fastembed_supported": req.FastembedSupported,
-		"fastembed_name":     req.FastembedName,
-		"enabled":            req.Enabled,
-		"sort_order":         req.SortOrder,
+		"fastembed_name":      req.FastembedName,
+		"enabled":             req.Enabled,
+		"sort_order":          req.SortOrder,
 	})
 }
 
@@ -117,30 +126,17 @@ func (h *EmbeddingHandler) UpdateModel(c *gin.Context) {
 		return
 	}
 
-	updates := make(map[string]any)
-	if req.Name != nil {
-		updates["name"] = *req.Name
-	}
-	if req.Dimension != nil {
-		updates["dimension"] = *req.Dimension
-	}
-	if req.Description != nil {
-		updates["description"] = *req.Description
-	}
-	if req.FastembedSupported != nil {
-		updates["fastembed_supported"] = *req.FastembedSupported
-	}
-	if req.FastembedName != nil {
-		updates["fastembed_name"] = *req.FastembedName
-	}
-	if req.Enabled != nil {
-		updates["enabled"] = *req.Enabled
-	}
-	if req.SortOrder != nil {
-		updates["sort_order"] = *req.SortOrder
+	patch := repository.EmbeddingModelPatch{
+		Name:               req.Name,
+		Dimension:          req.Dimension,
+		Description:        req.Description,
+		FastembedSupported: req.FastembedSupported,
+		FastembedName:      req.FastembedName,
+		Enabled:            req.Enabled,
+		SortOrder:          req.SortOrder,
 	}
 
-	if err := h.repo.UpdateModel(c.Request.Context(), id, updates); err != nil {
+	if err := h.repo.UpdateModelPatch(c.Request.Context(), id, patch); err != nil {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}

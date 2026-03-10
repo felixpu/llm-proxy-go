@@ -18,7 +18,8 @@ fi
 PORT="${LLM_PROXY_PORT:-8000}"
 
 PID_FILE="/tmp/llm-proxy-go.pid"
-LOG_FILE="logs/llm-proxy.log"
+# 后台模式下的 stdout/stderr 重定向文件（避免与应用 JSON 文件日志混写）
+CONSOLE_LOG_FILE="logs/llm-proxy-console.log"
 BINARY_NAME="llm-proxy"
 
 # 颜色输出
@@ -236,8 +237,8 @@ start_daemon() {
     echo -e "${GREEN}正在启动 LLM Proxy (后台模式, $mode)...${NC}"
 
     # 执行命令（过滤错误消息）
-    if ! $cmd > "$LOG_FILE" 2>&1 & then
-        echo -e "${RED}启动失败，请查看日志: $LOG_FILE${NC}"
+    if ! $cmd > "$CONSOLE_LOG_FILE" 2>&1 & then
+        echo -e "${RED}启动失败，请查看日志: $CONSOLE_LOG_FILE${NC}"
         exit 1
     fi
 
@@ -247,10 +248,11 @@ start_daemon() {
     sleep 2
     if ps -p "$new_pid" > /dev/null 2>&1; then
         echo -e "${GREEN}✓ 启动成功${NC} (PID: $new_pid, 端口: $PORT)"
-        echo -e "  日志文件: $LOG_FILE"
+        echo -e "  结构化日志: logs/llm-proxy.log"
+        echo -e "  控制台重定向日志: $CONSOLE_LOG_FILE"
         echo -e "  访问地址: http://localhost:$PORT"
     else
-        echo -e "${RED}✗ 启动失败，请查看日志: $LOG_FILE${NC}"
+        echo -e "${RED}✗ 启动失败，请查看日志: $CONSOLE_LOG_FILE${NC}"
         exit 1
     fi
 }

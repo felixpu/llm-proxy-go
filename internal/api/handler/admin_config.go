@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -9,12 +10,12 @@ import (
 
 // RoutingUpdate represents a routing configuration update.
 type RoutingUpdate struct {
-	DefaultRole string `json:"default_role" binding:"required"`
+	DefaultRole *string `json:"default_role"`
 }
 
 // LoadBalanceUpdate represents a load balance configuration update.
 type LoadBalanceUpdate struct {
-	Strategy string `json:"strategy" binding:"required"`
+	Strategy *string `json:"strategy"`
 }
 
 // HealthCheckConfigUpdate represents a health check configuration update.
@@ -32,11 +33,22 @@ type UIConfigUpdate struct {
 
 // ConfigHandler handles system configuration API endpoints.
 type ConfigHandler struct {
-	repo *repository.SystemConfigRepository
+	repo systemConfigWriterReader
+}
+
+type systemConfigWriterReader interface {
+	GetRoutingConfig(ctx context.Context) (map[string]any, error)
+	UpdateRoutingConfigPatch(ctx context.Context, patch repository.SystemRoutingConfigPatch) error
+	GetLoadBalanceConfig(ctx context.Context) (map[string]any, error)
+	UpdateLoadBalanceConfigPatch(ctx context.Context, patch repository.SystemLoadBalanceConfigPatch) error
+	GetHealthCheckConfig(ctx context.Context) (map[string]any, error)
+	UpdateHealthCheckConfigPatch(ctx context.Context, patch repository.SystemHealthCheckConfigPatch) error
+	GetUIConfig(ctx context.Context) (map[string]any, error)
+	UpdateUIConfigPatch(ctx context.Context, patch repository.SystemUIConfigPatch) error
 }
 
 // NewConfigHandler creates a new ConfigHandler.
-func NewConfigHandler(repo *repository.SystemConfigRepository) *ConfigHandler {
+func NewConfigHandler(repo systemConfigWriterReader) *ConfigHandler {
 	return &ConfigHandler{repo: repo}
 }
 
@@ -52,12 +64,14 @@ func (h *ConfigHandler) GetRoutingConfig(c *gin.Context) {
 
 // UpdateRoutingConfig updates the routing configuration.
 func (h *ConfigHandler) UpdateRoutingConfig(c *gin.Context) {
-	var req map[string]any
+	var req RoutingUpdate
 	if err := c.ShouldBindJSON(&req); err != nil {
 		errorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.repo.UpdateRoutingConfig(c.Request.Context(), req); err != nil {
+	if err := h.repo.UpdateRoutingConfigPatch(c.Request.Context(), repository.SystemRoutingConfigPatch{
+		DefaultRole: req.DefaultRole,
+	}); err != nil {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -76,27 +90,30 @@ func (h *ConfigHandler) GetLoadBalanceConfig(c *gin.Context) {
 
 // UpdateLoadBalanceConfig updates the load balance configuration.
 func (h *ConfigHandler) UpdateLoadBalanceConfig(c *gin.Context) {
-	var req map[string]any
+	var req LoadBalanceUpdate
 	if err := c.ShouldBindJSON(&req); err != nil {
 		errorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if strategy, ok := req["strategy"].(string); ok {
+	if req.Strategy != nil {
 		valid := map[string]bool{
 			"round_robin": true, "weighted": true,
 			"least_connections": true, "conversation_hash": true,
 		}
-		if !valid[strategy] {
+		if !valid[*req.Strategy] {
 			errorResponse(c, http.StatusBadRequest, "invalid strategy")
 			return
 		}
 	}
-	if err := h.repo.UpdateLoadBalanceConfig(c.Request.Context(), req); err != nil {
+	if err := h.repo.UpdateLoadBalanceConfigPatch(c.Request.Context(), repository.SystemLoadBalanceConfigPatch{
+		Strategy: req.Strategy,
+	}); err != nil {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Load balance config updated"})
 }
+
 // GetHealthCheckConfig returns the health check configuration.
 func (h *ConfigHandler) GetHealthCheckConfig(c *gin.Context) {
 	cfg, err := h.repo.GetHealthCheckConfig(c.Request.Context())
@@ -109,12 +126,16 @@ func (h *ConfigHandler) GetHealthCheckConfig(c *gin.Context) {
 
 // UpdateHealthCheckConfig updates the health check configuration.
 func (h *ConfigHandler) UpdateHealthCheckConfig(c *gin.Context) {
-	var req map[string]any
+	var req HealthCheckConfigUpdate
 	if err := c.ShouldBindJSON(&req); err != nil {
 		errorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.repo.UpdateHealthCheckConfig(c.Request.Context(), req); err != nil {
+	if err := h.repo.UpdateHealthCheckConfigPatch(c.Request.Context(), repository.SystemHealthCheckConfigPatch{
+		Enabled:         req.Enabled,
+		IntervalSeconds: req.IntervalSeconds,
+		TimeoutSeconds:  req.TimeoutSeconds,
+	}); err != nil {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -133,12 +154,15 @@ func (h *ConfigHandler) GetUIConfig(c *gin.Context) {
 
 // UpdateUIConfig updates the UI configuration.
 func (h *ConfigHandler) UpdateUIConfig(c *gin.Context) {
-	var req map[string]any
+	var req UIConfigUpdate
 	if err := c.ShouldBindJSON(&req); err != nil {
 		errorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if err := h.repo.UpdateUIConfig(c.Request.Context(), req); err != nil {
+	if err := h.repo.UpdateUIConfigPatch(c.Request.Context(), repository.SystemUIConfigPatch{
+		DashboardRefreshSeconds: req.DashboardRefreshSeconds,
+		LogsRefreshSeconds:      req.LogsRefreshSeconds,
+	}); err != nil {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}

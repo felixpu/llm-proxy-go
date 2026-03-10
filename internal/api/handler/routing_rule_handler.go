@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 
@@ -43,12 +44,24 @@ type TestMessageRequest struct {
 
 // RoutingRuleHandler handles routing rule API endpoints.
 type RoutingRuleHandler struct {
-	ruleRepo *repository.RoutingRuleRepo
+	ruleRepo routingRuleUpdater
 	logger   *zap.Logger
 }
 
+type routingRuleUpdater interface {
+	ListRules(ctx context.Context, enabledOnly bool) ([]*models.RoutingRule, error)
+	GetRule(ctx context.Context, id int64) (*models.RoutingRule, error)
+	AddRule(ctx context.Context, rule *models.RoutingRule) (int64, error)
+	UpdateRulePatch(ctx context.Context, id int64, patch repository.RoutingRulePatch) error
+	DeleteRule(ctx context.Context, id int64) error
+	IncrementHitCount(ctx context.Context, id int64) error
+	GetStats(ctx context.Context) (*models.RuleStats, error)
+	ListBuiltinRules(ctx context.Context) ([]*models.RoutingRule, error)
+	ListCustomRules(ctx context.Context) ([]*models.RoutingRule, error)
+}
+
 // NewRoutingRuleHandler creates a new RoutingRuleHandler.
-func NewRoutingRuleHandler(ruleRepo *repository.RoutingRuleRepo, logger *zap.Logger) *RoutingRuleHandler {
+func NewRoutingRuleHandler(ruleRepo routingRuleUpdater, logger *zap.Logger) *RoutingRuleHandler {
 	return &RoutingRuleHandler{ruleRepo: ruleRepo, logger: logger}
 }
 
@@ -143,33 +156,18 @@ func (h *RoutingRuleHandler) UpdateRule(c *gin.Context) {
 		return
 	}
 
-	updates := make(map[string]any)
-	if req.Name != nil {
-		updates["name"] = *req.Name
-	}
-	if req.Description != nil {
-		updates["description"] = *req.Description
-	}
-	if req.Keywords != nil {
-		updates["keywords"] = *req.Keywords
-	}
-	if req.Pattern != nil {
-		updates["pattern"] = *req.Pattern
-	}
-	if req.Condition != nil {
-		updates["condition"] = *req.Condition
-	}
-	if req.TaskType != nil {
-		updates["task_type"] = *req.TaskType
-	}
-	if req.Priority != nil {
-		updates["priority"] = *req.Priority
-	}
-	if req.Enabled != nil {
-		updates["enabled"] = *req.Enabled
+	patch := repository.RoutingRulePatch{
+		Name:        req.Name,
+		Description: req.Description,
+		Keywords:    req.Keywords,
+		Pattern:     req.Pattern,
+		Condition:   req.Condition,
+		TaskType:    req.TaskType,
+		Priority:    req.Priority,
+		Enabled:     req.Enabled,
 	}
 
-	if err := h.ruleRepo.UpdateRule(c.Request.Context(), id, updates); err != nil {
+	if err := h.ruleRepo.UpdateRulePatch(c.Request.Context(), id, patch); err != nil {
 		h.logger.Error("failed to update rule", zap.Error(err))
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return

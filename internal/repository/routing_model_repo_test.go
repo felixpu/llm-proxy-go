@@ -201,7 +201,7 @@ func TestRoutingModelRepository_UpdateModel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := repo.UpdateModel(ctx, tt.id, tt.updates)
+			err := repo.UpdateModelPatch(ctx, tt.id, routingModelPatchFromMap(tt.updates))
 			require.NoError(t, err)
 
 			if len(tt.updates) > 0 {
@@ -211,6 +211,61 @@ func TestRoutingModelRepository_UpdateModel(t *testing.T) {
 			}
 		})
 	}
+}
+
+func routingModelPatchFromMap(updates map[string]any) RoutingModelPatch {
+	patch := RoutingModelPatch{}
+	if v, ok := updates["provider_id"].(int64); ok {
+		patch.ProviderID = &v
+	}
+	if v, ok := updates["model_name"].(string); ok {
+		patch.ModelName = &v
+	}
+	if v, ok := updates["enabled"].(bool); ok {
+		patch.Enabled = &v
+	}
+	if v, ok := updates["priority"].(int); ok {
+		patch.Priority = &v
+	}
+	if v, ok := updates["cost_per_mtok_input"].(float64); ok {
+		patch.CostPerMtokInput = &v
+	}
+	if v, ok := updates["cost_per_mtok_output"].(float64); ok {
+		patch.CostPerMtokOutput = &v
+	}
+	if v, ok := updates["billing_multiplier"].(float64); ok {
+		patch.BillingMultiplier = &v
+	}
+	if v, ok := updates["description"].(string); ok {
+		patch.Description = &v
+	}
+	return patch
+}
+
+func TestRoutingModelRepository_UpdateModelPatch(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	testutil.SeedTestData(t, db)
+	repo := NewRoutingModelRepository(db, zap.NewNop())
+	ctx := context.Background()
+	seedRoutingModels(t, db)
+
+	name := "typed-routing-model"
+	enabled := false
+	priority := 99
+	patch := RoutingModelPatch{
+		ModelName: &name,
+		Enabled:   &enabled,
+		Priority:  &priority,
+	}
+
+	require.NoError(t, repo.UpdateModelPatch(ctx, 1, patch))
+
+	model, err := repo.GetModel(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, model)
+	assert.Equal(t, "typed-routing-model", model.ModelName)
+	assert.False(t, model.Enabled)
+	assert.Equal(t, 99, model.Priority)
 }
 
 func TestRoutingModelRepository_DeleteModel(t *testing.T) {

@@ -67,20 +67,20 @@ type DetectModelsResponse struct {
 // ProviderResponse extends Provider with model details for API responses.
 type ProviderResponse struct {
 	*models.Provider
-	APIKey string         `json:"api_key,omitempty"`
+	APIKey string          `json:"api_key,omitempty"`
 	Models []*models.Model `json:"models"`
 }
 
 // ProviderHandler handles provider management API endpoints.
 type ProviderHandler struct {
-	providerRepo  *repository.SQLProviderRepository
-	modelRepo     *repository.SQLModelRepository
+	providerRepo  repository.ProviderRepository
+	modelRepo     repository.ModelRepository
 	modelDetector *service.ModelDetector
 	endpointStore *service.EndpointStore
 }
 
 // NewProviderHandler creates a new ProviderHandler.
-func NewProviderHandler(providerRepo *repository.SQLProviderRepository, modelRepo *repository.SQLModelRepository, modelDetector *service.ModelDetector, endpointStore *service.EndpointStore) *ProviderHandler {
+func NewProviderHandler(providerRepo repository.ProviderRepository, modelRepo repository.ModelRepository, modelDetector *service.ModelDetector, endpointStore *service.EndpointStore) *ProviderHandler {
 	return &ProviderHandler{providerRepo: providerRepo, modelRepo: modelRepo, modelDetector: modelDetector, endpointStore: endpointStore}
 }
 
@@ -109,6 +109,7 @@ func (h *ProviderHandler) ListProviders(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"providers": result})
 }
+
 // GetProvider returns a single provider by ID.
 func (h *ProviderHandler) GetProvider(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("provider_id"), 10, 64)
@@ -199,23 +200,25 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 		}
 	}
 
-	updates := make(map[string]any)
-	if req.Name != nil { updates["name"] = *req.Name }
-	if req.BaseURL != nil { updates["base_url"] = *req.BaseURL }
-	if req.APIKey != nil { updates["api_key"] = *req.APIKey }
-	if req.Weight != nil { updates["weight"] = *req.Weight }
-	if req.MaxConcurrent != nil { updates["max_concurrent"] = *req.MaxConcurrent }
-	if req.Enabled != nil { updates["enabled"] = *req.Enabled }
-	if req.Description != nil { updates["description"] = *req.Description }
-	if req.CustomHeaders != nil { updates["custom_headers"] = *req.CustomHeaders }
-	if req.APIType != nil { updates["api_type"] = *req.APIType }
-	if err := h.providerRepo.Update(c.Request.Context(), id, updates, req.ModelIDs); err != nil {
+	patch := repository.ProviderPatch{
+		Name:          req.Name,
+		BaseURL:       req.BaseURL,
+		APIKey:        req.APIKey,
+		Weight:        req.Weight,
+		MaxConcurrent: req.MaxConcurrent,
+		Enabled:       req.Enabled,
+		Description:   req.Description,
+		CustomHeaders: req.CustomHeaders,
+		APIType:       req.APIType,
+	}
+	if err := h.providerRepo.UpdatePatch(c.Request.Context(), id, patch, req.ModelIDs); err != nil {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"id": id, "message": "Provider updated"})
 	go h.endpointStore.ReloadAndNotify(context.Background())
 }
+
 // DeleteProvider deletes a provider.
 func (h *ProviderHandler) DeleteProvider(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("provider_id"), 10, 64)
@@ -243,7 +246,9 @@ func (h *ProviderHandler) GetProviderModels(c *gin.Context) {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if mids == nil { mids = []int64{} }
+	if mids == nil {
+		mids = []int64{}
+	}
 	// Resolve model details
 	modelList := make([]*models.Model, 0, len(mids))
 	for _, mid := range mids {

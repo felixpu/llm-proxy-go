@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 
@@ -35,22 +36,22 @@ type RoutingModelUpdate struct {
 
 // LLMRoutingConfigUpdate represents an LLM routing configuration update.
 type LLMRoutingConfigUpdate struct {
-	Enabled                 *bool    `json:"enabled"`
-	PrimaryModelID          *int64   `json:"primary_model_id"`
-	FallbackModelID         *int64   `json:"fallback_model_id"`
-	TimeoutSeconds          *int     `json:"timeout_seconds"`
-	CacheEnabled            *bool    `json:"cache_enabled"`
-	CacheTTLSeconds         *int     `json:"cache_ttl_seconds"`
-	CacheTTLL3Seconds       *int     `json:"cache_ttl_l3_seconds"`
-	MaxTokens               *int     `json:"max_tokens"`
-	Temperature             *float64 `json:"temperature"`
-	RetryCount              *int     `json:"retry_count"`
-	SemanticCacheEnabled    *bool    `json:"semantic_cache_enabled"`
-	EmbeddingModelID        *int64   `json:"embedding_model_id"`
-	SimilarityThreshold     *float64 `json:"similarity_threshold"`
-	LocalEmbeddingModel     *string  `json:"local_embedding_model"`
-	ForceSmartRouting       *bool    `json:"force_smart_routing"`
-	RuleBasedRoutingEnabled   *bool    `json:"rule_based_routing_enabled"`
+	Enabled                  *bool    `json:"enabled"`
+	PrimaryModelID           *int64   `json:"primary_model_id"`
+	FallbackModelID          *int64   `json:"fallback_model_id"`
+	TimeoutSeconds           *int     `json:"timeout_seconds"`
+	CacheEnabled             *bool    `json:"cache_enabled"`
+	CacheTTLSeconds          *int     `json:"cache_ttl_seconds"`
+	CacheTTLL3Seconds        *int     `json:"cache_ttl_l3_seconds"`
+	MaxTokens                *int     `json:"max_tokens"`
+	Temperature              *float64 `json:"temperature"`
+	RetryCount               *int     `json:"retry_count"`
+	SemanticCacheEnabled     *bool    `json:"semantic_cache_enabled"`
+	EmbeddingModelID         *int64   `json:"embedding_model_id"`
+	SimilarityThreshold      *float64 `json:"similarity_threshold"`
+	LocalEmbeddingModel      *string  `json:"local_embedding_model"`
+	ForceSmartRouting        *bool    `json:"force_smart_routing"`
+	RuleBasedRoutingEnabled  *bool    `json:"rule_based_routing_enabled"`
 	RuleFallbackStrategy     *string  `json:"rule_fallback_strategy"`
 	RuleFallbackTaskType     *string  `json:"rule_fallback_task_type"`
 	CrossRoleFallbackEnabled *bool    `json:"cross_role_fallback_enabled"`
@@ -58,12 +59,25 @@ type LLMRoutingConfigUpdate struct {
 
 // RoutingHandler handles routing model and LLM config API endpoints.
 type RoutingHandler struct {
-	modelRepo  *repository.RoutingModelRepository
-	configRepo *repository.RoutingConfigRepository
+	modelRepo  routingModelStore
+	configRepo routingConfigWriterReader
+}
+
+type routingModelStore interface {
+	ListModels(ctx context.Context, providerID *int64) ([]*models.RoutingModel, error)
+	GetModel(ctx context.Context, id int64) (*models.RoutingModel, error)
+	AddModel(ctx context.Context, m *models.RoutingModel) (int64, error)
+	UpdateModelPatch(ctx context.Context, id int64, patch repository.RoutingModelPatch) error
+	DeleteModel(ctx context.Context, id int64) error
+}
+
+type routingConfigWriterReader interface {
+	GetConfig(ctx context.Context) (*models.RoutingConfig, error)
+	UpdateConfigPatch(ctx context.Context, patch repository.RoutingConfigPatch) error
 }
 
 // NewRoutingHandler creates a new RoutingHandler.
-func NewRoutingHandler(modelRepo *repository.RoutingModelRepository, configRepo *repository.RoutingConfigRepository) *RoutingHandler {
+func NewRoutingHandler(modelRepo routingModelStore, configRepo routingConfigWriterReader) *RoutingHandler {
 	return &RoutingHandler{modelRepo: modelRepo, configRepo: configRepo}
 }
 
@@ -105,6 +119,7 @@ func (h *RoutingHandler) GetRoutingModel(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, m)
 }
+
 // CreateRoutingModel creates a new routing model.
 func (h *RoutingHandler) CreateRoutingModel(c *gin.Context) {
 	var req RoutingModelCreate
@@ -142,16 +157,17 @@ func (h *RoutingHandler) UpdateRoutingModel(c *gin.Context) {
 		errorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	updates := make(map[string]any)
-	if req.ProviderID != nil { updates["provider_id"] = *req.ProviderID }
-	if req.ModelName != nil { updates["model_name"] = *req.ModelName }
-	if req.Enabled != nil { updates["enabled"] = *req.Enabled }
-	if req.Priority != nil { updates["priority"] = *req.Priority }
-	if req.CostPerMtokInput != nil { updates["cost_per_mtok_input"] = *req.CostPerMtokInput }
-	if req.CostPerMtokOutput != nil { updates["cost_per_mtok_output"] = *req.CostPerMtokOutput }
-	if req.BillingMultiplier != nil { updates["billing_multiplier"] = *req.BillingMultiplier }
-	if req.Description != nil { updates["description"] = *req.Description }
-	if err := h.modelRepo.UpdateModel(c.Request.Context(), id, updates); err != nil {
+	patch := repository.RoutingModelPatch{
+		ProviderID:        req.ProviderID,
+		ModelName:         req.ModelName,
+		Enabled:           req.Enabled,
+		Priority:          req.Priority,
+		CostPerMtokInput:  req.CostPerMtokInput,
+		CostPerMtokOutput: req.CostPerMtokOutput,
+		BillingMultiplier: req.BillingMultiplier,
+		Description:       req.Description,
+	}
+	if err := h.modelRepo.UpdateModelPatch(c.Request.Context(), id, patch); err != nil {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -189,27 +205,28 @@ func (h *RoutingHandler) UpdateLLMRoutingConfig(c *gin.Context) {
 		errorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	updates := make(map[string]any)
-	if req.Enabled != nil { updates["enabled"] = *req.Enabled }
-	if req.PrimaryModelID != nil { updates["primary_model_id"] = *req.PrimaryModelID }
-	if req.FallbackModelID != nil { updates["fallback_model_id"] = *req.FallbackModelID }
-	if req.TimeoutSeconds != nil { updates["timeout_seconds"] = *req.TimeoutSeconds }
-	if req.CacheEnabled != nil { updates["cache_enabled"] = *req.CacheEnabled }
-	if req.CacheTTLSeconds != nil { updates["cache_ttl_seconds"] = *req.CacheTTLSeconds }
-	if req.CacheTTLL3Seconds != nil { updates["cache_ttl_l3_seconds"] = *req.CacheTTLL3Seconds }
-	if req.MaxTokens != nil { updates["max_tokens"] = *req.MaxTokens }
-	if req.Temperature != nil { updates["temperature"] = *req.Temperature }
-	if req.RetryCount != nil { updates["retry_count"] = *req.RetryCount }
-	if req.SemanticCacheEnabled != nil { updates["semantic_cache_enabled"] = *req.SemanticCacheEnabled }
-	if req.EmbeddingModelID != nil { updates["embedding_model_id"] = *req.EmbeddingModelID }
-	if req.SimilarityThreshold != nil { updates["similarity_threshold"] = *req.SimilarityThreshold }
-	if req.LocalEmbeddingModel != nil { updates["local_embedding_model"] = *req.LocalEmbeddingModel }
-	if req.ForceSmartRouting != nil { updates["force_smart_routing"] = *req.ForceSmartRouting }
-	if req.RuleBasedRoutingEnabled != nil { updates["rule_based_routing_enabled"] = *req.RuleBasedRoutingEnabled }
-	if req.RuleFallbackStrategy != nil { updates["rule_fallback_strategy"] = *req.RuleFallbackStrategy }
-	if req.RuleFallbackTaskType != nil { updates["rule_fallback_task_type"] = *req.RuleFallbackTaskType }
-	if req.CrossRoleFallbackEnabled != nil { updates["cross_role_fallback_enabled"] = *req.CrossRoleFallbackEnabled }
-	if err := h.configRepo.UpdateConfig(c.Request.Context(), updates); err != nil {
+	patch := repository.RoutingConfigPatch{
+		Enabled:                  req.Enabled,
+		PrimaryModelID:           req.PrimaryModelID,
+		FallbackModelID:          req.FallbackModelID,
+		TimeoutSeconds:           req.TimeoutSeconds,
+		CacheEnabled:             req.CacheEnabled,
+		CacheTTLSeconds:          req.CacheTTLSeconds,
+		CacheTTLL3Seconds:        req.CacheTTLL3Seconds,
+		MaxTokens:                req.MaxTokens,
+		Temperature:              req.Temperature,
+		RetryCount:               req.RetryCount,
+		SemanticCacheEnabled:     req.SemanticCacheEnabled,
+		EmbeddingModelID:         req.EmbeddingModelID,
+		SimilarityThreshold:      req.SimilarityThreshold,
+		LocalEmbeddingModel:      req.LocalEmbeddingModel,
+		ForceSmartRouting:        req.ForceSmartRouting,
+		RuleBasedRoutingEnabled:  req.RuleBasedRoutingEnabled,
+		RuleFallbackStrategy:     req.RuleFallbackStrategy,
+		RuleFallbackTaskType:     req.RuleFallbackTaskType,
+		CrossRoleFallbackEnabled: req.CrossRoleFallbackEnabled,
+	}
+	if err := h.configRepo.UpdateConfigPatch(c.Request.Context(), patch); err != nil {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}

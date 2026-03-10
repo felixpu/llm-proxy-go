@@ -21,12 +21,12 @@ const (
 
 // LogsHandler handles request log endpoints.
 type LogsHandler struct {
-	logRepo repository.RequestLogRepository
+	logRepo repository.RequestLogQueryRepository
 	logger  *zap.Logger
 }
 
 // NewLogsHandler creates a new LogsHandler.
-func NewLogsHandler(logRepo repository.RequestLogRepository, logger *zap.Logger) *LogsHandler {
+func NewLogsHandler(logRepo repository.RequestLogQueryRepository, logger *zap.Logger) *LogsHandler {
 	return &LogsHandler{logRepo: logRepo, logger: logger}
 }
 

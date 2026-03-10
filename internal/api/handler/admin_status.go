@@ -47,6 +47,7 @@ type EndpointStateInfo struct {
 	AvgResponseTimeMs float64 `json:"avg_response_time_ms"`
 	LastCheckTime     string  `json:"last_check_time,omitempty"`
 }
+
 // RoutingDebugResponse represents routing debug information.
 type RoutingDebugResponse struct {
 	DefaultRole   string      `json:"default_role"`
@@ -76,8 +77,8 @@ var startTime = time.Now()
 // StatusHandler handles system status API endpoints.
 type StatusHandler struct {
 	healthChecker *service.HealthChecker
-	modelRepo     *repository.SQLModelRepository
-	logRepo       repository.RequestLogRepository
+	modelRepo     repository.ModelRepository
+	logRepo       repository.RequestLogAnalyticsRepository
 	llmRouter     *service.LLMRouter
 	endpointStore *service.EndpointStore
 }
@@ -85,8 +86,8 @@ type StatusHandler struct {
 // NewStatusHandler creates a new StatusHandler.
 func NewStatusHandler(
 	hc *service.HealthChecker,
-	modelRepo *repository.SQLModelRepository,
-	logRepo repository.RequestLogRepository,
+	modelRepo repository.ModelRepository,
+	logRepo repository.RequestLogAnalyticsRepository,
 	llmRouter *service.LLMRouter,
 	endpointStore *service.EndpointStore,
 ) *StatusHandler {
@@ -98,6 +99,7 @@ func NewStatusHandler(
 		endpointStore: endpointStore,
 	}
 }
+
 // GetSystemStatus returns detailed system status.
 func (h *StatusHandler) GetSystemStatus(c *gin.Context) {
 	states := h.healthChecker.GetAllStates()

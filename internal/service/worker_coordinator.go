@@ -30,9 +30,9 @@ type WorkerCoordinator struct {
 	stateRepo  *repository.SharedStateRepository
 	logger     *zap.Logger
 
-	mu       sync.RWMutex
-	done     chan struct{}
-	wg       sync.WaitGroup
+	mu   sync.RWMutex
+	done chan struct{}
+	wg   sync.WaitGroup
 }
 
 // NewWorkerCoordinator creates a new WorkerCoordinator
@@ -203,8 +203,9 @@ func (wc *WorkerCoordinator) GetSharedState(ctx context.Context, key string, des
 // Unregister removes this worker from the registry
 func (wc *WorkerCoordinator) Unregister(ctx context.Context) error {
 	wc.mu.Lock()
+	wasRunning := wc.running
 	wc.running = false
-	if wc.done != nil {
+	if wasRunning && wc.done != nil {
 		close(wc.done)
 	}
 	wc.mu.Unlock()

@@ -16,6 +16,19 @@ type SQLProviderRepository struct {
 	db *sql.DB
 }
 
+// ProviderPatch is a typed partial update payload for providers.
+type ProviderPatch struct {
+	Name          *string
+	BaseURL       *string
+	APIKey        *string
+	Weight        *int
+	MaxConcurrent *int
+	Enabled       *bool
+	Description   *string
+	CustomHeaders *map[string]string
+	APIType       *string
+}
+
 // NewProviderRepository creates a new SQLProviderRepository.
 func NewProviderRepository(db *sql.DB) *SQLProviderRepository {
 	return &SQLProviderRepository{db: db}
@@ -170,7 +183,7 @@ func (r *SQLProviderRepository) Insert(ctx context.Context, p *models.Provider, 
 	return id, nil
 }
 
-func (r *SQLProviderRepository) Update(ctx context.Context, id int64, updates map[string]any, modelIDs []int64) error {
+func (r *SQLProviderRepository) updateWithMap(ctx context.Context, id int64, updates map[string]any, modelIDs []int64) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("failed to begin tx: %w", err)
@@ -221,6 +234,39 @@ func (r *SQLProviderRepository) Update(ctx context.Context, id int64, updates ma
 		return fmt.Errorf("failed to commit: %w", err)
 	}
 	return nil
+}
+
+// UpdatePatch updates provider with a typed patch payload.
+func (r *SQLProviderRepository) UpdatePatch(ctx context.Context, id int64, patch ProviderPatch, modelIDs []int64) error {
+	updates := make(map[string]any)
+	if patch.Name != nil {
+		updates["name"] = *patch.Name
+	}
+	if patch.BaseURL != nil {
+		updates["base_url"] = *patch.BaseURL
+	}
+	if patch.APIKey != nil {
+		updates["api_key"] = *patch.APIKey
+	}
+	if patch.Weight != nil {
+		updates["weight"] = *patch.Weight
+	}
+	if patch.MaxConcurrent != nil {
+		updates["max_concurrent"] = *patch.MaxConcurrent
+	}
+	if patch.Enabled != nil {
+		updates["enabled"] = *patch.Enabled
+	}
+	if patch.Description != nil {
+		updates["description"] = *patch.Description
+	}
+	if patch.CustomHeaders != nil {
+		updates["custom_headers"] = *patch.CustomHeaders
+	}
+	if patch.APIType != nil {
+		updates["api_type"] = *patch.APIType
+	}
+	return r.updateWithMap(ctx, id, updates, modelIDs)
 }
 
 func (r *SQLProviderRepository) Delete(ctx context.Context, id int64) error {

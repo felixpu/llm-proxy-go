@@ -241,23 +241,8 @@ window.VuePages = window.VuePages || {};
           stats.totalCost = data.total_cost || 0;
           stats.avgLatency = data.avg_latency || 0;
           stats.successRate = data.success_rate || 0;
-
-          // 计算缓存统计（从当前日志列表）
-          if (logs.value && logs.value.length > 0) {
-            var totalCacheReadTokens = 0;
-            var requestsWithCacheHit = 0;
-            logs.value.forEach(function(log) {
-              totalCacheReadTokens += (log.cache_read_input_tokens || 0);
-              if ((log.cache_read_input_tokens || 0) > 0) {
-                requestsWithCacheHit++;
-              }
-            });
-            stats.totalCacheReadTokens = totalCacheReadTokens;
-            stats.cacheHitRate = logs.value.length > 0 ? requestsWithCacheHit / logs.value.length : 0;
-          } else {
-            stats.totalCacheReadTokens = 0;
-            stats.cacheHitRate = 0;
-          }
+          stats.totalCacheReadTokens = data.total_cache_read_tokens || 0;
+          stats.cacheHitRate = (data.cache_hit_rate || 0) / 100;
 
           // Extract filter options from the same response
           filterOptions.models = (data.by_model || []).map(function (item) {
@@ -897,7 +882,7 @@ window.VuePages = window.VuePages || {};
                 <div class="log-card-info">\
                     <!-- 第一行：模型 + 状态图标 + 端点 + 时间 -->\
                     <div class="log-card-header">\
-                        <span class="log-card-model">{{ log.model_name }}</span>\
+                        <span class="log-card-model">{{ log.resolved_model || log.model_name }}</span>\
                         <span class="log-status-icons">\
                             <span v-show="log.success" class="log-icon log-icon-success" title="成功">\
                                 <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>\
@@ -917,7 +902,6 @@ window.VuePages = window.VuePages || {};
                         </span>\
                         <span class="log-card-separator">|</span>\
                         <span class="log-card-endpoint">{{ log.endpoint_name }}</span>\
-                        <span class="log-card-time">{{ formatDateTime(log.created_at) }}</span>\
                     </div>\
                     <!-- 第二行：徽章 + 延迟 + 用户 -->\
                     <div class="log-card-badges">\
@@ -925,7 +909,6 @@ window.VuePages = window.VuePages || {};
                         <span class="routing-method-badge" :class="getRoutingMethodClass(log.routing_method)" :title="getRoutingMethodTooltip(log.routing_method)">{{ formatRoutingMethod(log.routing_method) }}</span>\
                         <span v-show="log.matched_rule_name" class="log-card-rule">{{ log.matched_rule_name }}</span>\
                         <span class="log-card-latency">{{ (log.latency_ms||0).toFixed(0) }} ms</span>\
-                        <span v-show="log.username" class="log-card-user">{{ log.username }}</span>\
                     </div>\
                 </div>\
                 <!-- TOKEN 列 -->\
@@ -968,34 +951,40 @@ window.VuePages = window.VuePages || {};
                 <!-- 费用列 -->\
                 <div class="log-card-metric" @click.stop>\
                     <span class="log-card-metric-label">费用</span>\
-                    <span class="log-card-metric-value">\
-                        ${{ (log.cost||0).toFixed(6) }}\
-                        <span class="rich-tooltip-wrap">\
-                            <span class="metric-info-icon">\
-                                <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>\
+                    <div class="log-card-metric-body">\
+                        <span class="log-card-metric-value">\
+                            ${{ (log.cost||0).toFixed(6) }}\
+                            <span class="rich-tooltip-wrap">\
+                                <span class="metric-info-icon">\
+                                    <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>\
+                                </span>\
+                                <div class="rich-tooltip">\
+                                    <div class="rich-tooltip-title">成本明细</div>\
+                                    <div class="rich-tooltip-row">\
+                                        <span class="rich-tooltip-label">输入成本</span>\
+                                        <span class="rich-tooltip-val">${{ computeInputCost(log) }}</span>\
+                                    </div>\
+                                    <div class="rich-tooltip-row">\
+                                        <span class="rich-tooltip-label">输出成本</span>\
+                                        <span class="rich-tooltip-val">${{ computeOutputCost(log) }}</span>\
+                                    </div>\
+                                    <div v-show="log.cache_creation_input_tokens > 0" class="rich-tooltip-row">\
+                                        <span class="rich-tooltip-label">缓存创建成本</span>\
+                                        <span class="rich-tooltip-val">${{ computeCacheCreateCost(log) }}</span>\
+                                    </div>\
+                                    <div class="rich-tooltip-divider"></div>\
+                                    <div class="rich-tooltip-row">\
+                                        <span class="rich-tooltip-label">计费</span>\
+                                        <span class="rich-tooltip-val val-highlight">${{ (log.cost||0).toFixed(6) }}</span>\
+                                    </div>\
+                                </div>\
                             </span>\
-                            <div class="rich-tooltip">\
-                                <div class="rich-tooltip-title">成本明细</div>\
-                                <div class="rich-tooltip-row">\
-                                    <span class="rich-tooltip-label">输入成本</span>\
-                                    <span class="rich-tooltip-val">${{ computeInputCost(log) }}</span>\
-                                </div>\
-                                <div class="rich-tooltip-row">\
-                                    <span class="rich-tooltip-label">输出成本</span>\
-                                    <span class="rich-tooltip-val">${{ computeOutputCost(log) }}</span>\
-                                </div>\
-                                <div v-show="log.cache_creation_input_tokens > 0" class="rich-tooltip-row">\
-                                    <span class="rich-tooltip-label">缓存创建成本</span>\
-                                    <span class="rich-tooltip-val">${{ computeCacheCreateCost(log) }}</span>\
-                                </div>\
-                                <div class="rich-tooltip-divider"></div>\
-                                <div class="rich-tooltip-row">\
-                                    <span class="rich-tooltip-label">计费</span>\
-                                    <span class="rich-tooltip-val val-highlight">${{ (log.cost||0).toFixed(6) }}</span>\
-                                </div>\
-                            </div>\
                         </span>\
-                    </span>\
+                        <div class="log-card-metric-meta">\
+                            <span class="log-card-metric-meta-time">{{ formatDateTime(log.created_at) }}</span>\
+                            <span class="log-card-metric-meta-user" v-show="log.username">{{ log.username }}</span>\
+                        </div>\
+                    </div>\
                 </div>\
             </div>\
         </div>\
@@ -1035,8 +1024,12 @@ window.VuePages = window.VuePages || {};
                                 <span class="detail-value">{{ logDetail.username }}</span>\
                             </div>\
                             <div class="detail-item">\
-                                <span class="detail-label">模型</span>\
-                                <span class="detail-value">{{ logDetail.model_name }}</span>\
+                                <span class="detail-label">请求模型</span>\
+                                <span class="detail-value">{{ logDetail.requested_model || "-" }}</span>\
+                            </div>\
+                            <div class="detail-item">\
+                                <span class="detail-label">解析模型</span>\
+                                <span class="detail-value">{{ logDetail.resolved_model || logDetail.model_name || "-" }}</span>\
                             </div>\
                             <div class="detail-item">\
                                 <span class="detail-label">端点</span>\

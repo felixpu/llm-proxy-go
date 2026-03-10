@@ -142,7 +142,7 @@ func TestEmbeddingModelRepository_UpdateModel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := repo.UpdateModel(ctx, tt.id, tt.updates)
+			err := repo.UpdateModelPatch(ctx, tt.id, embeddingModelPatchFromMap(tt.updates))
 			require.NoError(t, err)
 
 			// Get model by listing and finding by ID
@@ -159,6 +159,54 @@ func TestEmbeddingModelRepository_UpdateModel(t *testing.T) {
 			tt.verify(t, found)
 		})
 	}
+}
+
+func embeddingModelPatchFromMap(updates map[string]any) EmbeddingModelPatch {
+	patch := EmbeddingModelPatch{}
+	if v, ok := updates["name"].(string); ok {
+		patch.Name = &v
+	}
+	if v, ok := updates["dimension"].(int); ok {
+		patch.Dimension = &v
+	}
+	if v, ok := updates["description"].(string); ok {
+		patch.Description = &v
+	}
+	if v, ok := updates["fastembed_supported"].(bool); ok {
+		patch.FastembedSupported = &v
+	}
+	if v, ok := updates["fastembed_name"].(string); ok {
+		patch.FastembedName = &v
+	}
+	if v, ok := updates["enabled"].(bool); ok {
+		patch.Enabled = &v
+	}
+	if v, ok := updates["sort_order"].(int); ok {
+		patch.SortOrder = &v
+	}
+	return patch
+}
+
+func TestEmbeddingModelRepository_UpdateModelPatch(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	repo := NewEmbeddingModelRepository(db, zap.NewNop())
+	ctx := context.Background()
+	seedEmbeddingModels(t, db)
+
+	description := "typed description"
+	enabled := false
+	patch := EmbeddingModelPatch{
+		Description: &description,
+		Enabled:     &enabled,
+	}
+
+	require.NoError(t, repo.UpdateModelPatch(ctx, 1, patch))
+
+	model, err := repo.GetModelByName(ctx, "paraphrase-multilingual-MiniLM-L12-v2")
+	require.NoError(t, err)
+	require.NotNil(t, model)
+	assert.Equal(t, "typed description", model.Description)
+	assert.False(t, model.Enabled)
 }
 
 func TestEmbeddingModelRepository_DeleteModel(t *testing.T) {

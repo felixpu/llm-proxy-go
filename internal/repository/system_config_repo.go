@@ -11,12 +11,36 @@ import (
 // SystemConfigRepository handles system configuration data access.
 // Operates on routing_config, load_balance_config, health_check_config, ui_config tables.
 type SystemConfigRepository struct {
-	db *sql.DB
+	db     *sql.DB
+	readDB *sql.DB
+}
+
+type SystemRoutingConfigPatch struct {
+	DefaultRole *string
+}
+
+type SystemLoadBalanceConfigPatch struct {
+	Strategy *string
+}
+
+type SystemHealthCheckConfigPatch struct {
+	Enabled         *bool
+	IntervalSeconds *int
+	TimeoutSeconds  *int
+}
+
+type SystemUIConfigPatch struct {
+	DashboardRefreshSeconds *int
+	LogsRefreshSeconds      *int
 }
 
 // NewSystemConfigRepository creates a new SystemConfigRepository.
-func NewSystemConfigRepository(db *sql.DB) *SystemConfigRepository {
-	return &SystemConfigRepository{db: db}
+func NewSystemConfigRepository(db *sql.DB, readDB ...*sql.DB) *SystemConfigRepository {
+	repo := &SystemConfigRepository{db: db, readDB: db}
+	if len(readDB) > 0 && readDB[0] != nil {
+		repo.readDB = readDB[0]
+	}
+	return repo
 }
 
 // GetRoutingConfig retrieves the routing configuration (single row, id=1).
@@ -24,8 +48,12 @@ func (r *SystemConfigRepository) GetRoutingConfig(ctx context.Context) (map[stri
 	return r.getConfig(ctx, "routing_config")
 }
 
-// UpdateRoutingConfig updates the routing configuration.
-func (r *SystemConfigRepository) UpdateRoutingConfig(ctx context.Context, updates map[string]any) error {
+// UpdateRoutingConfigPatch updates the routing configuration.
+func (r *SystemConfigRepository) UpdateRoutingConfigPatch(ctx context.Context, patch SystemRoutingConfigPatch) error {
+	updates := make(map[string]any)
+	if patch.DefaultRole != nil {
+		updates["default_role"] = *patch.DefaultRole
+	}
 	return r.updateConfig(ctx, "routing_config", updates)
 }
 
@@ -34,8 +62,12 @@ func (r *SystemConfigRepository) GetLoadBalanceConfig(ctx context.Context) (map[
 	return r.getConfig(ctx, "load_balance_config")
 }
 
-// UpdateLoadBalanceConfig updates the load balance configuration.
-func (r *SystemConfigRepository) UpdateLoadBalanceConfig(ctx context.Context, updates map[string]any) error {
+// UpdateLoadBalanceConfigPatch updates the load balance configuration.
+func (r *SystemConfigRepository) UpdateLoadBalanceConfigPatch(ctx context.Context, patch SystemLoadBalanceConfigPatch) error {
+	updates := make(map[string]any)
+	if patch.Strategy != nil {
+		updates["strategy"] = *patch.Strategy
+	}
 	return r.updateConfig(ctx, "load_balance_config", updates)
 }
 
@@ -43,8 +75,19 @@ func (r *SystemConfigRepository) UpdateLoadBalanceConfig(ctx context.Context, up
 func (r *SystemConfigRepository) GetHealthCheckConfig(ctx context.Context) (map[string]any, error) {
 	return r.getConfig(ctx, "health_check_config")
 }
-// UpdateHealthCheckConfig updates the health check configuration.
-func (r *SystemConfigRepository) UpdateHealthCheckConfig(ctx context.Context, updates map[string]any) error {
+
+// UpdateHealthCheckConfigPatch updates the health check configuration.
+func (r *SystemConfigRepository) UpdateHealthCheckConfigPatch(ctx context.Context, patch SystemHealthCheckConfigPatch) error {
+	updates := make(map[string]any)
+	if patch.Enabled != nil {
+		updates["enabled"] = *patch.Enabled
+	}
+	if patch.IntervalSeconds != nil {
+		updates["interval_seconds"] = *patch.IntervalSeconds
+	}
+	if patch.TimeoutSeconds != nil {
+		updates["timeout_seconds"] = *patch.TimeoutSeconds
+	}
 	return r.updateConfig(ctx, "health_check_config", updates)
 }
 
@@ -53,15 +96,22 @@ func (r *SystemConfigRepository) GetUIConfig(ctx context.Context) (map[string]an
 	return r.getConfig(ctx, "ui_config")
 }
 
-// UpdateUIConfig updates the UI configuration.
-func (r *SystemConfigRepository) UpdateUIConfig(ctx context.Context, updates map[string]any) error {
+// UpdateUIConfigPatch updates the UI configuration.
+func (r *SystemConfigRepository) UpdateUIConfigPatch(ctx context.Context, patch SystemUIConfigPatch) error {
+	updates := make(map[string]any)
+	if patch.DashboardRefreshSeconds != nil {
+		updates["dashboard_refresh_seconds"] = *patch.DashboardRefreshSeconds
+	}
+	if patch.LogsRefreshSeconds != nil {
+		updates["logs_refresh_seconds"] = *patch.LogsRefreshSeconds
+	}
 	return r.updateConfig(ctx, "ui_config", updates)
 }
 
 // getConfig reads a single-row config table and returns all columns as a map.
 func (r *SystemConfigRepository) getConfig(ctx context.Context, table string) (map[string]any, error) {
 	query := fmt.Sprintf("SELECT * FROM %s WHERE id = 1", table)
-	rows, err := r.db.QueryContext(ctx, query)
+	rows, err := r.readDB.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get %s: %w", table, err)
 	}

@@ -21,16 +21,30 @@ const (
 
 // RoutingAnalysisHandler handles routing analysis endpoints.
 type RoutingAnalysisHandler struct {
-	logRepo    repository.RequestLogRepository
+	logRepo    requestLogAnalysisStore
 	ruleRepo   repository.RoutingRuleRepository
 	analyzer   *service.RoutingAnalyzer
-	reportRepo *repository.AnalysisReportRepository
+	reportRepo analysisReportStore
 	logger     *zap.Logger
+}
+
+type requestLogAnalysisStore interface {
+	GetByID(ctx context.Context, id int64) (*models.RequestLog, error)
+	List(ctx context.Context, limit, offset int, userID *int64, modelName, endpointName *string, startTime, endTime *time.Time, success *bool) ([]*models.RequestLog, int64, error)
+	MarkInaccurate(ctx context.Context, id int64, inaccurate bool) error
+	GetRoutingAggregation(ctx context.Context, startTime, endTime *time.Time) (*repository.RoutingAggregation, error)
+	ListInaccurate(ctx context.Context, limit, offset int) ([]*models.RequestLog, int64, error)
+}
+
+type analysisReportStore interface {
+	List(ctx context.Context, limit, offset int) ([]*models.AnalysisReport, int, error)
+	GetByID(ctx context.Context, id int64) (*models.AnalysisReport, error)
+	Delete(ctx context.Context, id int64) error
 }
 
 // NewRoutingAnalysisHandler creates a new RoutingAnalysisHandler.
 func NewRoutingAnalysisHandler(
-	logRepo repository.RequestLogRepository,
+	logRepo requestLogAnalysisStore,
 	ruleRepo repository.RoutingRuleRepository,
 	logger *zap.Logger,
 ) *RoutingAnalysisHandler {
@@ -42,18 +56,18 @@ func NewRoutingAnalysisHandler(
 }
 
 // SetAnalyzer sets the routing analyzer (called after initialization).
-func (h *RoutingAnalysisHandler) SetAnalyzer(analyzer *service.RoutingAnalyzer, reportRepo *repository.AnalysisReportRepository) {
+func (h *RoutingAnalysisHandler) SetAnalyzer(analyzer *service.RoutingAnalyzer, reportRepo analysisReportStore) {
 	h.analyzer = analyzer
 	h.reportRepo = reportRepo
 }
 
 // RoutingStats represents routing statistics.
 type RoutingStats struct {
-	TotalRequests    int64                    `json:"total_requests"`
-	ByMethod         map[string]MethodStats   `json:"by_method"`
-	ByRule           []RuleStats              `json:"by_rule"`
-	InaccurateCount  int64                    `json:"inaccurate_count"`
-	InaccurateRate   float64                  `json:"inaccurate_rate"`
+	TotalRequests   int64                  `json:"total_requests"`
+	ByMethod        map[string]MethodStats `json:"by_method"`
+	ByRule          []RuleStats            `json:"by_rule"`
+	InaccurateCount int64                  `json:"inaccurate_count"`
+	InaccurateRate  float64                `json:"inaccurate_rate"`
 }
 
 // MethodStats represents statistics for a routing method.
@@ -269,7 +283,13 @@ func (h *RoutingAnalysisHandler) ExportRoutingData(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "100"))
 	inaccurateOnly := c.Query("inaccurate_only") == "true"
 
-	logs, _, err := h.logRepo.List(ctx, limit, 0, nil, nil, nil, nil, nil, nil)
+	var logs []*models.RequestLog
+	var err error
+	if inaccurateOnly {
+		logs, _, err = h.logRepo.ListInaccurate(ctx, limit, 0)
+	} else {
+		logs, _, err = h.logRepo.List(ctx, limit, 0, nil, nil, nil, nil, nil, nil)
+	}
 	if err != nil {
 		h.logger.Error("failed to export routing data", zap.Error(err))
 		errorResponse(c, http.StatusInternalServerError, "Failed to export data")
@@ -277,21 +297,18 @@ func (h *RoutingAnalysisHandler) ExportRoutingData(c *gin.Context) {
 	}
 
 	type ExportEntry struct {
-		ID              int64    `json:"id"`
-		MessagePreview  string   `json:"message_preview"`
-		RequestContent  string   `json:"request_content,omitempty"`
-		TaskType        string   `json:"task_type"`
-		RoutingMethod   string   `json:"routing_method"`
-		RoutingReason   string   `json:"routing_reason"`
-		MatchedRuleName string   `json:"matched_rule_name"`
-		IsInaccurate    bool     `json:"is_inaccurate"`
+		ID              int64  `json:"id"`
+		MessagePreview  string `json:"message_preview"`
+		RequestContent  string `json:"request_content,omitempty"`
+		TaskType        string `json:"task_type"`
+		RoutingMethod   string `json:"routing_method"`
+		RoutingReason   string `json:"routing_reason"`
+		MatchedRuleName string `json:"matched_rule_name"`
+		IsInaccurate    bool   `json:"is_inaccurate"`
 	}
 
 	var entries []ExportEntry
 	for _, log := range logs {
-		if inaccurateOnly && !log.IsInaccurate {
-			continue
-		}
 		entries = append(entries, ExportEntry{
 			ID:              log.ID,
 			MessagePreview:  log.MessagePreview,
@@ -307,6 +324,15 @@ func (h *RoutingAnalysisHandler) ExportRoutingData(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"entries": entries,
 		"count":   len(entries),
+		"meta": gin.H{
+			"inaccurate_only": inaccurateOnly,
+			"scope_note": func() string {
+				if inaccurateOnly {
+					return "当前导出仅包含已标记不准确日志（is_inaccurate = true）。"
+				}
+				return "当前导出为按时间倒序的请求样本，不代表全量分布。"
+			}(),
+		},
 	})
 }
 

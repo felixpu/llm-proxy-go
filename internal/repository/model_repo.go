@@ -15,6 +15,18 @@ type SQLModelRepository struct {
 	db *sql.DB
 }
 
+// ModelPatch is a typed partial update payload for models.
+type ModelPatch struct {
+	Name              *string
+	Role              *string
+	CostPerMtokInput  *float64
+	CostPerMtokOutput *float64
+	BillingMultiplier *float64
+	SupportsThinking  *bool
+	Enabled           *bool
+	Weight            *int
+}
+
 // NewModelRepository creates a new SQLModelRepository.
 func NewModelRepository(db *sql.DB) *SQLModelRepository {
 	return &SQLModelRepository{db: db}
@@ -129,7 +141,7 @@ func (r *SQLModelRepository) Insert(ctx context.Context, m *models.Model) (int64
 	return result.LastInsertId()
 }
 
-func (r *SQLModelRepository) Update(ctx context.Context, id int64, updates map[string]any) error {
+func (r *SQLModelRepository) updateWithMap(ctx context.Context, id int64, updates map[string]any) error {
 	if len(updates) == 0 {
 		return nil
 	}
@@ -151,6 +163,36 @@ func (r *SQLModelRepository) Update(ctx context.Context, id int64, updates map[s
 		return fmt.Errorf("failed to update model: %w", err)
 	}
 	return nil
+}
+
+// UpdatePatch updates model with a typed patch payload.
+func (r *SQLModelRepository) UpdatePatch(ctx context.Context, id int64, patch ModelPatch) error {
+	updates := make(map[string]any)
+	if patch.Name != nil {
+		updates["name"] = *patch.Name
+	}
+	if patch.Role != nil {
+		updates["role"] = *patch.Role
+	}
+	if patch.CostPerMtokInput != nil {
+		updates["cost_per_mtok_input"] = *patch.CostPerMtokInput
+	}
+	if patch.CostPerMtokOutput != nil {
+		updates["cost_per_mtok_output"] = *patch.CostPerMtokOutput
+	}
+	if patch.BillingMultiplier != nil {
+		updates["billing_multiplier"] = *patch.BillingMultiplier
+	}
+	if patch.SupportsThinking != nil {
+		updates["supports_thinking"] = *patch.SupportsThinking
+	}
+	if patch.Enabled != nil {
+		updates["enabled"] = *patch.Enabled
+	}
+	if patch.Weight != nil {
+		updates["weight"] = *patch.Weight
+	}
+	return r.updateWithMap(ctx, id, updates)
 }
 
 func (r *SQLModelRepository) Delete(ctx context.Context, id int64) error {

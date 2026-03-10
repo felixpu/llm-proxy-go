@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 
@@ -12,11 +13,18 @@ import (
 // CacheHandler handles cache monitoring API endpoints.
 type CacheHandler struct {
 	routingCache       *service.RoutingCache
-	embeddingCacheRepo *repository.EmbeddingCacheRepository
+	embeddingCacheRepo embeddingCacheStore
+}
+
+type embeddingCacheStore interface {
+	Count(ctx context.Context) (int64, error)
+	GetStats(ctx context.Context) (map[string]interface{}, error)
+	GetTopEntries(ctx context.Context, sortBy string, limit int) ([]*repository.EmbeddingCacheEntry, error)
+	DeleteAll(ctx context.Context) (int64, error)
 }
 
 // NewCacheHandler creates a new CacheHandler.
-func NewCacheHandler(rc *service.RoutingCache, ecr *repository.EmbeddingCacheRepository) *CacheHandler {
+func NewCacheHandler(rc *service.RoutingCache, ecr embeddingCacheStore) *CacheHandler {
 	return &CacheHandler{
 		routingCache:       rc,
 		embeddingCacheRepo: ecr,
