@@ -26,12 +26,15 @@ window.VuePages = window.VuePages || {};
       var activeTab = ref("overview");
       var providers = ref([]);
       var models = ref([]);
+      var modelAliases = ref([]);
 
       // 模态框状态
       var showModelModal = ref(false);
+      var showAliasModal = ref(false);
       var showProviderModal = ref(false);
       var showApiKey = ref(false);
       var editingModel = ref(null);
+      var editingAlias = ref(null);
       var editingProvider = ref(null);
 
       // 模型检测状态
@@ -54,6 +57,11 @@ window.VuePages = window.VuePages || {};
         billing_multiplier: 1.0,
         weight: 100,
         supports_thinking: false,
+        enabled: true,
+      });
+      var modelAliasForm = reactive({
+        alias_name: "",
+        target_model_id: null,
         enabled: true,
       });
       var providerForm = reactive({
@@ -106,6 +114,12 @@ window.VuePages = window.VuePages || {};
       var enabledModels = computed(function () {
         return models.value.filter(function (m) {
           return m.enabled;
+        });
+      });
+
+      var aliasTargetModels = computed(function () {
+        return models.value.slice().sort(function (a, b) {
+          return a.name.localeCompare(b.name);
         });
       });
 
@@ -196,11 +210,14 @@ window.VuePages = window.VuePages || {};
           var results = await Promise.all([
             VueApi.get("/api/config/providers"),
             VueApi.get("/api/config/models"),
+            VueApi.get("/api/config/model-aliases"),
           ]);
           var providersData = await results[0].json();
           var modelsData = await results[1].json();
+          var aliasesData = await results[2].json();
           providers.value = providersData.providers || [];
           models.value = modelsData.models || [];
+          modelAliases.value = aliasesData.model_aliases || [];
         } catch (error) {
           toastStore.error("加载失败: " + error.message);
         } finally {
@@ -284,6 +301,98 @@ window.VuePages = window.VuePages || {};
         } catch (error) {
           toastStore.error(error.message);
         }
+      }
+
+      // ========== 模型映射操作 ==========
+
+      function showAddAliasModal() {
+        editingAlias.value = null;
+        modelAliasForm.alias_name = "";
+        modelAliasForm.target_model_id = null;
+        modelAliasForm.enabled = true;
+        showAliasModal.value = true;
+      }
+
+      function showEditAliasModal(alias) {
+        editingAlias.value = alias;
+        modelAliasForm.alias_name = alias.alias_name;
+        modelAliasForm.target_model_id = alias.target_model_id;
+        modelAliasForm.enabled = !!alias.enabled;
+        showAliasModal.value = true;
+      }
+
+      async function saveModelAlias() {
+        saving.value = true;
+        try {
+          var data = {
+            alias_name: modelAliasForm.alias_name,
+            target_model_id: modelAliasForm.target_model_id,
+            enabled: modelAliasForm.enabled,
+          };
+          var url = editingAlias.value
+            ? "/api/config/model-aliases/" + editingAlias.value.id
+            : "/api/config/model-aliases";
+          var method = editingAlias.value ? "PUT" : "POST";
+          var response = await VueApi.request(url, {
+            method: method,
+            body: JSON.stringify(data),
+          });
+          if (!response.ok) {
+            var err = await response.json();
+            throw new Error(err.detail || "保存失败");
+          }
+          showAliasModal.value = false;
+          toastStore.success(editingAlias.value ? "模型映射已更新" : "模型映射已创建");
+          await loadData();
+        } catch (error) {
+          toastStore.error(error.message);
+        } finally {
+          saving.value = false;
+        }
+      }
+
+      async function deleteModelAlias(alias) {
+        var confirmed = await confirmStore.delete(alias.alias_name, "模型映射");
+        if (!confirmed) return;
+        try {
+          var response = await VueApi.delete(
+            "/api/config/model-aliases/" + alias.id,
+          );
+          if (!response.ok) throw new Error("删除失败");
+          toastStore.success("模型映射已删除");
+          await loadData();
+        } catch (error) {
+          toastStore.error(error.message);
+        }
+      }
+
+      async function toggleModelAliasEnabled(alias) {
+        var newEnabled = !alias.enabled;
+        alias.enabled = newEnabled;
+        try {
+          var response = await VueApi.request(
+            "/api/config/model-aliases/" + alias.id,
+            {
+              method: "PUT",
+              body: JSON.stringify({ enabled: newEnabled }),
+            },
+          );
+          if (!response.ok) {
+            alias.enabled = !newEnabled;
+            var err = await response.json();
+            toastStore.error(err.detail || "切换失败");
+          }
+        } catch (error) {
+          alias.enabled = !newEnabled;
+          toastStore.error("切换失败: " + error.message);
+        }
+      }
+
+      function getModelNameById(modelId) {
+        var model = models.value.find(function (m) {
+          return m.id === modelId;
+        });
+        return model ? model.name : "模型 #" + modelId;
       }
 
       // ========== 服务商操作 ==========
@@ -563,10 +672,13 @@ window.VuePages = window.VuePages || {};
         activeTab: activeTab,
         providers: providers,
         models: models,
+        modelAliases: modelAliases,
         showModelModal: showModelModal,
+        showAliasModal: showAliasModal,
         showProviderModal: showProviderModal,
         showApiKey: showApiKey,
         editingModel: editingModel,
+        editingAlias: editingAlias,
         editingProvider: editingProvider,
         detecting: detecting,
         detectedModels: detectedModels,
@@ -576,20 +688,28 @@ window.VuePages = window.VuePages || {};
         openDropdown: openDropdown,
         roleSelectOpen: roleSelectOpen,
         modelForm: modelForm,
+        modelAliasForm: modelAliasForm,
         providerForm: providerForm,
         roleOptions: roleOptions,
         relationCount: relationCount,
         unassociatedModels: unassociatedModels,
         enabledModels: enabledModels,
+        aliasTargetModels: aliasTargetModels,
         groupedDetectedModels: groupedDetectedModels,
         filteredModelCount: filteredModelCount,
         roleLabel: roleLabel,
         shortenModelName: shortenModelName,
+        getModelNameById: getModelNameById,
         switchTab: switchTab,
         showAddModelModal: showAddModelModal,
         showEditModelModal: showEditModelModal,
         saveModel: saveModel,
         deleteModel: deleteModel,
+        showAddAliasModal: showAddAliasModal,
+        showEditAliasModal: showEditAliasModal,
+        saveModelAlias: saveModelAlias,
+        deleteModelAlias: deleteModelAlias,
+        toggleModelAliasEnabled: toggleModelAliasEnabled,
         showAddProviderModal: showAddProviderModal,
         showEditProviderModal: showEditProviderModal,
         toggleModelId: toggleModelId,
@@ -610,6 +730,7 @@ window.VuePages = window.VuePages || {};
         <button class="tab-btn" :class="{\'active\': activeTab === \'overview\'}" @click="switchTab(\'overview\')">概览</button>\
         <button class="tab-btn" :class="{\'active\': activeTab === \'providers\'}" @click="switchTab(\'providers\')">服务商</button>\
         <button class="tab-btn" :class="{\'active\': activeTab === \'models\'}" @click="switchTab(\'models\')">模型</button>\
+        <button class="tab-btn" :class="{\'active\': activeTab === \'aliases\'}" @click="switchTab(\'aliases\')">模型映射</button>\
     </div>\
     <div>\
         <div class="tab-pane" :class="{\'active\': activeTab === \'overview\'}">\
@@ -878,6 +999,73 @@ window.VuePages = window.VuePages || {};
                 </div>\
             </div>\
         </div>\
+        <div class="tab-pane" :class="{\'active\': activeTab === \'aliases\'}">\
+            <div class="section">\
+                <div class="section-header">\
+                    <div class="section-header-text">\
+                        <h4>模型映射</h4>\
+                        <p class="section-desc">将客户端传入的模型名精确映射到你后台已配置的真实模型，后续继续复用现有服务商选择逻辑。</p>\
+                    </div>\
+                    <div class="section-header-action">\
+                        <button class="btn btn-primary" @click="showAddAliasModal()">+ 添加映射</button>\
+                    </div>\
+                </div>\
+                <div v-show="loading" class="loading">加载中...</div>\
+                <div v-show="!loading && modelAliases.length === 0" class="empty">暂无模型映射，点击"添加映射"开始配置</div>\
+                <div v-show="!loading && modelAliases.length > 0" class="models-table-container">\
+                    <table class="table">\
+                        <thead>\
+                            <tr>\
+                                <th>客户端模型名</th>\
+                                <th>目标模型</th>\
+                                <th>状态</th>\
+                                <th>操作</th>\
+                            </tr>\
+                        </thead>\
+                        <tbody>\
+                            <tr v-for="alias in modelAliases" :key="alias.id">\
+                                <td><strong>{{ alias.alias_name }}</strong></td>\
+                                <td>{{ getModelNameById(alias.target_model_id) }}</td>\
+                                <td><label class="toggle-switch" @click.stop><input type="checkbox" :checked="alias.enabled" @change="toggleModelAliasEnabled(alias)"><span class="toggle-slider"></span></label></td>\
+                                <td>\
+                                    <div class="dropdown">\
+                                        <button class="dropdown-trigger" @click.stop="toggleDropdown(\'a-\' + alias.id)">\
+                                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>\
+                                        </button>\
+                                        <div class="dropdown-menu" v-show="openDropdown === \'a-\' + alias.id">\
+                                            <button class="dropdown-item" @click="showEditAliasModal(alias); openDropdown = null">\
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>\
+                                                编辑\
+                                            </button>\
+                                            <div class="dropdown-divider"></div>\
+                                            <button class="dropdown-item danger" @click="deleteModelAlias(alias); openDropdown = null">\
+                                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>\
+                                                删除\
+                                            </button>\
+                                        </div>\
+                                    </div>\
+                                </td>\
+                            </tr>\
+                        </tbody>\
+                    </table>\
+                </div>\
+                <div v-show="!loading && modelAliases.length > 0" class="models-mobile">\
+                    <div v-for="alias in modelAliases" :key="alias.id" class="model-mobile-card">\
+                        <div class="model-mobile-header">\
+                            <div>\
+                                <div class="model-mobile-name">{{ alias.alias_name }}</div>\
+                                <div class="text-muted">\\u2192 {{ getModelNameById(alias.target_model_id) }}</div>\
+                                <label class="toggle-switch" style="margin-left: 6px; vertical-align: middle;" @click.stop><input type="checkbox" :checked="alias.enabled" @change="toggleModelAliasEnabled(alias)"><span class="toggle-slider"></span></label>\
+                            </div>\
+                        </div>\
+                        <div class="model-mobile-footer">\
+                            <button class="btn btn-sm" @click="showEditAliasModal(alias)">编辑</button>\
+                            <button class="btn btn-sm btn-danger" @click="deleteModelAlias(alias)">删除</button>\
+                        </div>\
+                    </div>\
+                </div>\
+            </div>\
+        </div>\
     </div>\
     <div class="modal" v-show="showModelModal" @keydown.escape="showModelModal = false">\
         <div class="modal-content" @click.stop>\
@@ -950,6 +1138,43 @@ window.VuePages = window.VuePages || {};
             <div class="modal-footer">\
                 <button type="button" class="btn" @click="showModelModal = false">取消</button>\
                 <button type="button" class="btn btn-primary" :disabled="saving" @click="saveModel">\
+                    <span v-show="!saving">保存</span>\
+                    <span v-show="saving">保存中...</span>\
+                </button>\
+            </div>\
+        </div>\
+    </div>\
+    <div class="modal" v-show="showAliasModal" @keydown.escape="showAliasModal = false">\
+        <div class="modal-content" @click.stop>\
+            <div class="modal-header">\
+                <h3>{{ editingAlias ? \'编辑模型映射\' : \'添加模型映射\' }}</h3>\
+                <button class="modal-close" @click="showAliasModal = false">&times;</button>\
+            </div>\
+            <div class="modal-body">\
+                <form @submit.prevent="saveModelAlias">\
+                    <div class="form-group">\
+                        <label>客户端模型名</label>\
+                        <input type="text" v-model="modelAliasForm.alias_name" required placeholder="如: claude-sonnet-4-6">\
+                    </div>\
+                    <div class="form-group">\
+                        <label>目标模型</label>\
+                        <select v-model.number="modelAliasForm.target_model_id" required>\
+                            <option :value="null" disabled>请选择目标模型</option>\
+                            <option v-for="model in aliasTargetModels" :key="model.id" :value="model.id">{{ model.name }}</option>\
+                        </select>\
+                    </div>\
+                    <div class="form-group">\
+                        <label>映射状态</label>\
+                        <label class="checkbox-label">\
+                            <input type="checkbox" v-model="modelAliasForm.enabled">\
+                            启用\
+                        </label>\
+                    </div>\
+                </form>\
+            </div>\
+            <div class="modal-footer">\
+                <button type="button" class="btn" @click="showAliasModal = false">取消</button>\
+                <button type="button" class="btn btn-primary" :disabled="saving" @click="saveModelAlias">\
                     <span v-show="!saving">保存</span>\
                     <span v-show="saving">保存中...</span>\
                 </button>\

@@ -26,7 +26,12 @@ type EndpointSelector struct {
 	loadBalancer      *LoadBalancer
 	llmRouter         *LLMRouter
 	routingConfigRepo RoutingConfigProvider
+	modelAliasRepo    modelAliasResolver
 	logger            *zap.Logger
+}
+
+type modelAliasResolver interface {
+	FindByAliasName(ctx context.Context, aliasName string) (*models.ModelAlias, error)
 }
 
 // NewEndpointSelector creates an EndpointSelector.
@@ -36,6 +41,7 @@ func NewEndpointSelector(
 	lb *LoadBalancer,
 	lr *LLMRouter,
 	rcr RoutingConfigProvider,
+	mar modelAliasResolver,
 	logger *zap.Logger,
 ) *EndpointSelector {
 	return &EndpointSelector{
@@ -44,6 +50,7 @@ func NewEndpointSelector(
 		loadBalancer:      lb,
 		llmRouter:         lr,
 		routingConfigRepo: rcr,
+		modelAliasRepo:    mar,
 		logger:            logger,
 	}
 }
@@ -89,7 +96,10 @@ func (s *EndpointSelector) SelectEndpoint(
 
 	// 3. User specified a concrete model
 	if req.Model != "" {
-		model := s.findModelByName(req.Model, endpoints)
+		model, resolveErr := s.resolveRequestedModel(ctx, req.Model, endpoints)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
 		if model != nil {
 			if model.Enabled && s.modelSelector.HasHealthyEndpoints(model, endpoints) {
 				ep := s.selectEndpointForModel(model, endpoints, req)
@@ -191,11 +201,51 @@ func (s *EndpointSelector) selectEndpointForModel(
 	return s.loadBalancer.Select(candidates, req)
 }
 
+func (s *EndpointSelector) resolveRequestedModel(
+	ctx context.Context,
+	requestedName string,
+	endpoints []*models.Endpoint,
+) (*models.Model, error) {
+	if model := s.findModelByName(requestedName, endpoints); model != nil {
+		return model, nil
+	}
+	if s.modelAliasRepo == nil {
+		return nil, nil
+	}
+
+	alias, err := s.modelAliasRepo.FindByAliasName(ctx, requestedName)
+	if err != nil {
+		return nil, fmt.Errorf("resolve model alias for %q: %w", requestedName, err)
+	}
+	if alias == nil {
+		return nil, nil
+	}
+
+	target := s.findModelByID(alias.TargetModelID, endpoints)
+	if target == nil {
+		return nil, fmt.Errorf("model alias %q points to unavailable target model", requestedName)
+	}
+
+	s.logger.Debug("resolved model alias",
+		zap.String("requested_model", requestedName),
+		zap.String("resolved_model", target.Name))
+	return target, nil
+}
+
 // findModelByName finds a model by exact name (case-insensitive) from the endpoint list.
 // Returns nil if no exact match is found. Administrators must configure the exact model name.
 func (s *EndpointSelector) findModelByName(name string, endpoints []*models.Endpoint) *models.Model {
 	for _, ep := range endpoints {
 		if strings.EqualFold(ep.Model.Name, name) {
+			return ep.Model
+		}
+	}
+	return nil
+}
+
+func (s *EndpointSelector) findModelByID(id int64, endpoints []*models.Endpoint) *models.Model {
+	for _, ep := range endpoints {
+		if ep.Model.ID == id {
 			return ep.Model
 		}
 	}

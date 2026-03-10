@@ -4,6 +4,8 @@
 package service
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,6 +16,19 @@ import (
 	"github.com/user/llm-proxy-go/tests/testutil"
 	"go.uber.org/zap"
 )
+
+type stubModelAliasRepo struct {
+	aliases map[string]*models.ModelAlias
+}
+
+func (r *stubModelAliasRepo) FindByAliasName(_ context.Context, aliasName string) (*models.ModelAlias, error) {
+	for key, alias := range r.aliases {
+		if strings.EqualFold(key, aliasName) {
+			return alias, nil
+		}
+	}
+	return nil, nil
+}
 
 func TestDoSmartRouting_PreservesCustomRuleInfo(t *testing.T) {
 	logger := zap.NewNop()
@@ -30,7 +45,7 @@ func TestDoSmartRouting_PreservesCustomRuleInfo(t *testing.T) {
 
 	llmRouter := NewLLMRouter(db, nil, logger)
 	rcr := repository.NewRoutingConfigRepository(db, logger)
-	es := NewEndpointSelector(ms, hc, lb, llmRouter, rcr, logger)
+	es := NewEndpointSelector(ms, hc, lb, llmRouter, rcr, nil, logger)
 
 	// Set up endpoints with healthy complex model
 	complexModel := &models.Model{ID: 1, Name: "opus", Role: models.ModelRoleComplex, Enabled: true}
@@ -68,7 +83,7 @@ func TestFindModelByName(t *testing.T) {
 	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
 	ms := NewModelSelector(hc, logger)
-	es := NewEndpointSelector(ms, hc, lb, nil, nil, logger)
+	es := NewEndpointSelector(ms, hc, lb, nil, nil, nil, logger)
 
 	endpoints := []*models.Endpoint{
 		{
@@ -124,7 +139,7 @@ func TestSelectEndpoint_GetConfigError_UsesDefaults(t *testing.T) {
 	db.Close() // Close DB to simulate error
 
 	rcr := repository.NewRoutingConfigRepository(db, logger)
-	es := NewEndpointSelector(ms, hc, lb, nil, rcr, logger)
+	es := NewEndpointSelector(ms, hc, lb, nil, rcr, nil, logger)
 
 	// Set up endpoints
 	defaultModel := &models.Model{ID: 1, Name: "sonnet", Role: models.ModelRoleDefault, Enabled: true}
@@ -158,7 +173,7 @@ func TestSelectEndpoint_DisabledModel_FallbackSameRole(t *testing.T) {
 
 	db := testutil.NewTestDB(t)
 	rcr := repository.NewRoutingConfigRepository(db, logger)
-	es := NewEndpointSelector(ms, hc, lb, nil, rcr, logger)
+	es := NewEndpointSelector(ms, hc, lb, nil, rcr, nil, logger)
 
 	disabledModel := &models.Model{ID: 1, Name: "disabled-model", Role: models.ModelRoleDefault, Enabled: false}
 	fallbackModel := &models.Model{ID: 2, Name: "fallback-model", Role: models.ModelRoleDefault, Enabled: true}
@@ -188,4 +203,43 @@ func TestSelectEndpoint_DisabledModel_FallbackSameRole(t *testing.T) {
 	require.NoError(t, err, "disabled model should fallback to same role model per SelectEndpoint priority comment")
 	require.NotNil(t, result)
 	assert.Equal(t, "fallback-model", result.Model.Name)
+}
+
+func TestSelectEndpoint_ResolvesAliasToTargetModel(t *testing.T) {
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ms := NewModelSelector(hc, logger)
+
+	aliasRepo := &stubModelAliasRepo{
+		aliases: map[string]*models.ModelAlias{
+			"claude-sonnet-4-6": {
+				ID:            1,
+				AliasName:     "claude-sonnet-4-6",
+				TargetModelID: 2,
+				Enabled:       true,
+			},
+		},
+	}
+	es := NewEndpointSelector(ms, hc, lb, nil, nil, aliasRepo, logger)
+
+	endpoints := []*models.Endpoint{
+		{
+			Model:    &models.Model{ID: 2, Name: "claude-sonnet-4-5-20250929", Role: models.ModelRoleDefault, Enabled: true},
+			Provider: &models.Provider{ID: 1, Name: "provider-1", BaseURL: "http://test", APIKey: "key"},
+		},
+	}
+	hc.UpdateState("provider-1/claude-sonnet-4-5-20250929", models.EndpointHealthy, "")
+
+	req := &models.AnthropicRequest{
+		Model: "claude-sonnet-4-6",
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "test"}},
+		},
+	}
+
+	result, err := es.SelectEndpoint(t.Context(), req, endpoints)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "claude-sonnet-4-5-20250929", result.Model.Name)
 }

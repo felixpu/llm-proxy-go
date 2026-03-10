@@ -53,6 +53,16 @@ type Model struct {
 	CreatedAt         time.Time `json:"created_at"`
 }
 
+// ModelAlias maps a client-facing model name to a configured target model.
+type ModelAlias struct {
+	ID            int64     `json:"id"`
+	AliasName     string    `json:"alias_name"`
+	TargetModelID int64     `json:"target_model_id"`
+	Enabled       bool      `json:"enabled"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
 // Provider represents an API provider (e.g., Anthropic, OpenAI).
 type Provider struct {
 	ID            int64             `json:"id"`
@@ -103,19 +113,21 @@ type APIKey struct {
 
 // RequestLogEntry represents a request log entry for insertion.
 type RequestLogEntry struct {
-	RequestID    string
-	UserID       int64
-	APIKeyID     *int64
-	ModelName    string
-	EndpointName string
-	TaskType     string
-	InputTokens  int
-	OutputTokens int
-	LatencyMs    float64
-	Cost         float64
-	StatusCode   *int
-	Success      bool
-	Stream       bool
+	RequestID      string
+	UserID         int64
+	APIKeyID       *int64
+	ModelName      string
+	RequestedModel string
+	ResolvedModel  string
+	EndpointName   string
+	TaskType       string
+	InputTokens    int
+	OutputTokens   int
+	LatencyMs      float64
+	Cost           float64
+	StatusCode     *int
+	Success        bool
+	Stream         bool
 
 	// Cache statistics (Anthropic Prompt Caching)
 	CacheCreationInputTokens int
@@ -135,22 +147,24 @@ type RequestLogEntry struct {
 
 // RequestLog represents a request log record from the database.
 type RequestLog struct {
-	ID           int64     `json:"id"`
-	RequestID    string    `json:"request_id"`
-	UserID       int64     `json:"user_id"`
-	Username     string    `json:"username"`
-	APIKeyID     *int64    `json:"api_key_id,omitempty"`
-	ModelName    string    `json:"model_name"`
-	EndpointName string    `json:"endpoint_name"`
-	TaskType     string    `json:"task_type"`
-	InputTokens  int       `json:"input_tokens"`
-	OutputTokens int       `json:"output_tokens"`
-	LatencyMs    float64   `json:"latency_ms"`
-	Cost         float64   `json:"cost"`
-	StatusCode   *int      `json:"status_code,omitempty"`
-	Success      bool      `json:"success"`
-	Stream       bool      `json:"stream"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID             int64     `json:"id"`
+	RequestID      string    `json:"request_id"`
+	UserID         int64     `json:"user_id"`
+	Username       string    `json:"username"`
+	APIKeyID       *int64    `json:"api_key_id,omitempty"`
+	ModelName      string    `json:"model_name"`
+	RequestedModel string    `json:"requested_model,omitempty"`
+	ResolvedModel  string    `json:"resolved_model,omitempty"`
+	EndpointName   string    `json:"endpoint_name"`
+	TaskType       string    `json:"task_type"`
+	InputTokens    int       `json:"input_tokens"`
+	OutputTokens   int       `json:"output_tokens"`
+	LatencyMs      float64   `json:"latency_ms"`
+	Cost           float64   `json:"cost"`
+	StatusCode     *int      `json:"status_code,omitempty"`
+	Success        bool      `json:"success"`
+	Stream         bool      `json:"stream"`
+	CreatedAt      time.Time `json:"created_at"`
 
 	// Cache statistics (Anthropic Prompt Caching)
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`

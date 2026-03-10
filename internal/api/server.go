@@ -56,6 +56,15 @@ type providerRepository interface {
 	GetModelIDsForProvider(ctx context.Context, providerID int64) ([]int64, error)
 }
 
+type modelAliasRepository interface {
+	FindByID(ctx context.Context, id int64) (*models.ModelAlias, error)
+	FindByAliasName(ctx context.Context, aliasName string) (*models.ModelAlias, error)
+	FindAll(ctx context.Context) ([]*models.ModelAlias, error)
+	Insert(ctx context.Context, alias *models.ModelAlias) (int64, error)
+	UpdatePatch(ctx context.Context, id int64, patch repository.ModelAliasPatch) error
+	Delete(ctx context.Context, id int64) error
+}
+
 type routingModelRepository interface {
 	ListModels(ctx context.Context, providerID *int64) ([]*models.RoutingModel, error)
 	GetModel(ctx context.Context, id int64) (*models.RoutingModel, error)
@@ -118,6 +127,7 @@ type ServerDeps struct {
 	LogRoutingRepo     routingAnalysisLogRepository
 	EmbeddingRepo      embeddingModelRepository
 	ModelRepo          modelRepository
+	ModelAliasRepo     modelAliasRepository
 	ProviderRepo       providerRepository
 	RoutingModelRepo   routingModelRepository
 	RoutingConfigRepo  routingConfigRepository
@@ -192,6 +202,7 @@ func newEndpointSelector(deps ServerDeps, logger *zap.Logger) *service.EndpointS
 		loadBalancer,
 		deps.LLMRouter,
 		deps.RoutingConfigRepo,
+		deps.ModelAliasRepo,
 		logger,
 	)
 }
@@ -314,6 +325,7 @@ func registerConfigRoutes(r *gin.Engine, deps ServerDeps, authService *service.A
 	configHandler := handler.NewConfigHandler(deps.SystemConfigRepo)
 	routingHandler := handler.NewRoutingHandler(deps.RoutingModelRepo, deps.RoutingConfigRepo)
 	modelHandler := handler.NewModelHandler(deps.ModelRepo, deps.EndpointStore)
+	modelAliasHandler := handler.NewModelAliasHandler(deps.ModelAliasRepo, deps.ModelRepo)
 	providerHandler := handler.NewProviderHandler(deps.ProviderRepo, deps.ModelRepo, service.NewModelDetector(logger), deps.EndpointStore)
 	configGroup := r.Group("/api/config")
 	configGroup.Use(middleware.RequireAuth(authService))
@@ -347,6 +359,13 @@ func registerConfigRoutes(r *gin.Engine, deps ServerDeps, authService *service.A
 		configGroup.POST("/models", modelHandler.CreateModel)
 		configGroup.PUT("/models/:model_id", modelHandler.UpdateModel)
 		configGroup.DELETE("/models/:model_id", modelHandler.DeleteModel)
+
+		// Model alias management
+		configGroup.GET("/model-aliases", modelAliasHandler.ListModelAliases)
+		configGroup.GET("/model-aliases/:alias_id", modelAliasHandler.GetModelAlias)
+		configGroup.POST("/model-aliases", modelAliasHandler.CreateModelAlias)
+		configGroup.PUT("/model-aliases/:alias_id", modelAliasHandler.UpdateModelAlias)
+		configGroup.DELETE("/model-aliases/:alias_id", modelAliasHandler.DeleteModelAlias)
 
 		// Provider management
 		configGroup.GET("/providers", providerHandler.ListProviders)

@@ -26,6 +26,7 @@ import (
 
 type appRepositories struct {
 	modelRepo          *repository.SQLModelRepository
+	modelAliasRepo     *repository.SQLModelAliasRepository
 	providerRepo       *repository.SQLProviderRepository
 	keyRepo            repository.APIKeyRepository
 	userRepo           repository.UserRepository
@@ -216,19 +217,20 @@ func initRepositories(db, readDB *sql.DB, logger *zap.Logger) appRepositories {
 	logRepoImpl := repository.NewRequestLogRepositoryImpl(db, logger, readDB)
 	return appRepositories{
 		modelRepo:          repository.NewModelRepository(db),
+		modelAliasRepo:     repository.NewModelAliasRepository(db, readDB),
 		providerRepo:       repository.NewProviderRepository(db),
-		keyRepo:            repository.NewAPIKeyRepository(db),
-		userRepo:           repository.NewUserRepository(db),
+		keyRepo:            repository.NewAPIKeyRepository(db, readDB),
+		userRepo:           repository.NewUserRepository(db, readDB),
 		logWriteRepo:       logRepoImpl,
 		logQueryRepo:       logRepoImpl,
 		logAnalyticsRepo:   logRepoImpl,
 		logRoutingRepo:     logRepoImpl,
 		embeddingRepo:      repository.NewEmbeddingModelRepository(db, logger),
 		routingModelRepo:   repository.NewRoutingModelRepository(db, logger),
-		routingConfigRepo:  repository.NewRoutingConfigRepository(db, logger),
+		routingConfigRepo:  repository.NewRoutingConfigRepository(db, logger, readDB),
 		embeddingCacheRepo: repository.NewEmbeddingCacheRepository(db, logger),
 		routingRuleRepo:    repository.NewRoutingRuleRepository(db, logger),
-		systemConfigRepo:   repository.NewSystemConfigRepository(db),
+		systemConfigRepo:   repository.NewSystemConfigRepository(db, readDB),
 		sessionRepo:        repository.NewSessionRepository(db, logger),
 		analysisReportRepo: repository.NewAnalysisReportRepository(db, logger, readDB),
 	}
@@ -262,6 +264,7 @@ func buildServerDeps(
 		LogRoutingRepo:     repos.logRoutingRepo,
 		EmbeddingRepo:      repos.embeddingRepo,
 		ModelRepo:          repos.modelRepo,
+		ModelAliasRepo:     repos.modelAliasRepo,
 		ProviderRepo:       repos.providerRepo,
 		RoutingModelRepo:   repos.routingModelRepo,
 		RoutingConfigRepo:  repos.routingConfigRepo,
