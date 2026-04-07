@@ -65,6 +65,7 @@ type ProxyService struct {
 	logger        *zap.Logger
 	client        *http.Client
 	streamClient  *http.Client // Separate client for streaming with longer timeout
+	asyncPool     *AsyncWorkerPool
 }
 
 // NewProxyService creates a new ProxyService.
@@ -73,12 +74,14 @@ func NewProxyService(
 	lb *LoadBalancer,
 	logRepo repository.RequestLogWriteRepository,
 	logger *zap.Logger,
+	asyncPool *AsyncWorkerPool,
 ) *ProxyService {
 	return &ProxyService{
 		healthChecker: hc,
 		loadBalancer:  lb,
 		logRepo:       logRepo,
 		logger:        logger,
+		asyncPool:     asyncPool,
 		client: &http.Client{
 			Timeout: DefaultProxyHTTPTimeout,
 			Transport: &http.Transport{
@@ -88,11 +91,12 @@ func NewProxyService(
 			},
 		},
 		streamClient: &http.Client{
-			Timeout: 0, // No timeout for streaming
+			Timeout: 0, // No overall timeout for streaming — body reads are unbounded
 			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 20,
-				IdleConnTimeout:     90 * time.Second,
+				MaxIdleConns:          100,
+				MaxIdleConnsPerHost:   20,
+				IdleConnTimeout:       90 * time.Second,
+				ResponseHeaderTimeout: DefaultProxyHTTPTimeout, // Timeout for initial response headers
 			},
 		},
 	}
@@ -460,7 +464,7 @@ func (s *ProxyService) SaveRequestLog(ctx context.Context, meta *ProxyMetadata, 
 		entry.MessagePreview = truncateStr(meta.RequestContent, DefaultContentPreviewMaxChars)
 	}
 
-	go func() {
+	if ok := s.asyncPool.Submit(func() {
 		saveCtx, cancel := context.WithTimeout(context.Background(), DefaultAsyncRepoTimeout)
 		defer cancel()
 		if _, err := s.logRepo.Insert(saveCtx, entry); err != nil {
@@ -468,7 +472,10 @@ func (s *ProxyService) SaveRequestLog(ctx context.Context, meta *ProxyMetadata, 
 				zap.String("request_id", meta.RequestID),
 				zap.Error(err))
 		}
-	}()
+	}); !ok {
+		s.logger.Warn("dropped request log write",
+			zap.String("request_id", meta.RequestID))
+	}
 }
 
 // routingMethodFromDecision derives the routing_method string from a RoutingDecision.

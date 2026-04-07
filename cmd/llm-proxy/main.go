@@ -102,7 +102,7 @@ func run() error {
 		zap.Int("port", cfg.Proxy.Port),
 	)
 
-	db, readDB, err := initDatabases(cfg.Database.Path)
+	db, readDB, err := initDatabases(cfg.Database.Path, cfg.Database.ConnMaxLifetime)
 	if err != nil {
 		return err
 	}
@@ -138,11 +138,15 @@ func run() error {
 		return fmt.Errorf("load endpoints: %w", err)
 	}
 
+	// Initialize async worker pool for background DB writes.
+	asyncPool := service.NewAsyncWorkerPool(4, 256, logger)
+	defer asyncPool.Shutdown()
+
 	// Initialize services.
 	healthChecker := service.NewHealthChecker(cfg.HealthCheck, logger)
 	loadBalancer := service.NewLoadBalancer(repos.systemConfigRepo)
-	authService := service.NewAuthService(repos.keyRepo, repos.userRepo, repos.sessionRepo, logger)
-	proxyService := service.NewProxyService(healthChecker, loadBalancer, repos.logWriteRepo, logger)
+	authService := service.NewAuthService(repos.keyRepo, repos.userRepo, repos.sessionRepo, logger, asyncPool)
+	proxyService := service.NewProxyService(healthChecker, loadBalancer, repos.logWriteRepo, logger, asyncPool)
 
 	// Create default admin user if not exists.
 	if err := authService.CreateDefaultAdmin(
@@ -162,13 +166,16 @@ func run() error {
 	routingCache := service.NewRoutingCache(10000, logger)
 
 	// Initialize LLM router for intelligent routing.
-	llmRouter := service.NewLLMRouter(db, nil, logger)
+	llmRouter := service.NewLLMRouter(db, nil, logger, asyncPool)
 
 	// Initialize routing analyzer for rule optimization.
 	routingAnalyzer := service.NewRoutingAnalyzer(repos.logAnalyticsRepo, repos.routingRuleRepo, repos.routingModelRepo, repos.analysisReportRepo, logger)
 
+	// Create shutdown signal channel for background goroutines.
+	stopCh := make(chan struct{})
+
 	// Create HTTP server.
-	server := api.NewServer(buildServerDeps(cfg, db, logger, repos, proxyService, authService, healthChecker, routingCache, llmRouter, routingAnalyzer, endpointStore))
+	server := api.NewServer(buildServerDeps(cfg, db, logger, repos, proxyService, authService, healthChecker, routingCache, llmRouter, routingAnalyzer, endpointStore, stopCh))
 
 	// Start server in goroutine.
 	addr := fmt.Sprintf("%s:%d", cfg.Proxy.Host, cfg.Proxy.Port)
@@ -196,16 +203,20 @@ func run() error {
 		return fmt.Errorf("server shutdown: %w", err)
 	}
 
+	// Signal rate limiter cleanup goroutine to stop.
+	close(stopCh)
+
 	logger.Info("server stopped")
 	return nil
 }
 
-func initDatabases(dbPath string) (*sql.DB, *sql.DB, error) {
-	db, err := database.New(dbPath)
+func initDatabases(dbPath string, connMaxLifetime time.Duration) (*sql.DB, *sql.DB, error) {
+	opts := database.DBOptions{ConnMaxLifetime: connMaxLifetime}
+	db, err := database.NewWithOptions(dbPath, opts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("init database: %w", err)
 	}
-	readDB, err := database.NewReadOnly(dbPath)
+	readDB, err := database.NewReadOnlyWithOptions(dbPath, opts)
 	if err != nil {
 		db.Close()
 		return nil, nil, fmt.Errorf("init read-only database: %w", err)
@@ -248,6 +259,7 @@ func buildServerDeps(
 	llmRouter *service.LLMRouter,
 	routingAnalyzer *service.RoutingAnalyzer,
 	endpointStore *service.EndpointStore,
+	stopCh <-chan struct{},
 ) api.ServerDeps {
 	return api.ServerDeps{
 		ProxyService:       proxyService,
@@ -277,7 +289,9 @@ func buildServerDeps(
 			Enabled:       cfg.RateLimit.Enabled,
 			MaxRequests:   cfg.RateLimit.MaxRequests,
 			WindowSeconds: cfg.RateLimit.WindowSeconds,
+			MaxClients:    cfg.RateLimit.MaxClients,
 			ExemptPaths:   middleware.DefaultRateLimitConfig().ExemptPaths,
+			StopCh:        stopCh,
 		},
 		DB:     db,
 		Logger: logger,

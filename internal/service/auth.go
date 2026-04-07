@@ -35,6 +35,7 @@ type AuthService struct {
 	userRepo    repository.UserRepository
 	sessionRepo *repository.SessionRepository
 	logger      *zap.Logger
+	asyncPool   *AsyncWorkerPool
 }
 
 // NewAuthService creates a new AuthService.
@@ -43,12 +44,14 @@ func NewAuthService(
 	userRepo repository.UserRepository,
 	sessionRepo *repository.SessionRepository,
 	logger *zap.Logger,
+	asyncPool *AsyncWorkerPool,
 ) *AuthService {
 	return &AuthService{
 		keyRepo:     keyRepo,
 		userRepo:    userRepo,
 		sessionRepo: sessionRepo,
 		logger:      logger,
+		asyncPool:   asyncPool,
 	}
 }
 
@@ -78,13 +81,16 @@ func (s *AuthService) ValidateAPIKey(ctx context.Context, rawKey string) (*Curre
 		return nil, fmt.Errorf("user account is inactive")
 	}
 
-	go func() {
+	if ok := s.asyncPool.Submit(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), DefaultAsyncRepoTimeout)
 		defer cancel()
 		if err := s.keyRepo.UpdateLastUsed(ctx, apiKey.ID); err != nil {
 			s.logger.Debug("failed to update API key last used", zap.Error(err))
 		}
-	}()
+	}); !ok {
+		s.logger.Warn("dropped API key last-used update",
+			zap.Int64("api_key_id", apiKey.ID))
+	}
 
 	prefix := apiKey.KeyPrefix
 	return &CurrentUser{

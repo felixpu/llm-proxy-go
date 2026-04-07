@@ -158,6 +158,7 @@ func applyEnvOverrides(cfg *Config) {
 	cfg.RateLimit.Enabled = getEnvBool("LLM_PROXY_RATE_LIMIT_ENABLED", cfg.RateLimit.Enabled)
 	cfg.RateLimit.MaxRequests = getEnvInt("LLM_PROXY_RATE_LIMIT_MAX_REQUESTS", cfg.RateLimit.MaxRequests)
 	cfg.RateLimit.WindowSeconds = getEnvInt("LLM_PROXY_RATE_LIMIT_WINDOW_SECONDS", cfg.RateLimit.WindowSeconds)
+	cfg.RateLimit.MaxClients = getEnvInt("LLM_PROXY_RATE_LIMIT_MAX_CLIENTS", cfg.RateLimit.MaxClients)
 
 	// Circuit breaker config
 	cfg.HealthCheck.CircuitBreaker.Enabled = getEnvBool("LLM_PROXY_CB_ENABLED", cfg.HealthCheck.CircuitBreaker.Enabled)

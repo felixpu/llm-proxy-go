@@ -4,16 +4,10 @@ package database
 import (
 	"database/sql"
 	"fmt"
-	"log"
 	"net/url"
-	"sync"
+	"time"
 
 	_ "modernc.org/sqlite"
-)
-
-var (
-	db   *sql.DB
-	once sync.Once
 )
 
 func sqliteDSN(path string, readOnly bool) string {
@@ -28,8 +22,18 @@ func sqliteDSN(path string, readOnly bool) string {
 	return fmt.Sprintf("file:%s?%s", path, query.Encode())
 }
 
+// DBOptions holds optional database pool configuration.
+type DBOptions struct {
+	ConnMaxLifetime time.Duration
+}
+
 // New creates a new database connection with the given path.
 func New(path string) (*sql.DB, error) {
+	return NewWithOptions(path, DBOptions{})
+}
+
+// NewWithOptions creates a new database connection with custom pool options.
+func NewWithOptions(path string, opts DBOptions) (*sql.DB, error) {
 	dsn := sqliteDSN(path, false)
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -40,6 +44,9 @@ func New(path string) (*sql.DB, error) {
 	// Serializing the write pool avoids concurrent writer lock contention.
 	conn.SetMaxOpenConns(1)
 	conn.SetMaxIdleConns(1)
+	if opts.ConnMaxLifetime > 0 {
+		conn.SetConnMaxLifetime(opts.ConnMaxLifetime)
+	}
 
 	// Verify connection
 	if err := conn.Ping(); err != nil {
@@ -54,6 +61,11 @@ func New(path string) (*sql.DB, error) {
 // Using a separate pool prevents expensive analytical queries from starving
 // latency-sensitive write operations (e.g. proxy auth, log inserts).
 func NewReadOnly(path string) (*sql.DB, error) {
+	return NewReadOnlyWithOptions(path, DBOptions{})
+}
+
+// NewReadOnlyWithOptions creates a read-only connection with custom pool options.
+func NewReadOnlyWithOptions(path string, opts DBOptions) (*sql.DB, error) {
 	dsn := sqliteDSN(path, true)
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -62,6 +74,9 @@ func NewReadOnly(path string) (*sql.DB, error) {
 
 	conn.SetMaxOpenConns(10)
 	conn.SetMaxIdleConns(3)
+	if opts.ConnMaxLifetime > 0 {
+		conn.SetConnMaxLifetime(opts.ConnMaxLifetime)
+	}
 
 	if err := conn.Ping(); err != nil {
 		conn.Close()
@@ -69,32 +84,4 @@ func NewReadOnly(path string) (*sql.DB, error) {
 	}
 
 	return conn, nil
-}
-
-// GetDB returns the global database instance (singleton).
-func GetDB() *sql.DB {
-	return db
-}
-
-// InitDB initializes the global database instance.
-func InitDB(path string) error {
-	var initErr error
-	once.Do(func() {
-		var err error
-		db, err = New(path)
-		if err != nil {
-			initErr = err
-			return
-		}
-		log.Printf("Database initialized: %s", path)
-	})
-	return initErr
-}
-
-// Close closes the global database connection.
-func Close() error {
-	if db != nil {
-		return db.Close()
-	}
-	return nil
 }

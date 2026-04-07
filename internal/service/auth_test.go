@@ -121,7 +121,7 @@ func TestAuthService_ValidateAPIKey(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 
-	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 	ctx := context.Background()
 
 	// Create test user
@@ -178,7 +178,7 @@ func TestAuthService_ValidateAPIKey_InactiveKey(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 
-	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 	ctx := context.Background()
 
 	// Create test user
@@ -215,7 +215,7 @@ func TestAuthService_AuthenticateUser(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 
-	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 	ctx := context.Background()
 
 	// Create test user
@@ -263,7 +263,7 @@ func TestAuthService_AuthenticateUser_InactiveUser(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 
-	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 	ctx := context.Background()
 
 	// Create inactive user
@@ -290,7 +290,7 @@ func TestAuthService_CreateSession(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 
-	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 	ctx := context.Background()
 
 	// Create test user
@@ -320,7 +320,7 @@ func TestAuthService_ValidateSession(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 
-	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 	ctx := context.Background()
 
 	// Create test user
@@ -370,7 +370,7 @@ func TestAuthService_DeleteSession(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 
-	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 	ctx := context.Background()
 
 	// Create test user and session
@@ -401,7 +401,7 @@ func TestAuthService_CreateDefaultAdmin(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 
-	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 	ctx := context.Background()
 
 	// Create default admin

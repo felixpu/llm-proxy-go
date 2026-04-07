@@ -15,6 +15,7 @@ type RateLimitConfig struct {
 	Enabled       bool
 	MaxRequests   int
 	WindowSeconds int
+	MaxClients    int // Max tracked client IPs; 0 means 10000
 	ExemptPaths   []string
 	StopCh        <-chan struct{} // Optional: close to stop background cleanup goroutine
 }
@@ -42,6 +43,7 @@ type rateLimiter struct {
 	mu          sync.Mutex
 	requests    map[string][]time.Time
 	maxRequests int
+	maxClients  int
 	window      time.Duration
 }
 
@@ -49,6 +51,7 @@ func newRateLimiter(maxRequests int, windowSeconds int) *rateLimiter {
 	return &rateLimiter{
 		requests:    make(map[string][]time.Time),
 		maxRequests: maxRequests,
+		maxClients:  10000, // default cap
 		window:      time.Duration(windowSeconds) * time.Second,
 	}
 }
@@ -62,12 +65,21 @@ func (rl *rateLimiter) isAllowed(clientID string) (bool, int, int64) {
 	now := time.Now()
 	cutoff := now.Add(-rl.window)
 
-	// Clean expired entries
-	reqs := rl.requests[clientID]
-	valid := reqs[:0]
-	for _, t := range reqs {
-		if t.After(cutoff) {
-			valid = append(valid, t)
+	valid := filterValidRequests(rl.requests[clientID], cutoff)
+	if len(valid) == 0 {
+		delete(rl.requests, clientID)
+	} else {
+		rl.requests[clientID] = valid
+	}
+
+	// Before rejecting a new client due to capacity, opportunistically remove
+	// expired entries for all clients so stale map entries do not cause false 429s.
+	if rl.maxClients > 0 {
+		if _, exists := rl.requests[clientID]; !exists && len(rl.requests) >= rl.maxClients {
+			rl.pruneExpiredEntriesLocked(cutoff)
+			if _, exists := rl.requests[clientID]; !exists && len(rl.requests) >= rl.maxClients {
+				return false, 0, now.Add(rl.window).Unix()
+			}
 		}
 	}
 
@@ -96,24 +108,28 @@ func RateLimit(cfg *RateLimitConfig) gin.HandlerFunc {
 	}
 
 	limiter := newRateLimiter(cfg.MaxRequests, cfg.WindowSeconds)
+	if cfg.MaxClients > 0 {
+		limiter.maxClients = cfg.MaxClients
+	}
 
 	// Background cleanup every 5 minutes
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
+
+		stopCh := cfg.StopCh
+		if stopCh == nil {
+			// Create a channel that never closes — keeps old behavior but
+			// allows select to compile with both cases.
+			stopCh = make(chan struct{})
+		}
+
 		for {
-			if cfg.StopCh != nil {
-				select {
-				case <-ticker.C:
-					limiter.cleanup()
-				case <-cfg.StopCh:
-					return
-				}
-			} else {
-				select {
-				case <-ticker.C:
-					limiter.cleanup()
-				}
+			select {
+			case <-ticker.C:
+				limiter.cleanup()
+			case <-stopCh:
+				return
 			}
 		}
 	}()
@@ -158,24 +174,57 @@ func RateLimit(cfg *RateLimitConfig) gin.HandlerFunc {
 }
 
 // cleanup removes expired entries from the rate limiter.
+// If the map exceeds maxClients after expiration cleanup, it evicts the
+// oldest entries to bring it back within bounds.
 func (rl *rateLimiter) cleanup() {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
 	cutoff := time.Now().Add(-rl.window)
+	rl.pruneExpiredEntriesLocked(cutoff)
+	rl.evictToCapacityLocked()
+}
+
+func (rl *rateLimiter) pruneExpiredEntriesLocked(cutoff time.Time) {
 	for clientID, reqs := range rl.requests {
-		valid := reqs[:0]
-		for _, t := range reqs {
-			if t.After(cutoff) {
-				valid = append(valid, t)
-			}
-		}
+		valid := filterValidRequests(reqs, cutoff)
 		if len(valid) == 0 {
 			delete(rl.requests, clientID)
-		} else {
-			rl.requests[clientID] = valid
+			continue
+		}
+		rl.requests[clientID] = valid
+	}
+}
+
+func (rl *rateLimiter) evictToCapacityLocked() {
+	if rl.maxClients <= 0 || len(rl.requests) <= rl.maxClients {
+		return
+	}
+
+	for len(rl.requests) > rl.maxClients {
+		var oldestClient string
+		var oldestTime time.Time
+		first := true
+		for clientID, reqs := range rl.requests {
+			latest := reqs[len(reqs)-1]
+			if first || latest.Before(oldestTime) {
+				oldestClient = clientID
+				oldestTime = latest
+				first = false
+			}
+		}
+		delete(rl.requests, oldestClient)
+	}
+}
+
+func filterValidRequests(reqs []time.Time, cutoff time.Time) []time.Time {
+	valid := reqs[:0]
+	for _, t := range reqs {
+		if t.After(cutoff) {
+			valid = append(valid, t)
 		}
 	}
+	return valid
 }
 
 // getClientIP extracts the client IP, respecting reverse proxy headers.

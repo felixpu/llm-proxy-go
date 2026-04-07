@@ -33,6 +33,7 @@ type RateLimitConfig struct {
 	Enabled       bool
 	MaxRequests   int
 	WindowSeconds int
+	MaxClients    int // Max tracked client IPs; 0 uses default (10000)
 }
 
 // ProxyConfig holds proxy server configuration.

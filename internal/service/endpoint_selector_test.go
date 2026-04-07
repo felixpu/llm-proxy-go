@@ -43,7 +43,7 @@ func TestDoSmartRouting_PreservesCustomRuleInfo(t *testing.T) {
 		VALUES ('custom_test_rule', '["自定义测试"]', 'complex', 95, 0, 1)`)
 	assert.NoError(t, err)
 
-	llmRouter := NewLLMRouter(db, nil, logger)
+	llmRouter := NewLLMRouter(db, nil, logger, nil)
 	rcr := repository.NewRoutingConfigRepository(db, logger)
 	es := NewEndpointSelector(ms, hc, lb, llmRouter, rcr, nil, logger)
 

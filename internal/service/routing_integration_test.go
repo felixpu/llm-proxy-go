@@ -24,7 +24,7 @@ import (
 func TestIntegration_RuleMatch_ThenL1CacheHit(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	logger := zap.NewNop()
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{
@@ -51,7 +51,7 @@ func TestIntegration_RuleMatch_ThenL1CacheHit(t *testing.T) {
 func TestIntegration_SimpleRule_Match(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	logger := zap.NewNop()
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	// Short message with simple keyword should match simple rule
 	req := &models.AnthropicRequest{
@@ -77,7 +77,7 @@ func TestIntegration_NoRuleMatch_FallbackDefault(t *testing.T) {
 	_, err := db.Exec(`INSERT OR IGNORE INTO routing_llm_config (id, enabled) VALUES (1, 0)`)
 	require.NoError(t, err)
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	// Message that doesn't match any rule
 	req := &models.AnthropicRequest{
@@ -105,7 +105,7 @@ func TestIntegration_NoRuleMatch_FallbackUserChoice(t *testing.T) {
 	_, err = db.Exec(`UPDATE routing_llm_config SET rule_fallback_strategy = 'user', rule_fallback_task_type = 'complex' WHERE id = 1`)
 	require.NoError(t, err)
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{
@@ -132,7 +132,7 @@ func TestIntegration_RuleDisabled_FallbackDefault(t *testing.T) {
 	_, err = db.Exec(`UPDATE routing_llm_config SET rule_based_routing_enabled = 0, enabled = 0 WHERE id = 1`)
 	require.NoError(t, err)
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	// Even a complex keyword should fallback when rules are disabled
 	req := &models.AnthropicRequest{
@@ -161,7 +161,7 @@ func TestIntegration_CustomRuleOverridesBuiltin(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{
@@ -190,7 +190,7 @@ func TestIntegration_CustomRuleRegexPattern(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{
@@ -217,7 +217,7 @@ func TestIntegration_DisabledCustomRuleIgnored(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{
@@ -254,7 +254,7 @@ func TestIntegration_L2CacheHit(t *testing.T) {
 	_, err = db.Exec(`UPDATE routing_llm_config SET rule_based_routing_enabled = 0 WHERE id = 1`)
 	require.NoError(t, err)
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{
@@ -289,7 +289,7 @@ func TestIntegration_L1CachePromotionFromL2(t *testing.T) {
 	err = embeddingRepo.SaveCache(context.Background(), cacheKey, message[:20], nil, "complex", "test reason")
 	require.NoError(t, err)
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{
@@ -359,7 +359,7 @@ func TestIntegration_RuleHitCountIncrement(t *testing.T) {
 func TestPerformance_RuleJudgmentLatency(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	logger := zap.NewNop()
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{
@@ -397,7 +397,7 @@ func TestPerformance_L1CacheLatency(t *testing.T) {
 	_, err = db.Exec(`UPDATE routing_llm_config SET enabled = 1, cache_enabled = 1, cache_ttl_seconds = 300, rule_based_routing_enabled = 0 WHERE id = 1`)
 	require.NoError(t, err)
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	// Pre-populate L1 cache
 	message := "Performance test message for L1 cache"
@@ -437,7 +437,7 @@ func TestIntegration_CacheHitRate(t *testing.T) {
 	_, err = db.Exec(`UPDATE routing_llm_config SET enabled = 1, cache_enabled = 1, cache_ttl_seconds = 300, rule_based_routing_enabled = 0 WHERE id = 1`)
 	require.NoError(t, err)
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	// Pre-populate L1 cache with multiple entries
 	messages := []string{
@@ -485,7 +485,7 @@ func TestIntegration_CacheMemoryBounded(t *testing.T) {
 	logger := zap.NewNop()
 
 	// Create router with small cache capacity for testing
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	// The default cache capacity is 10000
 	// Fill cache beyond capacity to test eviction
@@ -507,7 +507,7 @@ func TestIntegration_CacheMemoryBounded(t *testing.T) {
 func TestIntegration_ConcurrentAccess(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	logger := zap.NewNop()
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	// Run concurrent requests
 	const goroutines = 10
@@ -552,7 +552,7 @@ func TestIntegration_ConcurrentAccess(t *testing.T) {
 func TestIntegration_EdgeCases(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	logger := zap.NewNop()
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	tests := []struct {
 		name        string

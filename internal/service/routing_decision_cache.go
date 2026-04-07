@@ -13,19 +13,21 @@ type routingDecisionCache interface {
 }
 
 type hybridRoutingDecisionCache struct {
-	l1     *RoutingCache
-	l2     routingEmbeddingCache
-	logger *zap.Logger
+	l1        *RoutingCache
+	l2        routingEmbeddingCache
+	logger    *zap.Logger
+	asyncPool *AsyncWorkerPool
 }
 
-func newHybridRoutingDecisionCache(l1 *RoutingCache, l2 routingEmbeddingCache, logger *zap.Logger) routingDecisionCache {
+func newHybridRoutingDecisionCache(l1 *RoutingCache, l2 routingEmbeddingCache, logger *zap.Logger, asyncPool *AsyncWorkerPool) routingDecisionCache {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &hybridRoutingDecisionCache{
-		l1:     l1,
-		l2:     l2,
-		logger: logger,
+		l1:        l1,
+		l2:        l2,
+		logger:    logger,
+		asyncPool: asyncPool,
 	}
 }
 
@@ -58,13 +60,16 @@ func (c *hybridRoutingDecisionCache) Lookup(ctx context.Context, cacheKey string
 		c.l1.Set(cacheKey, taskType)
 	}
 
-	go func() {
+	if ok := c.asyncPool.Submit(func() {
 		updateCtx, cancel := context.WithTimeout(context.Background(), DefaultAsyncRepoTimeout)
 		defer cancel()
 		if err := c.l2.UpdateHitCountByHash(updateCtx, cacheKey); err != nil {
 			c.logger.Warn("failed to update cache hit count", zap.Error(err))
 		}
-	}()
+	}); !ok {
+		c.logger.Warn("dropped routing cache hit count update",
+			zap.String("cache_key", cacheKey))
+	}
 
 	return taskType, &models.RoutingDecision{
 		TaskType:  taskType,

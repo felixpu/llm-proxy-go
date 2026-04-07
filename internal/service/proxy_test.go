@@ -25,18 +25,48 @@ func TestNewProxyService(t *testing.T) {
 	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
 
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 	assert.NotNil(t, ps.client)
 	assert.NotNil(t, ps.streamClient)
 	assert.NotNil(t, ps.healthChecker)
 	assert.NotNil(t, ps.loadBalancer)
 }
 
+func TestNewProxyService_StreamClientHasResponseHeaderTimeout(t *testing.T) {
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+
+	ps := NewProxyService(hc, lb, nil, logger, nil)
+
+	// streamClient should have Timeout=0 (unlimited body reads for SSE)
+	assert.Equal(t, time.Duration(0), ps.streamClient.Timeout,
+		"streamClient Timeout should be 0 for unlimited streaming body reads")
+
+	// But the Transport must have ResponseHeaderTimeout set to prevent
+	// connections hanging forever when the upstream never sends headers.
+	transport, ok := ps.streamClient.Transport.(*http.Transport)
+	require.True(t, ok, "streamClient.Transport should be *http.Transport")
+	assert.Equal(t, DefaultProxyHTTPTimeout, transport.ResponseHeaderTimeout,
+		"streamClient Transport should have ResponseHeaderTimeout = DefaultProxyHTTPTimeout")
+}
+
+func TestNewProxyService_RegularClientHasTimeout(t *testing.T) {
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+
+	ps := NewProxyService(hc, lb, nil, logger, nil)
+
+	assert.Equal(t, DefaultProxyHTTPTimeout, ps.client.Timeout,
+		"regular client should have overall timeout = DefaultProxyHTTPTimeout")
+}
+
 func TestProxyService_ProxyRequest_NoHealthyEndpoints(t *testing.T) {
 	logger := zap.NewNop()
 	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Model:     "claude-3-sonnet",
@@ -83,7 +113,7 @@ func TestProxyService_ProxyRequest_Success(t *testing.T) {
 	logger := zap.NewNop()
 	hc := NewHealthChecker(config.HealthCheckConfig{Enabled: true}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 
 	// Create endpoint pointing to mock server
 	ep := &models.Endpoint{
@@ -151,7 +181,7 @@ func TestProxyService_ProxyRequest_UpstreamError(t *testing.T) {
 	logger := zap.NewNop()
 	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 
 	ep := createProxyTestEndpoint(upstream.URL)
 	registerHealthyEndpoints(hc, []*models.Endpoint{ep})
@@ -190,7 +220,7 @@ func TestProxyService_ProxyRequest_ServerError(t *testing.T) {
 	logger := zap.NewNop()
 	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 
 	ep := createProxyTestEndpoint(upstream.URL)
 	registerHealthyEndpoints(hc, []*models.Endpoint{ep})
@@ -224,7 +254,7 @@ func TestProxyService_ProxyStreamRequest_NoHealthyEndpoints(t *testing.T) {
 	logger := zap.NewNop()
 	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Model:     "claude-3-sonnet",
@@ -253,7 +283,7 @@ func TestProxyService_ProxyStreamRequest_UpstreamError(t *testing.T) {
 	logger := zap.NewNop()
 	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 
 	ep := createProxyTestEndpoint(upstream.URL)
 	registerHealthyEndpoints(hc, []*models.Endpoint{ep})
@@ -311,7 +341,7 @@ func TestProxyService_StreamModelNameMapping(t *testing.T) {
 	logger := zap.NewNop()
 	hc := NewHealthChecker(config.HealthCheckConfig{Enabled: true}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 
 	ep := &models.Endpoint{
 		Provider: &models.Provider{
@@ -475,7 +505,7 @@ func TestProxyService_ProxyRequest_ForwardsOriginalQueryAndClientHeaders(t *test
 	logger := zap.NewNop()
 	hc := NewHealthChecker(config.HealthCheckConfig{Enabled: true}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 
 	ep := createProxyTestEndpoint(upstream.URL)
 	registerHealthyEndpoints(hc, []*models.Endpoint{ep})
@@ -530,7 +560,7 @@ func TestProxyService_ConnectStreamEndpoint_ForwardsOriginalQueryAndClientHeader
 	logger := zap.NewNop()
 	hc := NewHealthChecker(config.HealthCheckConfig{Enabled: true}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 
 	ep := createProxyTestEndpoint(upstream.URL)
 	req := &models.AnthropicRequest{
@@ -660,7 +690,7 @@ func TestProxyService_ModelNameMapping(t *testing.T) {
 	logger := zap.NewNop()
 	hc := NewHealthChecker(config.HealthCheckConfig{Enabled: true}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 
 	ep := &models.Endpoint{
 		Provider: &models.Provider{
@@ -801,7 +831,7 @@ func TestProxyService_ProxyRequest_RetryOn403(t *testing.T) {
 	logger := zap.NewNop()
 	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 
 	model := &models.Model{
 		ID:                1,
@@ -897,7 +927,7 @@ func TestProxyService_ProxyStreamRequest_RetryOn403(t *testing.T) {
 	logger := zap.NewNop()
 	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 
 	model := &models.Model{
 		ID:                1,
@@ -984,7 +1014,7 @@ func TestProxyService_ProxyRequest_NoRetryOn400(t *testing.T) {
 	logger := zap.NewNop()
 	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 
 	model := &models.Model{
 		ID:                1,
@@ -1124,7 +1154,7 @@ func TestBuildStreamMeta_WithCacheReadTokens(t *testing.T) {
 }
 
 func TestParseSSEUsage_WithCacheTokens(t *testing.T) {
-	ps := NewProxyService(nil, nil, nil, zap.NewNop())
+	ps := NewProxyService(nil, nil, nil, zap.NewNop(), nil)
 
 	var inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int
 
@@ -1158,7 +1188,7 @@ func TestProxyService_StreamContextCancel(t *testing.T) {
 	logger := zap.NewNop()
 	hc := NewHealthChecker(config.HealthCheckConfig{Enabled: true}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 
 	ep := createProxyTestEndpoint(upstream.URL)
 	registerHealthyEndpoints(hc, []*models.Endpoint{ep})
@@ -1226,7 +1256,7 @@ func TestProxyService_RetryUsesPerAttemptTiming(t *testing.T) {
 	logger := zap.NewNop()
 	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
 	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
-	ps := NewProxyService(hc, lb, nil, logger)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
 
 	model := &models.Model{
 		ID: 1, Name: "claude-3-sonnet", Role: models.ModelRoleDefault,

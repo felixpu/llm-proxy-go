@@ -29,7 +29,7 @@ func setupUserTest(t *testing.T) (*UserHandler, *repository.SQLUserRepository, *
 	keyRepo := repository.NewAPIKeyRepository(db)
 	logger := testutil.NewTestLogger()
 
-	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 	handler := NewUserHandler(userRepo, authService)
 
 	ctx := context.Background()

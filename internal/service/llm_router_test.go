@@ -16,7 +16,7 @@ func TestNewLLMRouter(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	logger := zap.NewNop()
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 	assert.NotNil(t, router)
 	assert.NotNil(t, router.configRepo)
 	assert.NotNil(t, router.modelRepo)
@@ -319,7 +319,7 @@ func TestLLMRouter_InferTaskType_RuleBasedDisabled(t *testing.T) {
 	_, execErr = db.Exec(`UPDATE routing_llm_config SET rule_based_routing_enabled = 0, enabled = 0 WHERE id = 1`)
 	assert.NoError(t, execErr)
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{
@@ -340,7 +340,7 @@ func TestLLMRouter_InferTaskType_RuleMatch(t *testing.T) {
 	logger := zap.NewNop()
 
 	// Enable rule-based routing (default)
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{
@@ -361,7 +361,7 @@ func TestLLMRouter_InferTaskType_NoRuleMatch_FallbackDefault(t *testing.T) {
 	logger := zap.NewNop()
 
 	// Enable rule-based routing with default fallback (default config)
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{
@@ -386,7 +386,7 @@ func TestLLMRouter_InferTaskType_NoRuleMatch_FallbackUserChoice(t *testing.T) {
 	_, execErr = db.Exec(`UPDATE routing_llm_config SET rule_fallback_strategy = 'user', rule_fallback_task_type = 'complex' WHERE id = 1`)
 	assert.NoError(t, execErr)
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{
@@ -410,7 +410,7 @@ func TestLLMRouter_InferTaskType_RuleMatchCarriesRuleInfo(t *testing.T) {
 		VALUES ('custom_dev_rule', '["自定义开发"]', 'complex', 95, 0, 1)`)
 	assert.NoError(t, err)
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{
@@ -435,7 +435,7 @@ func TestLLMRouter_InferTaskType_BuiltinRuleCarriesRuleInfo(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	logger := zap.NewNop()
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{
@@ -457,7 +457,7 @@ func TestLLMRouter_InferTaskType_NoMatch_NoRuleInfo(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	logger := zap.NewNop()
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{
@@ -483,7 +483,7 @@ func TestLLMRouter_InferTaskType_EmptyMessage(t *testing.T) {
 	_, execErr = db.Exec(`UPDATE routing_llm_config SET enabled = 1 WHERE id = 1`)
 	assert.NoError(t, execErr)
 
-	router := NewLLMRouter(db, nil, logger)
+	router := NewLLMRouter(db, nil, logger, nil)
 
 	req := &models.AnthropicRequest{
 		Messages: []models.Message{},

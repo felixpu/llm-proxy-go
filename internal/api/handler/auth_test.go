@@ -29,7 +29,7 @@ func TestAuthHandler_Login_Success(t *testing.T) {
 	keyRepo := repository.NewAPIKeyRepository(db)
 
 	// Create auth service
-	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 
 	// Create test user with known password
 	password := "password123"
@@ -77,7 +77,7 @@ func TestAuthHandler_Login_InvalidRequest(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 	keyRepo := repository.NewAPIKeyRepository(db)
-	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 
 	handler := NewAuthHandler(authService, logger)
 
@@ -106,7 +106,7 @@ func TestAuthHandler_Login_InvalidCredentials(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 	keyRepo := repository.NewAPIKeyRepository(db)
-	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 
 	// Create test user with known password
 	password := "correctpassword"
@@ -148,7 +148,7 @@ func TestAuthHandler_Logout_Success(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 	keyRepo := repository.NewAPIKeyRepository(db)
-	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 
 	// Create test user
 	userID, err := userRepo.Insert(context.Background(), &models.User{
@@ -192,7 +192,7 @@ func TestAuthHandler_Logout_NoToken(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 	keyRepo := repository.NewAPIKeyRepository(db)
-	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 
 	handler := NewAuthHandler(authService, logger)
 
@@ -218,7 +218,7 @@ func TestAuthHandler_GetMe_Authenticated(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 	keyRepo := repository.NewAPIKeyRepository(db)
-	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 
 	handler := NewAuthHandler(authService, logger)
 
@@ -252,7 +252,7 @@ func TestAuthHandler_GetMe_Unauthenticated(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 	keyRepo := repository.NewAPIKeyRepository(db)
-	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 
 	handler := NewAuthHandler(authService, logger)
 
@@ -280,7 +280,7 @@ func TestAuthHandler_Refresh_Success(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 	keyRepo := repository.NewAPIKeyRepository(db)
-	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 
 	// Create test user
 	ctx := context.Background()
@@ -333,7 +333,7 @@ func TestAuthHandler_Refresh_Unauthenticated(t *testing.T) {
 	userRepo := repository.NewUserRepository(db)
 	sessionRepo := repository.NewSessionRepository(db, logger)
 	keyRepo := repository.NewAPIKeyRepository(db)
-	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger)
+	authService := service.NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
 
 	handler := NewAuthHandler(authService, logger)
 

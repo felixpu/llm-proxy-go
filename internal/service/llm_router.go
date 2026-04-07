@@ -42,6 +42,7 @@ type LLMRouterDeps struct {
 	RuleRepo      repository.RoutingRuleRepository
 	Logger        *zap.Logger
 	HTTPClient    *http.Client
+	AsyncPool     *AsyncWorkerPool
 }
 
 // LLMRouter performs intelligent routing by calling an LLM to infer task type.
@@ -54,6 +55,7 @@ type LLMRouter struct {
 	ruleRepo      repository.RoutingRuleRepository
 	logger        *zap.Logger
 	client        *http.Client
+	asyncPool     *AsyncWorkerPool
 }
 
 // NewLLMRouter creates a new LLMRouter.
@@ -61,6 +63,7 @@ func NewLLMRouter(
 	db *sql.DB,
 	embeddingSvc *EmbeddingService,
 	logger *zap.Logger,
+	asyncPool *AsyncWorkerPool,
 ) *LLMRouter {
 	return NewLLMRouterWithDeps(LLMRouterDeps{
 		ConfigRepo:    repository.NewRoutingConfigRepository(db, logger),
@@ -70,6 +73,7 @@ func NewLLMRouter(
 		EmbeddingSvc:  embeddingSvc,
 		RuleRepo:      repository.NewRoutingRuleRepository(db, logger),
 		Logger:        logger,
+		AsyncPool:     asyncPool,
 		HTTPClient: &http.Client{
 			Timeout: 15 * time.Second,
 		},
@@ -94,12 +98,13 @@ func NewLLMRouterWithDeps(deps LLMRouterDeps) *LLMRouter {
 	return &LLMRouter{
 		configRepo:    deps.ConfigRepo,
 		modelRepo:     deps.ModelRepo,
-		decisionCache: newHybridRoutingDecisionCache(cache, deps.EmbeddingRepo, logger),
+		decisionCache: newHybridRoutingDecisionCache(cache, deps.EmbeddingRepo, logger, deps.AsyncPool),
 		routingCache:  cache,
 		embeddingSvc:  deps.EmbeddingSvc,
 		ruleRepo:      deps.RuleRepo,
 		logger:        logger,
 		client:        client,
+		asyncPool:     deps.AsyncPool,
 	}
 }
 
@@ -195,15 +200,19 @@ func (r *LLMRouter) classifyWithRules(ctx context.Context, cfg *models.RoutingCo
 
 	// Increment hit count for matched rule async with timeout
 	if result.Rule != nil && result.Rule.ID > 0 {
-		go func() {
+		ruleID := result.Rule.ID
+		if ok := r.asyncPool.Submit(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), DefaultAsyncRepoTimeout)
 			defer cancel()
-			if err := r.ruleRepo.IncrementHitCount(ctx, result.Rule.ID); err != nil {
+			if err := r.ruleRepo.IncrementHitCount(ctx, ruleID); err != nil {
 				r.logger.Warn("failed to increment rule hit count",
-					zap.Int64("rule_id", result.Rule.ID),
+					zap.Int64("rule_id", ruleID),
 					zap.Error(err))
 			}
-		}()
+		}); !ok {
+			r.logger.Warn("dropped rule hit count update",
+				zap.Int64("rule_id", ruleID))
+		}
 	}
 
 	taskType := parseModelRole(result.TaskType)
