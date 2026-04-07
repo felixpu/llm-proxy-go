@@ -180,7 +180,7 @@
 
 .log-card {
     display: grid;
-    grid-template-columns: 1fr auto auto;
+    grid-template-columns: 1fr auto auto auto;
     gap: 0 var(--spacing-xl);
     padding: var(--spacing-md) var(--spacing-lg);
     background: var(--bg-elevated);
@@ -329,6 +329,17 @@
     font-size: var(--font-size-xs);
     color: var(--text-tertiary);
     white-space: nowrap;
+}
+
+.log-card-datetime {
+    border-left: 1px solid var(--border-color);
+    min-width: auto;
+    padding-left: var(--spacing-lg);
+    justify-content: center;
+}
+
+.log-card-token {
+    border-left: none;
 }
 
 .log-card-metric-value .token-down {
@@ -563,6 +574,10 @@
         justify-content: space-between;
         align-items: center;
         min-width: 0;
+    }
+
+    .log-card-datetime {
+        border-left: none;
     }
 
     .log-card-header {

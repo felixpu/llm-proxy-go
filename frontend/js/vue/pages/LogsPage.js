@@ -912,7 +912,7 @@ window.VuePages = window.VuePages || {};
                     </div>\
                 </div>\
                 <!-- TOKEN 列 -->\
-                <div class="log-card-metric" @click.stop>\
+                <div class="log-card-metric log-card-token" @click.stop>\
                     <span class="log-card-metric-label">TOKEN</span>\
                     <span class="log-card-metric-value">\
                         <span class="token-down">&darr; {{ (log.input_tokens||0).toLocaleString() }}</span>\
@@ -951,39 +951,40 @@ window.VuePages = window.VuePages || {};
                 <!-- 费用列 -->\
                 <div class="log-card-metric" @click.stop>\
                     <span class="log-card-metric-label">费用</span>\
-                    <div class="log-card-metric-body">\
-                        <span class="log-card-metric-value">\
-                            ${{ (log.cost||0).toFixed(6) }}\
-                            <span class="rich-tooltip-wrap">\
-                                <span class="metric-info-icon">\
-                                    <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>\
-                                </span>\
-                                <div class="rich-tooltip">\
-                                    <div class="rich-tooltip-title">成本明细</div>\
-                                    <div class="rich-tooltip-row">\
-                                        <span class="rich-tooltip-label">输入成本</span>\
-                                        <span class="rich-tooltip-val">${{ computeInputCost(log) }}</span>\
-                                    </div>\
-                                    <div class="rich-tooltip-row">\
-                                        <span class="rich-tooltip-label">输出成本</span>\
-                                        <span class="rich-tooltip-val">${{ computeOutputCost(log) }}</span>\
-                                    </div>\
-                                    <div v-show="log.cache_creation_input_tokens > 0" class="rich-tooltip-row">\
-                                        <span class="rich-tooltip-label">缓存创建成本</span>\
-                                        <span class="rich-tooltip-val">${{ computeCacheCreateCost(log) }}</span>\
-                                    </div>\
-                                    <div class="rich-tooltip-divider"></div>\
-                                    <div class="rich-tooltip-row">\
-                                        <span class="rich-tooltip-label">计费</span>\
-                                        <span class="rich-tooltip-val val-highlight">${{ (log.cost||0).toFixed(6) }}</span>\
-                                    </div>\
-                                </div>\
+                    <span class="log-card-metric-value">\
+                        ${{ (log.cost||0).toFixed(6) }}\
+                        <span class="rich-tooltip-wrap">\
+                            <span class="metric-info-icon">\
+                                <svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>\
                             </span>\
+                            <div class="rich-tooltip">\
+                                <div class="rich-tooltip-title">成本明细</div>\
+                                <div class="rich-tooltip-row">\
+                                    <span class="rich-tooltip-label">输入成本</span>\
+                                    <span class="rich-tooltip-val">${{ computeInputCost(log) }}</span>\
+                                </div>\
+                                <div class="rich-tooltip-row">\
+                                    <span class="rich-tooltip-label">输出成本</span>\
+                                    <span class="rich-tooltip-val">${{ computeOutputCost(log) }}</span>\
+                                </div>\
+                                <div v-show="log.cache_creation_input_tokens > 0" class="rich-tooltip-row">\
+                                    <span class="rich-tooltip-label">缓存创建成本</span>\
+                                    <span class="rich-tooltip-val">${{ computeCacheCreateCost(log) }}</span>\
+                                </div>\
+                                <div class="rich-tooltip-divider"></div>\
+                                <div class="rich-tooltip-row">\
+                                    <span class="rich-tooltip-label">计费</span>\
+                                    <span class="rich-tooltip-val val-highlight">${{ (log.cost||0).toFixed(6) }}</span>\
+                                </div>\
+                            </div>\
                         </span>\
-                        <div class="log-card-metric-meta">\
-                            <span class="log-card-metric-meta-time">{{ formatDateTime(log.created_at) }}</span>\
-                            <span class="log-card-metric-meta-user" v-show="log.username">{{ log.username }}</span>\
-                        </div>\
+                    </span>\
+                </div>\
+                <!-- 日期列 -->\
+                <div class="log-card-metric log-card-datetime" @click.stop>\
+                    <div class="log-card-metric-meta">\
+                        <span class="log-card-metric-meta-time">{{ formatDateTime(log.created_at) }}</span>\
+                        <span class="log-card-metric-meta-user" v-show="log.username">{{ log.username }}</span>\
                     </div>\
                 </div>\
             </div>\
