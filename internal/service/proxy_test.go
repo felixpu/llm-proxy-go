@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -396,6 +398,244 @@ func TestProxyService_StreamModelNameMapping(t *testing.T) {
 	assert.Equal(t, "claude-3-sonnet-20240229", meta.SelectedModel, "metadata should reflect selected model")
 }
 
+func TestProxyService_ProxyRequest_AutoDetectsOpenAIChatAndTransformsResponse(t *testing.T) {
+	var actualPath string
+	var actualAuth string
+	var requestBody map[string]interface{}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/responses", "/v1/messages":
+			http.NotFound(w, r)
+		case "/v1/chat/completions":
+			actualPath = r.URL.Path
+			actualAuth = r.Header.Get("Authorization")
+			err := json.NewDecoder(r.Body).Decode(&requestBody)
+			require.NoError(t, err)
+
+			w.Header().Set("Content-Type", "application/json")
+			_, err = w.Write([]byte(`{"id":"chatcmpl_123","model":"gpt-4o-mini","choices":[{"message":{"role":"assistant","content":"Hello from OpenAI"},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":7}}`))
+			require.NoError(t, err)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{Enabled: true}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
+
+	ep := &models.Endpoint{
+		Provider: &models.Provider{
+			ID:      1,
+			Name:    "openai-auto",
+			BaseURL: upstream.URL,
+			APIKey:  "test-key",
+			APIType: string(APITypeAuto),
+			Enabled: true,
+		},
+		Model: &models.Model{
+			ID:                1,
+			Name:              "gpt-4o-mini",
+			Role:              models.ModelRoleDefault,
+			CostPerMtokInput:  1.0,
+			CostPerMtokOutput: 2.0,
+			BillingMultiplier: 1.0,
+			Enabled:           true,
+		},
+		Status: models.EndpointHealthy,
+	}
+	registerHealthyEndpoints(hc, []*models.Endpoint{ep})
+
+	req := &models.AnthropicRequest{
+		Model:     "auto",
+		MaxTokens: 100,
+		System:    &models.SystemPrompt{Text: "Be concise.", IsArray: false},
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "Hello"}},
+		},
+	}
+	selection := &EndpointSelectionResult{
+		Endpoint: ep,
+		Model:    ep.Model,
+		TaskType: ep.Model.Role,
+	}
+
+	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, "", selection, []*models.Endpoint{ep})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, meta)
+
+	assert.Equal(t, "/v1/chat/completions", actualPath)
+	assert.Equal(t, "Bearer test-key", actualAuth)
+	assert.Equal(t, "gpt-4o-mini", requestBody["model"])
+	_, hasMessages := requestBody["messages"]
+	assert.True(t, hasMessages, "openai request should contain messages")
+	_, hasSystem := requestBody["system"]
+	assert.False(t, hasSystem, "openai request should normalize system into messages")
+
+	assert.Equal(t, "assistant", resp.Role)
+	require.Len(t, resp.Content, 1)
+	assert.Equal(t, "text", resp.Content[0].Type)
+	assert.Equal(t, "Hello from OpenAI", resp.Content[0].Text)
+	assert.Equal(t, 12, resp.Usage.InputTokens)
+	assert.Equal(t, 7, resp.Usage.OutputTokens)
+}
+
+func TestProxyService_ProxyRequest_AnthropicResponsesTransformsRequestAndResponse(t *testing.T) {
+	var requestBody map[string]interface{}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/responses", r.URL.Path)
+		require.Equal(t, "test-key", r.Header.Get("x-api-key"))
+		require.Equal(t, DefaultAnthropicVersion, r.Header.Get("anthropic-version"))
+
+		err := json.NewDecoder(r.Body).Decode(&requestBody)
+		require.NoError(t, err)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, err = w.Write([]byte(`{"id":"resp_123","model":"claude-opus-4-6","role":"assistant","stop_reason":"end_turn","usage":{"input_tokens":11,"output_tokens":5},"output_text":"From responses api"}`))
+		require.NoError(t, err)
+	}))
+	defer upstream.Close()
+
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{Enabled: true}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
+
+	ep := &models.Endpoint{
+		Provider: &models.Provider{
+			ID:      1,
+			Name:    "responses-provider",
+			BaseURL: upstream.URL,
+			APIKey:  "test-key",
+			APIType: string(APITypeAnthropicResponses),
+			Enabled: true,
+		},
+		Model: &models.Model{
+			ID:                1,
+			Name:              "claude-opus-4-6",
+			Role:              models.ModelRoleDefault,
+			CostPerMtokInput:  1.0,
+			CostPerMtokOutput: 2.0,
+			BillingMultiplier: 1.0,
+			Enabled:           true,
+		},
+		Status: models.EndpointHealthy,
+	}
+	registerHealthyEndpoints(hc, []*models.Endpoint{ep})
+
+	req := &models.AnthropicRequest{
+		Model:     "auto",
+		MaxTokens: 100,
+		System:    &models.SystemPrompt{Text: "Use bullet points.", IsArray: false},
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "Summarize this."}},
+		},
+	}
+	selection := &EndpointSelectionResult{Endpoint: ep, Model: ep.Model, TaskType: ep.Model.Role}
+
+	resp, meta, err := ps.ProxyRequest(context.Background(), req, http.Header{}, "", selection, []*models.Endpoint{ep})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.NotNil(t, meta)
+
+	assert.Equal(t, "claude-opus-4-6", requestBody["model"])
+	assert.Equal(t, "Use bullet points.", requestBody["instructions"])
+	_, hasMessages := requestBody["messages"]
+	assert.False(t, hasMessages, "responses api request should not use messages field")
+	_, hasInput := requestBody["input"]
+	assert.True(t, hasInput, "responses api request should use input field")
+
+	require.Len(t, resp.Content, 1)
+	assert.Equal(t, "From responses api", resp.Content[0].Text)
+	assert.Equal(t, 11, resp.Usage.InputTokens)
+	assert.Equal(t, 5, resp.Usage.OutputTokens)
+}
+
+func TestProxyService_ProxyStreamRequest_OpenAIChatTransformsSSE(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/chat/completions", r.URL.Path)
+		require.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
+		require.Equal(t, "text/event-stream", r.Header.Get("Accept"))
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+
+		flusher, ok := w.(http.Flusher)
+		require.True(t, ok)
+
+		for _, line := range []string{
+			`data: {"id":"chatcmpl_123","model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}` + "\n\n",
+			`data: {"id":"chatcmpl_123","model":"gpt-4o-mini","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}` + "\n\n",
+			`data: {"id":"chatcmpl_123","model":"gpt-4o-mini","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}` + "\n\n",
+			"data: [DONE]\n\n",
+		} {
+			_, err := io.WriteString(w, line)
+			require.NoError(t, err)
+			flusher.Flush()
+		}
+	}))
+	defer upstream.Close()
+
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{Enabled: true}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ps := NewProxyService(hc, lb, nil, logger, nil)
+
+	ep := &models.Endpoint{
+		Provider: &models.Provider{
+			ID:      1,
+			Name:    "openai-stream",
+			BaseURL: upstream.URL,
+			APIKey:  "test-key",
+			APIType: string(APITypeOpenAIChat),
+			Enabled: true,
+		},
+		Model: &models.Model{
+			ID:                1,
+			Name:              "gpt-4o-mini",
+			Role:              models.ModelRoleDefault,
+			CostPerMtokInput:  1.0,
+			CostPerMtokOutput: 2.0,
+			BillingMultiplier: 1.0,
+			Enabled:           true,
+		},
+		Status: models.EndpointHealthy,
+	}
+	registerHealthyEndpoints(hc, []*models.Endpoint{ep})
+
+	req := &models.AnthropicRequest{
+		Model:     "auto",
+		MaxTokens: 100,
+		Stream:    true,
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "Hello"}},
+		},
+	}
+	selection := &EndpointSelectionResult{Endpoint: ep, Model: ep.Model, TaskType: ep.Model.Role}
+
+	ch, meta, err := ps.ProxyStreamRequest(context.Background(), req, http.Header{}, "", selection, []*models.Endpoint{ep})
+	require.NoError(t, err)
+	require.NotNil(t, meta)
+
+	streamText, finalMeta := collectStreamOutput(t, ch)
+	assert.Contains(t, streamText, `"type":"message_start"`)
+	assert.Contains(t, streamText, `"type":"content_block_start"`)
+	assert.Contains(t, streamText, `"type":"content_block_delta"`)
+	assert.Contains(t, streamText, `"type":"content_block_stop"`)
+	assert.Contains(t, streamText, `"type":"message_delta"`)
+	assert.Contains(t, streamText, `"type":"message_stop"`)
+	assert.NotContains(t, streamText, `[DONE]`)
+	assert.NotContains(t, streamText, `chat.completion.chunk`)
+	require.NotNil(t, finalMeta)
+	assert.Equal(t, 10, finalMeta.InputTokens)
+	assert.Equal(t, 5, finalMeta.OutputTokens)
+}
+
 func TestUpstreamError_Error(t *testing.T) {
 	err := &UpstreamError{StatusCode: 400, Body: []byte("bad request")}
 	assert.Equal(t, "upstream returned status 400", err.Error())
@@ -574,7 +814,7 @@ func TestProxyService_ConnectStreamEndpoint_ForwardsOriginalQueryAndClientHeader
 		"X-Client-Type": []string{"cli"},
 	}
 
-	resp, err := ps.connectStreamEndpoint(context.Background(), req, headers, "beta=true", ep, time.Now())
+	resp, err := ps.connectStreamEndpoint(context.Background(), req, headers, "beta=true", ep, APITypeAnthropicMessages, time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	defer resp.Body.Close()
@@ -759,6 +999,25 @@ func createProxyTestEndpoint(baseURL string) *models.Endpoint {
 		},
 		Status: models.EndpointHealthy,
 	}
+}
+
+func collectStreamOutput(t *testing.T, ch <-chan StreamChunk) (string, *ProxyMetadata) {
+	t.Helper()
+
+	var builder strings.Builder
+	var finalMeta *ProxyMetadata
+
+	for chunk := range ch {
+		require.NoError(t, chunk.Err)
+		if len(chunk.Data) > 0 {
+			builder.Write(chunk.Data)
+		}
+		if chunk.Done {
+			finalMeta = chunk.Meta
+		}
+	}
+
+	return builder.String(), finalMeta
 }
 
 // registerHealthyEndpoints registers endpoints as healthy in the HealthChecker.

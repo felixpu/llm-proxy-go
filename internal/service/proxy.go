@@ -166,20 +166,16 @@ func (s *ProxyService) proxyToEndpoint(
 	s.healthChecker.IncrementConnections(epName)
 	defer s.healthChecker.DecrementConnections(epName)
 
-	// Create a copy of the request and replace model name with the selected endpoint's model
-	proxyReq := *req
-	proxyReq.Model = ep.Model.Name
-	body, err := json.Marshal(&proxyReq)
+	apiType, err := resolveProxyAPIType(ctx, ep)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve api type: %w", err)
+	}
+
+	body, err := buildProxyUpstreamBody(req, ep.Model.Name, apiType)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	// Determine API type for this provider
-	apiType := APIType(ep.Provider.APIType)
-	if apiType == "" || apiType == APITypeAuto {
-		// Use default Anthropic Messages API for backward compatibility
-		apiType = APITypeAnthropicMessages
-	}
 	adapter := GetAdapter(apiType)
 
 	upstreamURL := buildUpstreamURL(ep.Provider.BaseURL, adapter.GetEndpoint(), originalQuery)
@@ -243,8 +239,8 @@ func (s *ProxyService) proxyToEndpoint(
 		return nil, nil, &UpstreamError{StatusCode: resp.StatusCode, Body: respBody}
 	}
 
-	var anthropicResp models.AnthropicResponse
-	if err := json.Unmarshal(respBody, &anthropicResp); err != nil {
+	anthropicResp, err := parseProxyUpstreamResponse(respBody, apiType)
+	if err != nil {
 		return nil, nil, fmt.Errorf("decode upstream response: %w", err)
 	}
 
@@ -261,7 +257,7 @@ func (s *ProxyService) proxyToEndpoint(
 		Cost:                     calculateCost(ep.Model, anthropicResp.Usage),
 	}
 
-	return &anthropicResp, meta, nil
+	return anthropicResp, meta, nil
 }
 
 // selectAlternativeEndpoint selects an alternative healthy endpoint for the model.
@@ -536,7 +532,21 @@ func (s *ProxyService) ProxyStreamRequest(
 		epName := EndpointName(ep)
 		triedEndpoints[epName] = true
 
-		resp, err := s.connectStreamEndpoint(ctx, req, originalHeaders, originalQuery, ep, attemptStart)
+		apiType, err := resolveProxyAPIType(ctx, ep)
+		if err != nil {
+			s.logger.Warn("failed to resolve stream api type",
+				zap.Int("attempt", attempt+1),
+				zap.String("endpoint", epName),
+				zap.Error(err))
+
+			ep = s.selectAlternativeEndpoint(selection.Model, endpoints, triedEndpoints)
+			if ep == nil {
+				return nil, nil, fmt.Errorf("all endpoints failed for model %s: %w", selection.Model.Name, err)
+			}
+			continue
+		}
+
+		resp, err := s.connectStreamEndpoint(ctx, req, originalHeaders, originalQuery, ep, apiType, attemptStart)
 		if err != nil {
 			// Check if the error is non-retryable
 			var ue *UpstreamError
@@ -574,7 +584,7 @@ func (s *ProxyService) ProxyStreamRequest(
 		// Return a copy so the caller cannot race with the goroutine
 		// that populates streaming fields (LatencyMs, InputTokens, etc.).
 		returnMeta := *meta
-		go s.readSSEStream(ctx, resp, ep, epName, attemptStart, meta, chunkChan)
+		go s.readSSEStream(ctx, resp, ep, epName, apiType, attemptStart, meta, chunkChan)
 		return chunkChan, &returnMeta, nil
 	}
 
@@ -589,22 +599,15 @@ func (s *ProxyService) connectStreamEndpoint(
 	originalHeaders http.Header,
 	originalQuery string,
 	ep *models.Endpoint,
+	apiType APIType,
 	start time.Time,
 ) (*http.Response, error) {
 	epName := EndpointName(ep)
-
-	// Determine API type for this provider
-	apiType := APIType(ep.Provider.APIType)
-	if apiType == "" || apiType == APITypeAuto {
-		apiType = APITypeAnthropicMessages
-	}
 	adapter := GetAdapter(apiType)
 
 	streamReq := *req
-	streamReq.Model = ep.Model.Name
 	streamReq.Stream = true
-
-	body, err := json.Marshal(&streamReq)
+	body, err := buildProxyUpstreamBody(&streamReq, ep.Model.Name, apiType)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
@@ -667,6 +670,7 @@ func (s *ProxyService) readSSEStream(
 	resp *http.Response,
 	ep *models.Endpoint,
 	epName string,
+	apiType APIType,
 	start time.Time,
 	meta *ProxyMetadata,
 	chunkChan chan<- StreamChunk,
@@ -678,6 +682,7 @@ func (s *ProxyService) readSSEStream(
 	var inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int
 	var firstByteTime time.Time
 	reader := bufio.NewReader(resp.Body)
+	transformer := newSSETransformer(apiType, ep.Model.Name)
 
 	for {
 		select {
@@ -700,8 +705,32 @@ func (s *ProxyService) readSSEStream(
 			if errors.Is(err, io.EOF) {
 				// EOF may carry remaining data — send it before finishing
 				if len(line) > 0 {
-					chunkChan <- StreamChunk{Data: line}
-					s.parseSSEUsage(line, &inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens)
+					if err := s.emitTransformedSSE(line, transformer, &firstByteTime, &inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens, chunkChan); err != nil {
+						s.logger.Error("error transforming final stream chunk", zap.Error(err))
+						latencyMs := streamLatency(firstByteTime, start)
+						s.healthChecker.UpdateRequestStatsV2(RequestResult{
+							EndpointName: epName,
+							Success:      false,
+							LatencyMs:    latencyMs,
+							Err:          err,
+						})
+						finalMeta := buildStreamMeta(meta, ep, false, latencyMs, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
+						chunkChan <- StreamChunk{Err: err, Done: true, Meta: &finalMeta}
+						return
+					}
+				}
+				if err := s.emitSSEFinalize(transformer, &firstByteTime, &inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens, chunkChan); err != nil {
+					s.logger.Error("error finalizing transformed stream", zap.Error(err))
+					latencyMs := streamLatency(firstByteTime, start)
+					s.healthChecker.UpdateRequestStatsV2(RequestResult{
+						EndpointName: epName,
+						Success:      false,
+						LatencyMs:    latencyMs,
+						Err:          err,
+					})
+					finalMeta := buildStreamMeta(meta, ep, false, latencyMs, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
+					chunkChan <- StreamChunk{Err: err, Done: true, Meta: &finalMeta}
+					return
 				}
 				break
 			}
@@ -718,16 +747,19 @@ func (s *ProxyService) readSSEStream(
 			return
 		}
 
-		// Send raw chunk to client
-		if len(line) > 0 {
-			if firstByteTime.IsZero() {
-				firstByteTime = time.Now()
-			}
-			chunkChan <- StreamChunk{Data: line}
+		if err := s.emitTransformedSSE(line, transformer, &firstByteTime, &inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens, chunkChan); err != nil {
+			s.logger.Error("error transforming stream", zap.Error(err))
+			latencyMs := streamLatency(firstByteTime, start)
+			s.healthChecker.UpdateRequestStatsV2(RequestResult{
+				EndpointName: epName,
+				Success:      false,
+				LatencyMs:    latencyMs,
+				Err:          err,
+			})
+			finalMeta := buildStreamMeta(meta, ep, false, latencyMs, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
+			chunkChan <- StreamChunk{Err: err, Done: true, Meta: &finalMeta}
+			return
 		}
-
-		// Parse SSE event for token counting
-		s.parseSSEUsage(line, &inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens)
 	}
 
 	// Calculate final metrics using TTFB
@@ -751,6 +783,53 @@ func (s *ProxyService) readSSEStream(
 		zap.Int("output_tokens", outputTokens),
 		zap.Float64("cost", finalMeta.Cost),
 		zap.Float64("latency_ms", latencyMs))
+}
+
+func (s *ProxyService) emitTransformedSSE(
+	line []byte,
+	transformer sseTransformer,
+	firstByteTime *time.Time,
+	inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens *int,
+	chunkChan chan<- StreamChunk,
+) error {
+	chunks, err := transformer.Transform(line)
+	if err != nil {
+		return err
+	}
+	for _, chunk := range chunks {
+		if len(chunk) == 0 {
+			continue
+		}
+		if firstByteTime.IsZero() {
+			*firstByteTime = time.Now()
+		}
+		chunkChan <- StreamChunk{Data: chunk}
+		s.parseSSEUsage(chunk, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
+	}
+	return nil
+}
+
+func (s *ProxyService) emitSSEFinalize(
+	transformer sseTransformer,
+	firstByteTime *time.Time,
+	inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens *int,
+	chunkChan chan<- StreamChunk,
+) error {
+	chunks, err := transformer.Finalize()
+	if err != nil {
+		return err
+	}
+	for _, chunk := range chunks {
+		if len(chunk) == 0 {
+			continue
+		}
+		if firstByteTime.IsZero() {
+			*firstByteTime = time.Now()
+		}
+		chunkChan <- StreamChunk{Data: chunk}
+		s.parseSSEUsage(chunk, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
+	}
+	return nil
 }
 
 // parseSSEUsage extracts token usage from an SSE data line.

@@ -238,6 +238,37 @@ func (a *AnthropicResponsesAdapter) GetEndpoint() string {
 	return "/v1/responses"
 }
 
+func (a *AnthropicResponsesAdapter) BuildRequestBody(messages []Message, options RequestOptions) ([]byte, error) {
+	instructions, input := splitResponsesMessages(messages)
+	body := map[string]interface{}{
+		"model":             options.Model,
+		"input":             input,
+		"max_output_tokens": options.MaxTokens,
+		"temperature":       options.Temperature,
+		"stream":            options.Stream,
+	}
+	if instructions != "" {
+		body["instructions"] = instructions
+	}
+	return json.Marshal(body)
+}
+
+func (a *AnthropicResponsesAdapter) ParseResponse(body []byte) (*Response, error) {
+	resp, err := parseAnthropicResponsesResponse(body)
+	if err != nil {
+		return nil, err
+	}
+
+	var parts []string
+	for _, part := range resp.Content {
+		if part.Type == "text" && part.Text != "" {
+			parts = append(parts, part.Text)
+		}
+	}
+
+	return &Response{Content: strings.Join(parts, "\n")}, nil
+}
+
 // OpenAIChatAdapter implements OpenAI Chat Completions API
 type OpenAIChatAdapter struct{}
 
@@ -260,6 +291,23 @@ func (a *OpenAIChatAdapter) BuildRequestBody(messages []Message, options Request
 	return json.Marshal(body)
 }
 
+func splitResponsesMessages(messages []Message) (string, []Message) {
+	var instructions []string
+	input := make([]Message, 0, len(messages))
+
+	for _, msg := range messages {
+		if msg.Role == "system" {
+			if strings.TrimSpace(msg.Content) != "" {
+				instructions = append(instructions, msg.Content)
+			}
+			continue
+		}
+		input = append(input, msg)
+	}
+
+	return strings.Join(instructions, "\n\n"), input
+}
+
 func (a *OpenAIChatAdapter) ParseResponse(body []byte) (*Response, error) {
 	var resp struct {
 		Choices []struct {
@@ -279,12 +327,12 @@ func (a *OpenAIChatAdapter) ParseResponse(body []byte) (*Response, error) {
 
 // LLMCallParams encapsulates parameters for a standard LLM API call.
 type LLMCallParams struct {
-	ModelCfg    *models.RoutingModelWithProvider
-	Messages    []Message
-	Options     RequestOptions
-	Client      *http.Client
-	Logger      *zap.Logger
-	LogContext  string // e.g. "routing" or "analysis" for log messages
+	ModelCfg   *models.RoutingModelWithProvider
+	Messages   []Message
+	Options    RequestOptions
+	Client     *http.Client
+	Logger     *zap.Logger
+	LogContext string // e.g. "routing" or "analysis" for log messages
 }
 
 // CallLLMModel resolves the API type, builds the request, calls the endpoint,

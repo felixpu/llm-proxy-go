@@ -1,9 +1,15 @@
 package service
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/user/llm-proxy-go/internal/models"
 )
 
 func TestGetAdapter(t *testing.T) {
@@ -130,6 +136,7 @@ func TestAnthropicResponsesAdapter(t *testing.T) {
 
 	t.Run("BuildRequestBody", func(t *testing.T) {
 		messages := []Message{
+			{Role: "system", Content: "You are precise."},
 			{Role: "user", Content: "Test"},
 		}
 		options := RequestOptions{
@@ -141,8 +148,17 @@ func TestAnthropicResponsesAdapter(t *testing.T) {
 
 		body, err := adapter.BuildRequestBody(messages, options)
 		assert.NoError(t, err)
-		assert.Contains(t, string(body), "claude-opus-4-6")
-		assert.Contains(t, string(body), "Test")
+		assert.Contains(t, string(body), `"model":"claude-opus-4-6"`)
+		assert.Contains(t, string(body), `"input"`)
+		assert.Contains(t, string(body), `"instructions":"You are precise."`)
+		assert.NotContains(t, string(body), `"messages"`)
+	})
+
+	t.Run("ParseResponse", func(t *testing.T) {
+		responseBody := `{"id":"resp_123","model":"claude-opus-4-6","stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":7},"output_text":"Structured response"}`
+		resp, err := adapter.ParseResponse([]byte(responseBody))
+		assert.NoError(t, err)
+		assert.Equal(t, "Structured response", resp.Content)
 	})
 }
 
@@ -176,4 +192,58 @@ func TestOpenAIChatAdapter(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, "Response text", resp.Content)
 	})
+}
+
+func TestCallLLMModel_AnthropicResponses(t *testing.T) {
+	var requestBody map[string]interface{}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "/v1/responses", r.URL.Path)
+		require.Equal(t, "test-key", r.Header.Get("x-api-key"))
+		require.Equal(t, DefaultAnthropicVersion, r.Header.Get("anthropic-version"))
+
+		err := json.NewDecoder(r.Body).Decode(&requestBody)
+		require.NoError(t, err)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, err = w.Write([]byte(`{"id":"resp_123","model":"claude-opus-4-6","stop_reason":"end_turn","usage":{"input_tokens":12,"output_tokens":7},"output_text":"analysis ok"}`))
+		require.NoError(t, err)
+	}))
+	defer upstream.Close()
+
+	content, err := CallLLMModel(context.Background(), LLMCallParams{
+		ModelCfg: &models.RoutingModelWithProvider{
+			RoutingModel: models.RoutingModel{
+				ModelName: "claude-opus-4-6",
+				APIType:   string(APITypeAnthropicResponses),
+			},
+			BaseURL: upstream.URL,
+			APIKey:  "test-key",
+		},
+		Messages: []Message{
+			{Role: "system", Content: "You are precise."},
+			{Role: "user", Content: "Summarize this."},
+		},
+		Options: RequestOptions{
+			Model:       "claude-opus-4-6",
+			MaxTokens:   128,
+			Temperature: 0.1,
+		},
+		Client:     upstream.Client(),
+		LogContext: "analysis",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "analysis ok", content)
+	assert.Equal(t, "claude-opus-4-6", requestBody["model"])
+	assert.Equal(t, "You are precise.", requestBody["instructions"])
+	_, hasMessages := requestBody["messages"]
+	assert.False(t, hasMessages, "responses api request should not use messages field")
+
+	inputItems, ok := requestBody["input"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, inputItems, 1)
+	firstInput, ok := inputItems[0].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "user", firstInput["role"])
+	assert.Equal(t, "Summarize this.", firstInput["content"])
 }
