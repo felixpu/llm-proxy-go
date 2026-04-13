@@ -6,6 +6,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -205,6 +206,44 @@ func TestAuthService_ValidateAPIKey_InactiveKey(t *testing.T) {
 	_, err = authService.ValidateAPIKey(ctx, fullKey)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "inactive")
+}
+
+func TestAuthService_ValidateAPIKey_ExpiredKey(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	logger := zap.NewNop()
+
+	keyRepo := repository.NewAPIKeyRepository(db)
+	userRepo := repository.NewUserRepository(db)
+	sessionRepo := repository.NewSessionRepository(db, logger)
+
+	authService := NewAuthService(keyRepo, userRepo, sessionRepo, logger, nil)
+	ctx := context.Background()
+
+	hash, _ := HashPassword("password123")
+	userID, err := userRepo.Insert(ctx, &models.User{
+		Username:     "expired-user",
+		PasswordHash: hash,
+		Role:         models.UserRoleUser,
+		IsActive:     true,
+	})
+	require.NoError(t, err)
+
+	fullKey, keyHash, keyPrefix := GenerateAPIKey()
+	expiredAt := time.Now().UTC().Add(-1 * time.Hour)
+	_, err = keyRepo.Insert(ctx, &models.APIKey{
+		UserID:    userID,
+		KeyHash:   keyHash,
+		KeyPrefix: keyPrefix,
+		Name:      "Expired Key",
+		IsActive:  true,
+		ExpiresAt: &expiredAt,
+	})
+	require.NoError(t, err)
+
+	user, err := authService.ValidateAPIKey(ctx, fullKey)
+	assert.Error(t, err)
+	assert.Nil(t, user)
+	assert.Contains(t, err.Error(), "expired")
 }
 
 func TestAuthService_AuthenticateUser(t *testing.T) {

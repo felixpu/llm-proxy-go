@@ -70,6 +70,9 @@ func (s *AuthService) ValidateAPIKey(ctx context.Context, rawKey string) (*Curre
 	if !apiKey.IsActive {
 		return nil, fmt.Errorf("API key is inactive")
 	}
+	if apiKey.ExpiresAt != nil && apiKey.ExpiresAt.Before(time.Now().UTC()) {
+		return nil, fmt.Errorf("API key has expired")
+	}
 
 	user, err := s.userRepo.FindByID(ctx, apiKey.UserID)
 	if err != nil {
