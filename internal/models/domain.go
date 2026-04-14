@@ -145,6 +145,16 @@ type RequestLogEntry struct {
 	IsInaccurate    bool       // Marked as inaccurate
 }
 
+const (
+	RoutingMethodDirect   = "direct"
+	RoutingMethodRule     = "rule"
+	RoutingMethodLLM      = "llm"
+	RoutingMethodFallback = "fallback"
+	RoutingMethodCacheL1  = "cache_l1"
+	RoutingMethodCacheL2  = "cache_l2"
+	RoutingMethodCacheL3  = "cache_l3"
+)
+
 // RequestLog represents a request log record from the database.
 type RequestLog struct {
 	ID             int64     `json:"id"`
@@ -199,6 +209,9 @@ type RoutingConfig struct {
 	SimilarityThreshold  float64 `json:"similarity_threshold"`
 	LocalEmbeddingModel  string  `json:"local_embedding_model"`
 	ForceSmartRouting    bool    `json:"force_smart_routing"`
+	ShadowRoutingEnabled bool    `json:"shadow_routing_enabled"`
+	ShadowSampleRate     float64 `json:"shadow_sample_rate"`
+	ShadowMaxQPS         int     `json:"shadow_max_qps"`
 
 	// Rule-based routing fields
 	RuleBasedRoutingEnabled bool             `json:"rule_based_routing_enabled"`
@@ -228,6 +241,9 @@ func DefaultRoutingConfig() *RoutingConfig {
 		SimilarityThreshold:  0.82,
 		LocalEmbeddingModel:  "paraphrase-multilingual-MiniLM-L12-v2",
 		ForceSmartRouting:    false,
+		ShadowRoutingEnabled: false,
+		ShadowSampleRate:     0.2,
+		ShadowMaxQPS:         20,
 
 		RuleBasedRoutingEnabled: true,
 		RuleFallbackStrategy:    FallbackDefault,

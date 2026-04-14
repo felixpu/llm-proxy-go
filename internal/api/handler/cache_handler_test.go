@@ -38,6 +38,16 @@ func TestCacheHandler_GetStats_Success(t *testing.T) {
 
 	assert.NotNil(t, resp["summary"])
 	assert.NotNil(t, resp["by_layer"])
+
+	summary, ok := resp["summary"].(map[string]any)
+	require.True(t, ok)
+	_, hasSemanticFlag := summary["semantic_cache_enabled"]
+	assert.False(t, hasSemanticFlag)
+
+	byLayer, ok := resp["by_layer"].(map[string]any)
+	require.True(t, ok)
+	_, hasL3 := byLayer["l3"]
+	assert.False(t, hasL3)
 }
 
 func TestCacheHandler_GetEntries_Success(t *testing.T) {

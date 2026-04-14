@@ -2,6 +2,7 @@ package service
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"go.uber.org/zap"
 )
@@ -15,6 +16,9 @@ type AsyncWorkerPool struct {
 	logger  *zap.Logger
 	once    sync.Once
 	stopped chan struct{}
+
+	submitted atomic.Uint64
+	dropped   atomic.Uint64
 }
 
 // NewAsyncWorkerPool creates a pool with the given number of workers and
@@ -60,14 +64,17 @@ func (p *AsyncWorkerPool) Submit(fn func()) bool {
 	// wg.Wait), so drain() in the workers will process it. This is safe.
 	select {
 	case <-p.stopped:
+		p.dropped.Add(1)
 		return false
 	default:
 	}
 
 	select {
 	case p.ch <- fn:
+		p.submitted.Add(1)
 		return true
 	default:
+		p.dropped.Add(1)
 		return false
 	}
 }
@@ -78,6 +85,22 @@ func (p *AsyncWorkerPool) Pending() int {
 		return 0
 	}
 	return len(p.ch)
+}
+
+// Submitted returns the cumulative number of accepted tasks.
+func (p *AsyncWorkerPool) Submitted() uint64 {
+	if p == nil {
+		return 0
+	}
+	return p.submitted.Load()
+}
+
+// Dropped returns the cumulative number of dropped tasks.
+func (p *AsyncWorkerPool) Dropped() uint64 {
+	if p == nil {
+		return 0
+	}
+	return p.dropped.Load()
 }
 
 // Shutdown signals workers to stop and waits for all in-flight tasks to finish.

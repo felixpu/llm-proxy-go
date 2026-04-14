@@ -2,8 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math/rand"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/user/llm-proxy-go/internal/models"
 	"go.uber.org/zap"
@@ -14,9 +18,36 @@ type EndpointSelectionResult struct {
 	Endpoint        *models.Endpoint
 	Model           *models.Model
 	TaskType        models.ModelRole
+	RoutingMethod   string
 	FallbackInfo    *models.FallbackInfo
 	RoutingDecision *models.RoutingDecision
 	RuleMatchResult *ClassifyResult
+	ShadowRouting   *ShadowRoutingResult
+	shadowResultCh  <-chan *ShadowRoutingResult
+}
+
+// ResolveShadowRouting performs a non-blocking poll for async shadow results.
+// It never waits; if no async result is ready yet, the current snapshot is returned.
+func (r *EndpointSelectionResult) ResolveShadowRouting() *ShadowRoutingResult {
+	if r == nil {
+		return nil
+	}
+	if r.ShadowRouting != nil {
+		return r.ShadowRouting
+	}
+	if r.shadowResultCh == nil {
+		return nil
+	}
+
+	select {
+	case shadow, ok := <-r.shadowResultCh:
+		if ok && shadow != nil {
+			r.ShadowRouting = shadow
+		}
+		r.shadowResultCh = nil
+	default:
+	}
+	return r.ShadowRouting
 }
 
 // EndpointSelector integrates routing decision and endpoint selection.
@@ -28,6 +59,13 @@ type EndpointSelector struct {
 	routingConfigRepo RoutingConfigProvider
 	modelAliasRepo    modelAliasResolver
 	logger            *zap.Logger
+
+	shadowRandMu sync.Mutex
+	shadowRand   *rand.Rand
+
+	shadowLimiterMu sync.Mutex
+	shadowWindowSec int64
+	shadowCount     int
 }
 
 type modelAliasResolver interface {
@@ -52,6 +90,7 @@ func NewEndpointSelector(
 		routingConfigRepo: rcr,
 		modelAliasRepo:    mar,
 		logger:            logger,
+		shadowRand:        rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 }
 
@@ -104,11 +143,14 @@ func (s *EndpointSelector) SelectEndpoint(
 			if model.Enabled && s.modelSelector.HasHealthyEndpoints(model, endpoints) {
 				ep := s.selectEndpointForModel(model, endpoints, req)
 				if ep != nil {
-					return &EndpointSelectionResult{
-						Endpoint: ep,
-						Model:    model,
-						TaskType: model.Role,
-					}, nil
+					result := &EndpointSelectionResult{
+						Endpoint:      ep,
+						Model:         model,
+						TaskType:      model.Role,
+						RoutingMethod: models.RoutingMethodDirect,
+					}
+					s.attachShadowRouting(ctx, cfg, req, endpoints, crossRoleFallback, result)
+					return result, nil
 				}
 			}
 			// Disabled model or no healthy endpoints for this model -> fallback
@@ -121,12 +163,15 @@ func (s *EndpointSelector) SelectEndpoint(
 			if ep == nil {
 				return nil, fmt.Errorf("no endpoint selected for fallback model %s", fallbackModel.Name)
 			}
-			return &EndpointSelectionResult{
-				Endpoint:     ep,
-				Model:        fallbackModel,
-				TaskType:     fallbackModel.Role,
-				FallbackInfo: fallbackInfo,
-			}, nil
+			result := &EndpointSelectionResult{
+				Endpoint:      ep,
+				Model:         fallbackModel,
+				TaskType:      fallbackModel.Role,
+				RoutingMethod: models.RoutingMethodDirect,
+				FallbackInfo:  fallbackInfo,
+			}
+			s.attachShadowRouting(ctx, cfg, req, endpoints, crossRoleFallback, result)
+			return result, nil
 		}
 
 		// 5. Model not found -> return error, require admin to configure the exact model
@@ -161,6 +206,7 @@ func (s *EndpointSelector) doSmartRouting(
 	if selErr != nil {
 		return nil, selErr
 	}
+	result.RoutingMethod = deriveRoutingMethod(decision)
 	result.RoutingDecision = decision
 	return result, nil
 }
@@ -181,11 +227,105 @@ func (s *EndpointSelector) selectWithFallback(
 		return nil, fmt.Errorf("no endpoint selected for model %s", model.Name)
 	}
 	return &EndpointSelectionResult{
-		Endpoint:     ep,
-		Model:        model,
-		TaskType:     model.Role,
-		FallbackInfo: fallbackInfo,
+		Endpoint:      ep,
+		Model:         model,
+		TaskType:      model.Role,
+		RoutingMethod: models.RoutingMethodFallback,
+		FallbackInfo:  fallbackInfo,
 	}, nil
+}
+
+func (s *EndpointSelector) attachShadowRouting(
+	ctx context.Context,
+	cfg *models.RoutingConfig,
+	req *models.AnthropicRequest,
+	endpoints []*models.Endpoint,
+	crossRoleFallback bool,
+	result *EndpointSelectionResult,
+) {
+	if result == nil || req == nil || cfg == nil || !cfg.ShadowRoutingEnabled || s.llmRouter == nil {
+		return
+	}
+	if !s.allowShadowRouting(cfg) {
+		return
+	}
+
+	shadowCh := make(chan *ShadowRoutingResult, 1)
+	result.shadowResultCh = shadowCh
+
+	go s.runShadowRouting(ctx, cfg, req, endpoints, crossRoleFallback, shadowCh)
+}
+
+func (s *EndpointSelector) runShadowRouting(
+	ctx context.Context,
+	cfg *models.RoutingConfig,
+	req *models.AnthropicRequest,
+	endpoints []*models.Endpoint,
+	crossRoleFallback bool,
+	shadowCh chan<- *ShadowRoutingResult,
+) {
+	defer close(shadowCh)
+
+	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
+	if timeout <= 0 || timeout > DefaultShadowRoutingTimeout {
+		timeout = DefaultShadowRoutingTimeout
+	}
+
+	shadowCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	shadow, err := s.doSmartRouting(shadowCtx, req, endpoints, crossRoleFallback)
+	if err != nil || shadow == nil {
+		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			s.logger.Debug("shadow routing skipped after smart routing error", zap.Error(err))
+		}
+		return
+	}
+
+	result := &ShadowRoutingResult{
+		TaskType:      shadow.TaskType,
+		RoutingMethod: shadow.RoutingMethod,
+		Model:         shadow.Model,
+		Decision:      shadow.RoutingDecision,
+	}
+
+	select {
+	case shadowCh <- result:
+	default:
+	}
+}
+
+func (s *EndpointSelector) allowShadowRouting(cfg *models.RoutingConfig) bool {
+	if cfg == nil || !cfg.ShadowRoutingEnabled {
+		return false
+	}
+	if cfg.ShadowSampleRate <= 0 {
+		return false
+	}
+	s.shadowRandMu.Lock()
+	sampled := s.shadowRand.Float64() < cfg.ShadowSampleRate
+	s.shadowRandMu.Unlock()
+	if cfg.ShadowSampleRate < 1 && !sampled {
+		return false
+	}
+
+	if cfg.ShadowMaxQPS <= 0 {
+		return false
+	}
+
+	nowSec := time.Now().Unix()
+	s.shadowLimiterMu.Lock()
+	defer s.shadowLimiterMu.Unlock()
+
+	if s.shadowWindowSec != nowSec {
+		s.shadowWindowSec = nowSec
+		s.shadowCount = 0
+	}
+	if s.shadowCount >= cfg.ShadowMaxQPS {
+		return false
+	}
+	s.shadowCount++
+	return true
 }
 
 // selectEndpointForModel selects a healthy endpoint for the given model using load balancer.

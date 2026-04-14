@@ -7,6 +7,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -242,4 +243,59 @@ func TestSelectEndpoint_ResolvesAliasToTargetModel(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, "claude-sonnet-4-5-20250929", result.Model.Name)
+}
+
+func TestSelectEndpoint_DirectRequestCapturesShadowRoutingAsync(t *testing.T) {
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ms := NewModelSelector(hc, logger)
+
+	db := testutil.NewTestDBWithDefaults(t)
+	_, err := db.Exec(`UPDATE routing_llm_config SET shadow_routing_enabled = 1, shadow_sample_rate = 1.0, shadow_max_qps = 1000 WHERE id = 1`)
+	require.NoError(t, err)
+
+	llmRouter := NewLLMRouter(db, nil, logger, nil)
+	rcr := repository.NewRoutingConfigRepository(db, logger)
+	es := NewEndpointSelector(ms, hc, lb, llmRouter, rcr, nil, logger)
+
+	defaultModel := &models.Model{ID: 1, Name: "sonnet", Role: models.ModelRoleDefault, Enabled: true}
+	complexModel := &models.Model{ID: 2, Name: "opus", Role: models.ModelRoleComplex, Enabled: true}
+	endpoints := []*models.Endpoint{
+		{
+			Model:    defaultModel,
+			Provider: &models.Provider{ID: 1, Name: "provider-default", BaseURL: "http://test", APIKey: "key"},
+		},
+		{
+			Model:    complexModel,
+			Provider: &models.Provider{ID: 2, Name: "provider-complex", BaseURL: "http://test", APIKey: "key"},
+		},
+	}
+
+	hc.UpdateState("provider-default/sonnet", models.EndpointHealthy, "")
+	hc.UpdateState("provider-complex/opus", models.EndpointHealthy, "")
+
+	req := &models.AnthropicRequest{
+		Model: "sonnet",
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "帮我设计一个微服务架构"}},
+		},
+	}
+
+	result, err := es.SelectEndpoint(t.Context(), req, endpoints)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.Equal(t, models.RoutingMethodDirect, result.RoutingMethod)
+	assert.Equal(t, "sonnet", result.Model.Name)
+
+	require.Eventually(t, func() bool {
+		return result.ResolveShadowRouting() != nil
+	}, 2*time.Second, 20*time.Millisecond)
+
+	shadow := result.ResolveShadowRouting()
+	require.NotNil(t, shadow)
+	assert.Equal(t, models.RoutingMethodRule, shadow.RoutingMethod)
+	assert.Equal(t, models.ModelRoleComplex, shadow.TaskType)
+	assert.Equal(t, "opus", shadow.Model.Name)
 }

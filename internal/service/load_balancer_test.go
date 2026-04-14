@@ -11,6 +11,14 @@ import (
 	"github.com/user/llm-proxy-go/internal/models"
 )
 
+type stubEndpointStateReader struct {
+	states map[string]*EndpointStateSnapshot
+}
+
+func (s *stubEndpointStateReader) GetState(name string) *EndpointStateSnapshot {
+	return s.states[name]
+}
+
 func TestNewLoadBalancer(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -190,6 +198,23 @@ func TestLeastConnectionsBalancer(t *testing.T) {
 	// Should select something (currently falls back to random)
 	selected := lb.Select(endpoints, nil)
 	assert.NotNil(t, selected)
+}
+
+func TestLeastConnectionsBalancer_SelectsFewestConnections(t *testing.T) {
+	lb := NewLoadBalancerWithStrategy(models.StrategyLeastConnections)
+	lb.SetStateReader(&stubEndpointStateReader{
+		states: map[string]*EndpointStateSnapshot{
+			"provider1/model1": {Name: "provider1/model1", CurrentConnections: 7},
+			"provider2/model1": {Name: "provider2/model1", CurrentConnections: 2},
+		},
+	})
+
+	ep1 := createTestEndpoint("provider1", "model1", 1)
+	ep2 := createTestEndpoint("provider2", "model1", 1)
+
+	selected := lb.Select([]*models.Endpoint{ep1, ep2}, nil)
+	require.NotNil(t, selected)
+	assert.Equal(t, "provider2", selected.Provider.Name)
 }
 
 func TestEndpointName(t *testing.T) {

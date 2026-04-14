@@ -11,9 +11,9 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// NewTestDB creates an in-memory SQLite database with full schema for testing.
-// The database is automatically closed when the test completes.
-func NewTestDB(t *testing.T) *sql.DB {
+// NewTestDB creates an in-memory SQLite database with full schema for tests/benchmarks.
+// The database is automatically closed when the caller completes.
+func NewTestDB(t testing.TB) *sql.DB {
 	t.Helper()
 
 	db, err := sql.Open("sqlite", ":memory:?_foreign_keys=ON")
@@ -31,7 +31,7 @@ func NewTestDB(t *testing.T) *sql.DB {
 }
 
 // NewTestDBWithDefaults creates a test database with default configuration data.
-func NewTestDBWithDefaults(t *testing.T) *sql.DB {
+func NewTestDBWithDefaults(t testing.TB) *sql.DB {
 	t.Helper()
 
 	db := NewTestDB(t)
@@ -43,7 +43,7 @@ func NewTestDBWithDefaults(t *testing.T) *sql.DB {
 }
 
 // NewFileBackedTestDBPair creates a file-backed SQLite write/read pair with full schema.
-func NewFileBackedTestDBPair(t *testing.T) (*sql.DB, *sql.DB) {
+func NewFileBackedTestDBPair(t testing.TB) (*sql.DB, *sql.DB) {
 	t.Helper()
 
 	dbPath := filepath.Join(t.TempDir(), "test.db")
@@ -65,7 +65,7 @@ func NewFileBackedTestDBPair(t *testing.T) (*sql.DB, *sql.DB) {
 }
 
 // NewFileBackedTestDBPairWithDefaults creates a file-backed SQLite pair with default config rows.
-func NewFileBackedTestDBPairWithDefaults(t *testing.T) (*sql.DB, *sql.DB) {
+func NewFileBackedTestDBPairWithDefaults(t testing.TB) (*sql.DB, *sql.DB) {
 	t.Helper()
 
 	db, readDB := NewFileBackedTestDBPair(t)
@@ -215,11 +215,14 @@ CREATE TABLE IF NOT EXISTS routing_llm_config (
     retry_count INTEGER DEFAULT 2,
     semantic_cache_enabled INTEGER DEFAULT 1,
     embedding_model_id INTEGER,
-    similarity_threshold REAL DEFAULT 0.82,
-    local_embedding_model TEXT DEFAULT 'paraphrase-multilingual-MiniLM-L12-v2',
-    force_smart_routing INTEGER DEFAULT 0,
-    rule_based_routing_enabled INTEGER DEFAULT 1,
-    rule_fallback_strategy TEXT DEFAULT 'default',
+	    similarity_threshold REAL DEFAULT 0.82,
+	    local_embedding_model TEXT DEFAULT 'paraphrase-multilingual-MiniLM-L12-v2',
+	    force_smart_routing INTEGER DEFAULT 0,
+	    shadow_routing_enabled INTEGER DEFAULT 0,
+	    shadow_sample_rate REAL DEFAULT 0.2,
+	    shadow_max_qps INTEGER DEFAULT 20,
+	    rule_based_routing_enabled INTEGER DEFAULT 1,
+	    rule_fallback_strategy TEXT DEFAULT 'default',
     rule_fallback_task_type TEXT DEFAULT 'default',
     rule_fallback_model_id INTEGER,
     cross_role_fallback_enabled INTEGER DEFAULT 0,
@@ -387,7 +390,7 @@ INSERT OR IGNORE INTO routing_llm_config (id, enabled) VALUES (1, 0);
 }
 
 // SeedTestData populates the database with sample test data.
-func SeedTestData(t *testing.T, db *sql.DB) {
+func SeedTestData(t testing.TB, db *sql.DB) {
 	t.Helper()
 
 	// Insert test users

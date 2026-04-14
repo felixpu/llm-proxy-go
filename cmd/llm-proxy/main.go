@@ -138,15 +138,18 @@ func run() error {
 		return fmt.Errorf("load endpoints: %w", err)
 	}
 
-	// Initialize async worker pool for background DB writes.
-	asyncPool := service.NewAsyncWorkerPool(4, 256, logger)
-	defer asyncPool.Shutdown()
+	// Initialize dedicated async pools to avoid log writes starving counters.
+	asyncLogPool := service.NewAsyncWorkerPool(3, 512, logger)
+	defer asyncLogPool.Shutdown()
+	asyncMetaPool := service.NewAsyncWorkerPool(2, 256, logger)
+	defer asyncMetaPool.Shutdown()
 
 	// Initialize services.
 	healthChecker := service.NewHealthChecker(cfg.HealthCheck, logger)
 	loadBalancer := service.NewLoadBalancer(repos.systemConfigRepo)
-	authService := service.NewAuthService(repos.keyRepo, repos.userRepo, repos.sessionRepo, logger, asyncPool)
-	proxyService := service.NewProxyService(healthChecker, loadBalancer, repos.logWriteRepo, logger, asyncPool)
+	loadBalancer.SetStateReader(healthChecker)
+	authService := service.NewAuthService(repos.keyRepo, repos.userRepo, repos.sessionRepo, logger, asyncMetaPool)
+	proxyService := service.NewProxyService(healthChecker, loadBalancer, repos.logWriteRepo, logger, asyncLogPool)
 
 	// Create default admin user if not exists.
 	if err := authService.CreateDefaultAdmin(
@@ -166,7 +169,19 @@ func run() error {
 	routingCache := service.NewRoutingCache(10000, logger)
 
 	// Initialize LLM router for intelligent routing.
-	llmRouter := service.NewLLMRouter(db, nil, logger, asyncPool)
+	llmRouter := service.NewLLMRouterWithDeps(service.LLMRouterDeps{
+		ConfigRepo:    repos.routingConfigRepo,
+		ModelRepo:     repos.routingModelRepo,
+		EmbeddingRepo: repos.embeddingCacheRepo,
+		RoutingCache:  routingCache,
+		EmbeddingSvc:  nil,
+		RuleRepo:      repos.routingRuleRepo,
+		Logger:        logger,
+		AsyncPool:     asyncMetaPool,
+		HTTPClient: &http.Client{
+			Timeout: 15 * time.Second,
+		},
+	})
 
 	// Initialize routing analyzer for rule optimization.
 	routingAnalyzer := service.NewRoutingAnalyzer(repos.logAnalyticsRepo, repos.routingRuleRepo, repos.routingModelRepo, repos.analysisReportRepo, logger)

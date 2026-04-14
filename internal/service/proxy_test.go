@@ -19,6 +19,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/user/llm-proxy-go/internal/config"
 	"github.com/user/llm-proxy-go/internal/models"
+	"github.com/user/llm-proxy-go/internal/repository"
+	"github.com/user/llm-proxy-go/tests/testutil"
 	"go.uber.org/zap"
 )
 
@@ -1410,6 +1412,48 @@ func TestBuildStreamMeta_WithCacheReadTokens(t *testing.T) {
 	// Output: 500/1M * 15 * 1 = 0.0075
 	// Total: 0.00957
 	assert.InDelta(t, 0.00957, result.Cost, 0.00001)
+}
+
+func TestProxyService_SaveRequestLog_DirectWithShadowSuggestion(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	testutil.SeedTestData(t, db)
+	repo := repository.NewRequestLogRepositoryImpl(db, zap.NewNop())
+	pool := NewAsyncWorkerPool(1, 8, zap.NewNop())
+	ps := NewProxyService(nil, nil, repo, zap.NewNop(), pool)
+
+	meta := &ProxyMetadata{
+		RequestID:        "req-shadow-1",
+		RequestedModel:   "sonnet",
+		ResolvedModel:    "sonnet",
+		SelectedModel:    "sonnet",
+		SelectedEndpoint: "provider-default",
+		InferredTaskType: string(models.ModelRoleDefault),
+		StatusCode:       http.StatusOK,
+		Success:          true,
+		RoutingMethod:    models.RoutingMethodDirect,
+		ShadowRouting: &ShadowRoutingResult{
+			TaskType:      models.ModelRoleComplex,
+			RoutingMethod: models.RoutingMethodRule,
+			Model:         &models.Model{Name: "opus", Role: models.ModelRoleComplex},
+			Decision: &models.RoutingDecision{
+				TaskType: models.ModelRoleComplex,
+				Reason:   "matched rule: architecture_keywords",
+			},
+		},
+	}
+
+	ps.SaveRequestLog(context.Background(), meta, 1, nil)
+	pool.Shutdown()
+
+	var routingMethod, routingReason string
+	err := db.QueryRow(`SELECT routing_method, routing_reason FROM request_logs WHERE request_id = ?`, meta.RequestID).
+		Scan(&routingMethod, &routingReason)
+	require.NoError(t, err)
+	assert.Equal(t, models.RoutingMethodDirect, routingMethod)
+	assert.Contains(t, routingReason, "direct:")
+	assert.Contains(t, routingReason, "shadow:")
+	assert.Contains(t, routingReason, "opus")
+	assert.Contains(t, routingReason, string(models.ModelRoleComplex))
 }
 
 func TestParseSSEUsage_WithCacheTokens(t *testing.T) {

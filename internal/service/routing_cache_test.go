@@ -72,6 +72,20 @@ func TestGetCacheKey_Consistency(t *testing.T) {
 	assert.NotEqual(t, key1, key3)
 }
 
+func TestGetCacheKey_IncludesSystemContent(t *testing.T) {
+	key1 := GetCacheKey("you are a coding assistant", "continue")
+	key2 := GetCacheKey("you are a translation assistant", "continue")
+
+	assert.NotEqual(t, key1, key2)
+}
+
+func TestGetCacheKey_NormalizesSystemContent(t *testing.T) {
+	key1 := GetCacheKey("SYSTEM PROMPT.", "hello world")
+	key2 := GetCacheKey("system prompt", "hello world")
+
+	assert.Equal(t, key1, key2)
+}
+
 func TestGetCacheKey_NormalizationEffect(t *testing.T) {
 	// Normalized versions should produce same key
 	key1 := GetCacheKey("", "Hello World")

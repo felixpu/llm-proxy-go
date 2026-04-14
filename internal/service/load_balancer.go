@@ -30,6 +30,7 @@ type Balancer interface {
 // LoadBalancer dynamically selects strategy from database and delegates endpoint selection.
 type LoadBalancer struct {
 	configRepo loadBalanceConfigRepository
+	stateRepo  endpointStateReader
 
 	// Strategy cache to avoid DB query on every request
 	mu             sync.RWMutex
@@ -43,6 +44,10 @@ type LoadBalancer struct {
 
 type loadBalanceConfigRepository interface {
 	GetLoadBalanceConfig(ctx context.Context) (map[string]any, error)
+}
+
+type endpointStateReader interface {
+	GetState(name string) *EndpointStateSnapshot
 }
 
 // NewLoadBalancer creates a LoadBalancer that dynamically reads strategy from database.
@@ -64,6 +69,13 @@ func NewLoadBalancerWithStrategy(strategy models.LoadBalanceStrategy) *LoadBalan
 		cacheTime:      time.Now().Add(24 * time.Hour), // never expire
 		roundRobin:     &roundRobinBalancer{indices: make(map[string]int)},
 	}
+}
+
+// SetStateReader injects endpoint runtime state for least-connections strategy.
+func (lb *LoadBalancer) SetStateReader(stateRepo endpointStateReader) {
+	lb.mu.Lock()
+	lb.stateRepo = stateRepo
+	lb.mu.Unlock()
 }
 
 // getStrategy returns the current strategy, using cache to reduce DB queries.
@@ -114,7 +126,7 @@ func (lb *LoadBalancer) Select(endpoints []*models.Endpoint, req *models.Anthrop
 	case models.StrategyRoundRobin:
 		return lb.roundRobin.Select(endpoints, req)
 	case models.StrategyLeastConnections:
-		return selectLeastConnections(endpoints)
+		return lb.selectLeastConnections(endpoints)
 	case models.StrategyConversationHash:
 		return selectConversationHash(endpoints, req)
 	default:
@@ -162,10 +174,40 @@ func (b *roundRobinBalancer) Select(endpoints []*models.Endpoint, _ *models.Anth
 
 // --- Least Connections ---
 
-func selectLeastConnections(endpoints []*models.Endpoint) *models.Endpoint {
-	// Placeholder: without live connection counts, fall back to random.
-	// In production, integrate with HealthChecker.GetState().
-	return endpoints[secureRandIntn(len(endpoints))]
+func (lb *LoadBalancer) selectLeastConnections(endpoints []*models.Endpoint) *models.Endpoint {
+	lb.mu.RLock()
+	stateRepo := lb.stateRepo
+	lb.mu.RUnlock()
+	if stateRepo == nil {
+		return endpoints[secureRandIntn(len(endpoints))]
+	}
+
+	minConnections := int(^uint(0) >> 1) // max int
+	candidates := make([]*models.Endpoint, 0, len(endpoints))
+	for _, ep := range endpoints {
+		conns := 0
+		if state := stateRepo.GetState(EndpointName(ep)); state != nil {
+			conns = state.CurrentConnections
+		}
+
+		if conns < minConnections {
+			minConnections = conns
+			candidates = candidates[:0]
+			candidates = append(candidates, ep)
+			continue
+		}
+		if conns == minConnections {
+			candidates = append(candidates, ep)
+		}
+	}
+
+	if len(candidates) == 0 {
+		return endpoints[secureRandIntn(len(endpoints))]
+	}
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+	return selectWeighted(candidates)
 }
 
 // --- Conversation Hash ---

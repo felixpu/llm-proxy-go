@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/user/llm-proxy-go/internal/models"
 	"go.uber.org/zap"
@@ -33,9 +35,10 @@ func newHybridRoutingDecisionCache(l1 *RoutingCache, l2 routingEmbeddingCache, l
 
 func (c *hybridRoutingDecisionCache) Lookup(ctx context.Context, cacheKey string, ttlSeconds int) (models.ModelRole, *models.RoutingDecision, bool) {
 	if c.l1 != nil {
-		if taskType, hit := c.l1.Get(cacheKey, ttlSeconds); hit {
+		if taskType, reason, hit := c.l1.GetDecision(cacheKey, ttlSeconds); hit {
 			return taskType, &models.RoutingDecision{
 				TaskType:  taskType,
+				Reason:    normalizeCachedRoutingReason(taskType, reason),
 				FromCache: true,
 				CacheType: "L1",
 			}, true
@@ -56,8 +59,9 @@ func (c *hybridRoutingDecisionCache) Lookup(ctx context.Context, cacheKey string
 	}
 
 	taskType := parseModelRole(entry.TaskType)
+	reason := normalizeCachedRoutingReason(taskType, entry.Reason)
 	if c.l1 != nil {
-		c.l1.Set(cacheKey, taskType)
+		c.l1.SetDecision(cacheKey, taskType, reason)
 	}
 
 	if ok := c.asyncPool.Submit(func() {
@@ -73,7 +77,7 @@ func (c *hybridRoutingDecisionCache) Lookup(ctx context.Context, cacheKey string
 
 	return taskType, &models.RoutingDecision{
 		TaskType:  taskType,
-		Reason:    entry.Reason,
+		Reason:    reason,
 		FromCache: true,
 		CacheType: "L2",
 	}, true
@@ -81,7 +85,7 @@ func (c *hybridRoutingDecisionCache) Lookup(ctx context.Context, cacheKey string
 
 func (c *hybridRoutingDecisionCache) Store(ctx context.Context, cacheKey string, contentPreview string, taskType models.ModelRole, reason string) error {
 	if c.l1 != nil {
-		c.l1.Set(cacheKey, taskType)
+		c.l1.SetDecision(cacheKey, taskType, reason)
 	}
 	if c.l2 == nil {
 		return nil
@@ -91,4 +95,11 @@ func (c *hybridRoutingDecisionCache) Store(ctx context.Context, cacheKey string,
 		contentPreview = contentPreview[:DefaultContentPreviewMaxChars]
 	}
 	return c.l2.SaveCache(ctx, cacheKey, contentPreview, nil, string(taskType), reason)
+}
+
+func normalizeCachedRoutingReason(taskType models.ModelRole, reason string) string {
+	if trimmed := strings.TrimSpace(reason); trimmed != "" {
+		return trimmed
+	}
+	return fmt.Sprintf("cache: reused task type %s", taskType)
 }

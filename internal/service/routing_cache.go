@@ -56,17 +56,24 @@ func NormalizeText(text string) string {
 	return text
 }
 
-// GetCacheKey generates an MD5 hash cache key from user message.
-// Only user_message is used (system_content is ignored for key generation).
-func GetCacheKey(_ string, userMessage string) string {
+// GetCacheKey generates an MD5 hash cache key from routing inputs.
+// The user message always participates in the key. System content is included
+// when present so cache lookups stay aligned with the actual routing prompt.
+func GetCacheKey(systemContent, userMessage string) string {
+	normalizedSystem := NormalizeText(systemContent)
 	normalized := NormalizeText(userMessage)
-	hash := md5.Sum([]byte(normalized))
+	hashInput := normalized
+	if normalizedSystem != "" {
+		hashInput = normalizedSystem + "\x1f" + normalized
+	}
+	hash := md5.Sum([]byte(hashInput))
 	return hex.EncodeToString(hash[:])
 }
 
 // routingCacheEntry stores a cached routing decision with timestamp.
 type routingCacheEntry struct {
 	taskType  models.ModelRole
+	reason    string
 	timestamp time.Time
 }
 
@@ -92,18 +99,25 @@ func NewRoutingCache(maxSize int, logger *zap.Logger) *RoutingCache {
 
 // Get retrieves a cached routing decision if it exists and hasn't expired.
 func (rc *RoutingCache) Get(cacheKey string, ttlSeconds int) (models.ModelRole, bool) {
+	taskType, _, hit := rc.GetDecision(cacheKey, ttlSeconds)
+	return taskType, hit
+}
+
+// GetDecision retrieves a cached routing decision and its reason if it exists
+// and hasn't expired.
+func (rc *RoutingCache) GetDecision(cacheKey string, ttlSeconds int) (models.ModelRole, string, bool) {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 
 	entry, ok := rc.cache[cacheKey]
 	if !ok {
-		return "", false
+		return "", "", false
 	}
 
 	age := time.Since(entry.timestamp)
 	if age > time.Duration(ttlSeconds)*time.Second {
 		// Expired — will be cleaned up lazily
-		return "", false
+		return "", "", false
 	}
 
 	keyPreview := cacheKey
@@ -115,11 +129,16 @@ func (rc *RoutingCache) Get(cacheKey string, ttlSeconds int) (models.ModelRole, 
 		zap.String("task_type", string(entry.taskType)),
 		zap.Duration("age", age))
 
-	return entry.taskType, true
+	return entry.taskType, entry.reason, true
 }
 
 // Set stores a routing decision in the cache.
 func (rc *RoutingCache) Set(cacheKey string, taskType models.ModelRole) {
+	rc.SetDecision(cacheKey, taskType, "")
+}
+
+// SetDecision stores a routing decision and its reason in the cache.
+func (rc *RoutingCache) SetDecision(cacheKey string, taskType models.ModelRole, reason string) {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 
@@ -130,6 +149,7 @@ func (rc *RoutingCache) Set(cacheKey string, taskType models.ModelRole) {
 
 	rc.cache[cacheKey] = &routingCacheEntry{
 		taskType:  taskType,
+		reason:    strings.TrimSpace(reason),
 		timestamp: time.Now(),
 	}
 }

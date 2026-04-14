@@ -181,7 +181,9 @@ func (h *ProxyHandler) handleNonStreamRequest(c *gin.Context, req *models.Anthro
 			meta.SelectedModel = selection.Model.Name
 			meta.SelectedEndpoint = selection.Endpoint.Provider.Name
 			meta.InferredTaskType = string(selection.TaskType)
+			meta.RoutingMethod = selection.RoutingMethod
 			meta.RoutingDecision = selection.RoutingDecision
+			meta.ShadowRouting = selection.ResolveShadowRouting()
 			meta.RuleMatchResult = selection.RuleMatchResult
 			attachModelTrace(meta, req, selection)
 			h.attachContent(ctx, meta, req, nil)
@@ -205,7 +207,9 @@ func (h *ProxyHandler) handleNonStreamRequest(c *gin.Context, req *models.Anthro
 		meta.SelectedModel = selection.Model.Name
 		meta.SelectedEndpoint = selection.Endpoint.Provider.Name
 		meta.InferredTaskType = string(selection.TaskType)
+		meta.RoutingMethod = selection.RoutingMethod
 		meta.RoutingDecision = selection.RoutingDecision
+		meta.ShadowRouting = selection.ResolveShadowRouting()
 		meta.RuleMatchResult = selection.RuleMatchResult
 		attachModelTrace(meta, req, selection)
 		h.attachContent(ctx, meta, req, nil)
@@ -226,7 +230,9 @@ func (h *ProxyHandler) handleNonStreamRequest(c *gin.Context, req *models.Anthro
 	// Attach routing decision to metadata
 	meta.StatusCode = http.StatusOK
 	meta.Success = true
+	meta.RoutingMethod = selection.RoutingMethod
 	meta.RoutingDecision = selection.RoutingDecision
+	meta.ShadowRouting = selection.ResolveShadowRouting()
 	meta.RuleMatchResult = selection.RuleMatchResult
 	meta.InferredTaskType = string(selection.TaskType)
 	attachModelTrace(meta, req, selection)
@@ -275,7 +281,9 @@ func (h *ProxyHandler) handleStreamRequest(c *gin.Context, req *models.Anthropic
 			meta.SelectedModel = selection.Model.Name
 			meta.SelectedEndpoint = selection.Endpoint.Provider.Name
 			meta.InferredTaskType = string(selection.TaskType)
+			meta.RoutingMethod = selection.RoutingMethod
 			meta.RoutingDecision = selection.RoutingDecision
+			meta.ShadowRouting = selection.ResolveShadowRouting()
 			meta.RuleMatchResult = selection.RuleMatchResult
 			attachModelTrace(meta, req, selection)
 			h.attachStreamContent(ctx, meta, req)
@@ -300,7 +308,9 @@ func (h *ProxyHandler) handleStreamRequest(c *gin.Context, req *models.Anthropic
 		meta.SelectedModel = selection.Model.Name
 		meta.SelectedEndpoint = selection.Endpoint.Provider.Name
 		meta.InferredTaskType = string(selection.TaskType)
+		meta.RoutingMethod = selection.RoutingMethod
 		meta.RoutingDecision = selection.RoutingDecision
+		meta.ShadowRouting = selection.ResolveShadowRouting()
 		meta.RuleMatchResult = selection.RuleMatchResult
 		attachModelTrace(meta, req, selection)
 		h.attachStreamContent(ctx, meta, req)
@@ -319,7 +329,9 @@ func (h *ProxyHandler) handleStreamRequest(c *gin.Context, req *models.Anthropic
 	}
 
 	// Attach routing decision to initial metadata (will propagate to final chunk)
+	meta.RoutingMethod = selection.RoutingMethod
 	meta.RoutingDecision = selection.RoutingDecision
+	meta.ShadowRouting = selection.ResolveShadowRouting()
 	meta.RuleMatchResult = selection.RuleMatchResult
 	meta.FallbackInfo = selection.FallbackInfo
 	meta.InferredTaskType = string(selection.TaskType)
@@ -339,6 +351,16 @@ func (h *ProxyHandler) handleStreamRequest(c *gin.Context, req *models.Anthropic
 	c.Header("X-Proxy-Model", url.QueryEscape(meta.SelectedModel))
 	c.Header("X-Proxy-Endpoint", url.QueryEscape(meta.SelectedEndpoint))
 	c.Header("X-Proxy-Task-Type", meta.InferredTaskType)
+	if meta.RoutingMethod != "" {
+		c.Header("X-Proxy-Routing-Method", meta.RoutingMethod)
+	}
+	if meta.ShadowRouting != nil {
+		c.Header("X-Proxy-Shadow-Task-Type", string(meta.ShadowRouting.TaskType))
+		c.Header("X-Proxy-Shadow-Method", meta.ShadowRouting.RoutingMethod)
+		if meta.ShadowRouting.Model != nil {
+			c.Header("X-Proxy-Shadow-Model", url.QueryEscape(meta.ShadowRouting.Model.Name))
+		}
+	}
 	c.Header("X-Proxy-Stream", "true")
 
 	// Flush headers immediately
@@ -362,8 +384,13 @@ func (h *ProxyHandler) handleStreamRequest(c *gin.Context, req *models.Anthropic
 				h.logger.Error("stream error",
 					zap.String("request_id", meta.RequestID),
 					zap.Error(chunk.Err))
+				if shadow := selection.ResolveShadowRouting(); shadow != nil {
+					meta.ShadowRouting = shadow
+				}
 				if chunk.Meta != nil {
+					chunk.Meta.RoutingMethod = meta.RoutingMethod
 					chunk.Meta.RoutingDecision = meta.RoutingDecision
+					chunk.Meta.ShadowRouting = meta.ShadowRouting
 					chunk.Meta.RuleMatchResult = meta.RuleMatchResult
 					chunk.Meta.RequestContent = meta.RequestContent
 					attachModelTrace(chunk.Meta, req, selection)
@@ -374,9 +401,14 @@ func (h *ProxyHandler) handleStreamRequest(c *gin.Context, req *models.Anthropic
 
 			if chunk.Done {
 				// Final chunk with metadata
+				if shadow := selection.ResolveShadowRouting(); shadow != nil {
+					meta.ShadowRouting = shadow
+				}
 				if chunk.Meta != nil {
 					// Propagate routing fields set by handler
+					chunk.Meta.RoutingMethod = meta.RoutingMethod
 					chunk.Meta.RoutingDecision = meta.RoutingDecision
+					chunk.Meta.ShadowRouting = meta.ShadowRouting
 					chunk.Meta.RuleMatchResult = meta.RuleMatchResult
 					chunk.Meta.RequestContent = meta.RequestContent
 					attachModelTrace(chunk.Meta, req, selection)
@@ -414,6 +446,16 @@ func setProxyHeaders(c *gin.Context, meta *service.ProxyMetadata) {
 	c.Header("X-Proxy-Model", url.QueryEscape(meta.SelectedModel))
 	c.Header("X-Proxy-Endpoint", url.QueryEscape(meta.SelectedEndpoint))
 	c.Header("X-Proxy-Task-Type", meta.InferredTaskType)
+	if meta.RoutingMethod != "" {
+		c.Header("X-Proxy-Routing-Method", meta.RoutingMethod)
+	}
+	if meta.ShadowRouting != nil {
+		c.Header("X-Proxy-Shadow-Task-Type", string(meta.ShadowRouting.TaskType))
+		c.Header("X-Proxy-Shadow-Method", meta.ShadowRouting.RoutingMethod)
+		if meta.ShadowRouting.Model != nil {
+			c.Header("X-Proxy-Shadow-Model", url.QueryEscape(meta.ShadowRouting.Model.Name))
+		}
+	}
 	c.Header("X-Proxy-Latency-Ms", strconv.FormatInt(int64(meta.LatencyMs), 10))
 	c.Header("X-Proxy-Cost", strconv.FormatFloat(meta.Cost, 'f', -1, 64))
 	c.Header("X-Proxy-Input-Tokens", strconv.Itoa(meta.InputTokens))

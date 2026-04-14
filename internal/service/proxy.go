@@ -40,7 +40,10 @@ type ProxyMetadata struct {
 	CacheReadInputTokens     int
 
 	// Routing decision info
+	RoutingMethod   string
+	RoutingReason   string
 	RoutingDecision *models.RoutingDecision
+	ShadowRouting   *ShadowRoutingResult
 	RuleMatchResult *ClassifyResult
 	FallbackInfo    *models.FallbackInfo
 	RequestContent  string // Full request content
@@ -215,7 +218,11 @@ func (s *ProxyService) proxyToEndpoint(
 	latencyMs := msSince(start)
 	success := resp.StatusCode < 400
 
-	respBody, err := io.ReadAll(resp.Body)
+	readLimit := int64(DefaultProxyResponseMaxBytes)
+	if resp.StatusCode >= 400 {
+		readLimit = int64(DefaultProxyErrorResponseMaxBytes)
+	}
+	respBody, truncated, err := readBodyWithLimit(resp.Body, readLimit)
 	if err != nil {
 		s.healthChecker.UpdateRequestStatsV2(RequestResult{
 			EndpointName: epName,
@@ -225,6 +232,24 @@ func (s *ProxyService) proxyToEndpoint(
 			Err:          err,
 		})
 		return nil, nil, fmt.Errorf("read upstream response: %w", err)
+	}
+	if truncated && resp.StatusCode < 400 {
+		truncateErr := fmt.Errorf("upstream response exceeds %d bytes limit", DefaultProxyResponseMaxBytes)
+		s.healthChecker.UpdateRequestStatsV2(RequestResult{
+			EndpointName: epName,
+			Success:      false,
+			LatencyMs:    latencyMs,
+			StatusCode:   resp.StatusCode,
+			ResponseBody: respBody,
+			Err:          truncateErr,
+		})
+		return nil, nil, truncateErr
+	}
+	if truncated && resp.StatusCode >= 400 {
+		s.logger.Warn("upstream error response truncated",
+			zap.String("endpoint", epName),
+			zap.Int("status_code", resp.StatusCode),
+			zap.Int64("limit_bytes", readLimit))
 	}
 
 	s.healthChecker.UpdateRequestStatsV2(RequestResult{
@@ -431,7 +456,7 @@ func (s *ProxyService) SaveRequestLog(ctx context.Context, meta *ProxyMetadata, 
 	if meta.RoutingDecision != nil {
 		d := meta.RoutingDecision
 		entry.RoutingReason = d.Reason
-		entry.RoutingMethod = routingMethodFromDecision(d)
+		entry.RoutingMethod = deriveRoutingMethod(d)
 
 		// Populate rule match fields from RoutingDecision
 		if d.MatchedRule != nil {
@@ -455,6 +480,13 @@ func (s *ProxyService) SaveRequestLog(ctx context.Context, meta *ProxyMetadata, 
 		}
 	}
 
+	if entry.RoutingMethod == "" {
+		entry.RoutingMethod = meta.RoutingMethod
+	}
+	if entry.RoutingReason == "" || meta.ShadowRouting != nil {
+		entry.RoutingReason = describeRouting(meta)
+	}
+
 	// Generate message preview from request content
 	if meta.RequestContent != "" {
 		entry.MessagePreview = truncateStr(meta.RequestContent, DefaultContentPreviewMaxChars)
@@ -471,31 +503,6 @@ func (s *ProxyService) SaveRequestLog(ctx context.Context, meta *ProxyMetadata, 
 	}); !ok {
 		s.logger.Warn("dropped request log write",
 			zap.String("request_id", meta.RequestID))
-	}
-}
-
-// routingMethodFromDecision derives the routing_method string from a RoutingDecision.
-func routingMethodFromDecision(d *models.RoutingDecision) string {
-	if d.FromCache {
-		switch d.CacheType {
-		case "L1":
-			return "cache_l1"
-		case "L2":
-			return "cache_l2"
-		case "L3":
-			return "cache_l3"
-		default:
-			return "cache_l1"
-		}
-	}
-	switch d.CacheType {
-	case "rule":
-		return "rule"
-	default:
-		if d.ModelUsed != "" {
-			return "llm"
-		}
-		return "fallback"
 	}
 }
 
@@ -645,8 +652,14 @@ func (s *ProxyService) connectStreamEndpoint(
 	}
 
 	if resp.StatusCode >= 400 {
-		respBody, readErr := io.ReadAll(resp.Body)
+		respBody, truncated, readErr := readBodyWithLimit(resp.Body, int64(DefaultProxyErrorResponseMaxBytes))
 		resp.Body.Close()
+		if truncated {
+			s.logger.Warn("stream error response truncated",
+				zap.String("endpoint", epName),
+				zap.Int("status_code", resp.StatusCode),
+				zap.Int("limit_bytes", DefaultProxyErrorResponseMaxBytes))
+		}
 		s.healthChecker.UpdateRequestStatsV2(RequestResult{
 			EndpointName: epName,
 			Success:      false,
@@ -695,7 +708,7 @@ func (s *ProxyService) readSSEStream(
 				Err:          ctx.Err(),
 			})
 			finalMeta := buildStreamMeta(meta, ep, false, latencyMs, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
-			chunkChan <- StreamChunk{Err: ctx.Err(), Done: true, Meta: &finalMeta}
+			sendStreamChunk(ctx, chunkChan, StreamChunk{Err: ctx.Err(), Done: true, Meta: &finalMeta})
 			return
 		default:
 		}
@@ -705,7 +718,7 @@ func (s *ProxyService) readSSEStream(
 			if errors.Is(err, io.EOF) {
 				// EOF may carry remaining data — send it before finishing
 				if len(line) > 0 {
-					if err := s.emitTransformedSSE(line, transformer, &firstByteTime, &inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens, chunkChan); err != nil {
+					if err := s.emitTransformedSSE(ctx, line, transformer, &firstByteTime, &inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens, chunkChan); err != nil {
 						s.logger.Error("error transforming final stream chunk", zap.Error(err))
 						latencyMs := streamLatency(firstByteTime, start)
 						s.healthChecker.UpdateRequestStatsV2(RequestResult{
@@ -715,11 +728,11 @@ func (s *ProxyService) readSSEStream(
 							Err:          err,
 						})
 						finalMeta := buildStreamMeta(meta, ep, false, latencyMs, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
-						chunkChan <- StreamChunk{Err: err, Done: true, Meta: &finalMeta}
+						sendStreamChunk(ctx, chunkChan, StreamChunk{Err: err, Done: true, Meta: &finalMeta})
 						return
 					}
 				}
-				if err := s.emitSSEFinalize(transformer, &firstByteTime, &inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens, chunkChan); err != nil {
+				if err := s.emitSSEFinalize(ctx, transformer, &firstByteTime, &inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens, chunkChan); err != nil {
 					s.logger.Error("error finalizing transformed stream", zap.Error(err))
 					latencyMs := streamLatency(firstByteTime, start)
 					s.healthChecker.UpdateRequestStatsV2(RequestResult{
@@ -729,7 +742,7 @@ func (s *ProxyService) readSSEStream(
 						Err:          err,
 					})
 					finalMeta := buildStreamMeta(meta, ep, false, latencyMs, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
-					chunkChan <- StreamChunk{Err: err, Done: true, Meta: &finalMeta}
+					sendStreamChunk(ctx, chunkChan, StreamChunk{Err: err, Done: true, Meta: &finalMeta})
 					return
 				}
 				break
@@ -743,11 +756,11 @@ func (s *ProxyService) readSSEStream(
 				Err:          err,
 			})
 			finalMeta := buildStreamMeta(meta, ep, false, latencyMs, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
-			chunkChan <- StreamChunk{Err: err, Done: true, Meta: &finalMeta}
+			sendStreamChunk(ctx, chunkChan, StreamChunk{Err: err, Done: true, Meta: &finalMeta})
 			return
 		}
 
-		if err := s.emitTransformedSSE(line, transformer, &firstByteTime, &inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens, chunkChan); err != nil {
+		if err := s.emitTransformedSSE(ctx, line, transformer, &firstByteTime, &inputTokens, &outputTokens, &cacheReadTokens, &cacheCreationTokens, chunkChan); err != nil {
 			s.logger.Error("error transforming stream", zap.Error(err))
 			latencyMs := streamLatency(firstByteTime, start)
 			s.healthChecker.UpdateRequestStatsV2(RequestResult{
@@ -757,7 +770,7 @@ func (s *ProxyService) readSSEStream(
 				Err:          err,
 			})
 			finalMeta := buildStreamMeta(meta, ep, false, latencyMs, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
-			chunkChan <- StreamChunk{Err: err, Done: true, Meta: &finalMeta}
+			sendStreamChunk(ctx, chunkChan, StreamChunk{Err: err, Done: true, Meta: &finalMeta})
 			return
 		}
 	}
@@ -767,7 +780,9 @@ func (s *ProxyService) readSSEStream(
 	finalMeta := buildStreamMeta(meta, ep, true, latencyMs, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
 
 	// Send final chunk with completed metadata
-	chunkChan <- StreamChunk{Done: true, Meta: &finalMeta}
+	if !sendStreamChunk(ctx, chunkChan, StreamChunk{Done: true, Meta: &finalMeta}) {
+		return
+	}
 
 	// Update health stats
 	s.healthChecker.UpdateRequestStatsV2(RequestResult{
@@ -786,6 +801,7 @@ func (s *ProxyService) readSSEStream(
 }
 
 func (s *ProxyService) emitTransformedSSE(
+	ctx context.Context,
 	line []byte,
 	transformer sseTransformer,
 	firstByteTime *time.Time,
@@ -803,13 +819,16 @@ func (s *ProxyService) emitTransformedSSE(
 		if firstByteTime.IsZero() {
 			*firstByteTime = time.Now()
 		}
-		chunkChan <- StreamChunk{Data: chunk}
+		if !sendStreamChunk(ctx, chunkChan, StreamChunk{Data: chunk}) {
+			return ctx.Err()
+		}
 		s.parseSSEUsage(chunk, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
 	}
 	return nil
 }
 
 func (s *ProxyService) emitSSEFinalize(
+	ctx context.Context,
 	transformer sseTransformer,
 	firstByteTime *time.Time,
 	inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens *int,
@@ -826,7 +845,9 @@ func (s *ProxyService) emitSSEFinalize(
 		if firstByteTime.IsZero() {
 			*firstByteTime = time.Now()
 		}
-		chunkChan <- StreamChunk{Data: chunk}
+		if !sendStreamChunk(ctx, chunkChan, StreamChunk{Data: chunk}) {
+			return ctx.Err()
+		}
 		s.parseSSEUsage(chunk, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
 	}
 	return nil
@@ -872,6 +893,27 @@ func streamLatency(firstByteTime, start time.Time) float64 {
 	return msSince(start)
 }
 
+func sendStreamChunk(ctx context.Context, ch chan<- StreamChunk, chunk StreamChunk) bool {
+	// Fast path: if a receiver/buffer slot is immediately available, send even if
+	// context cancellation races in the same tick.
+	select {
+	case ch <- chunk:
+		return true
+	default:
+	}
+
+	if ctx.Err() != nil {
+		return false
+	}
+
+	select {
+	case ch <- chunk:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // buildStreamMeta creates a copy of metadata with final streaming values.
 func buildStreamMeta(meta *ProxyMetadata, ep *models.Endpoint, success bool, latencyMs float64, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens int) ProxyMetadata {
 	finalMeta := *meta
@@ -883,4 +925,19 @@ func buildStreamMeta(meta *ProxyMetadata, ep *models.Endpoint, success bool, lat
 	finalMeta.Cost = calculateCostFromTokensWithCache(ep.Model, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens)
 	finalMeta.Success = success
 	return finalMeta
+}
+
+func readBodyWithLimit(body io.Reader, limit int64) ([]byte, bool, error) {
+	if limit <= 0 {
+		data, err := io.ReadAll(body)
+		return data, false, err
+	}
+	data, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if int64(len(data)) > limit {
+		return data[:limit], true, nil
+	}
+	return data, false, nil
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/user/llm-proxy-go/internal/models"
 	"github.com/user/llm-proxy-go/internal/repository"
+	"github.com/user/llm-proxy-go/internal/service"
 )
 
 // RoutingModelCreate represents a routing model creation request.
@@ -42,19 +43,68 @@ type LLMRoutingConfigUpdate struct {
 	TimeoutSeconds           *int     `json:"timeout_seconds"`
 	CacheEnabled             *bool    `json:"cache_enabled"`
 	CacheTTLSeconds          *int     `json:"cache_ttl_seconds"`
-	CacheTTLL3Seconds        *int     `json:"cache_ttl_l3_seconds"`
 	MaxTokens                *int     `json:"max_tokens"`
 	Temperature              *float64 `json:"temperature"`
 	RetryCount               *int     `json:"retry_count"`
-	SemanticCacheEnabled     *bool    `json:"semantic_cache_enabled"`
-	EmbeddingModelID         *int64   `json:"embedding_model_id"`
-	SimilarityThreshold      *float64 `json:"similarity_threshold"`
-	LocalEmbeddingModel      *string  `json:"local_embedding_model"`
 	ForceSmartRouting        *bool    `json:"force_smart_routing"`
+	ShadowRoutingEnabled     *bool    `json:"shadow_routing_enabled"`
+	ShadowSampleRate         *float64 `json:"shadow_sample_rate"`
+	ShadowMaxQPS             *int     `json:"shadow_max_qps"`
 	RuleBasedRoutingEnabled  *bool    `json:"rule_based_routing_enabled"`
 	RuleFallbackStrategy     *string  `json:"rule_fallback_strategy"`
 	RuleFallbackTaskType     *string  `json:"rule_fallback_task_type"`
 	CrossRoleFallbackEnabled *bool    `json:"cross_role_fallback_enabled"`
+}
+
+// LLMRoutingConfigResponse exposes the supported routing configuration surface.
+// Deprecated semantic/embedding fields are intentionally omitted because the Go
+// implementation no longer uses vector-based routing.
+type LLMRoutingConfigResponse struct {
+	Enabled                  bool                    `json:"enabled"`
+	PrimaryModelID           *int64                  `json:"primary_model_id,omitempty"`
+	FallbackModelID          *int64                  `json:"fallback_model_id,omitempty"`
+	TimeoutSeconds           int                     `json:"timeout_seconds"`
+	CacheEnabled             bool                    `json:"cache_enabled"`
+	CacheTTLSeconds          int                     `json:"cache_ttl_seconds"`
+	MaxTokens                int                     `json:"max_tokens"`
+	Temperature              float64                 `json:"temperature"`
+	RetryCount               int                     `json:"retry_count"`
+	ForceSmartRouting        bool                    `json:"force_smart_routing"`
+	ShadowRoutingEnabled     bool                    `json:"shadow_routing_enabled"`
+	ShadowSampleRate         float64                 `json:"shadow_sample_rate"`
+	ShadowMaxQPS             int                     `json:"shadow_max_qps"`
+	RuleBasedRoutingEnabled  bool                    `json:"rule_based_routing_enabled"`
+	RuleFallbackStrategy     models.FallbackStrategy `json:"rule_fallback_strategy"`
+	RuleFallbackTaskType     string                  `json:"rule_fallback_task_type"`
+	CrossRoleFallbackEnabled bool                    `json:"cross_role_fallback_enabled"`
+	LogFullContent           bool                    `json:"log_full_content"`
+}
+
+func buildLLMRoutingConfigResponse(cfg *models.RoutingConfig) *LLMRoutingConfigResponse {
+	if cfg == nil {
+		return &LLMRoutingConfigResponse{}
+	}
+
+	return &LLMRoutingConfigResponse{
+		Enabled:                  cfg.Enabled,
+		PrimaryModelID:           cfg.PrimaryModelID,
+		FallbackModelID:          cfg.FallbackModelID,
+		TimeoutSeconds:           cfg.TimeoutSeconds,
+		CacheEnabled:             cfg.CacheEnabled,
+		CacheTTLSeconds:          cfg.CacheTTLSeconds,
+		MaxTokens:                cfg.MaxTokens,
+		Temperature:              cfg.Temperature,
+		RetryCount:               cfg.RetryCount,
+		ForceSmartRouting:        cfg.ForceSmartRouting,
+		ShadowRoutingEnabled:     cfg.ShadowRoutingEnabled,
+		ShadowSampleRate:         cfg.ShadowSampleRate,
+		ShadowMaxQPS:             cfg.ShadowMaxQPS,
+		RuleBasedRoutingEnabled:  cfg.RuleBasedRoutingEnabled,
+		RuleFallbackStrategy:     cfg.RuleFallbackStrategy,
+		RuleFallbackTaskType:     cfg.RuleFallbackTaskType,
+		CrossRoleFallbackEnabled: cfg.CrossRoleFallbackEnabled,
+		LogFullContent:           cfg.LogFullContent,
+	}
 }
 
 // RoutingHandler handles routing model and LLM config API endpoints.
@@ -142,6 +192,7 @@ func (h *RoutingHandler) CreateRoutingModel(c *gin.Context) {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	service.InvalidateAPIDetectionCache()
 	c.JSON(http.StatusOK, gin.H{"id": id, "message": "Routing model created"})
 }
 
@@ -171,6 +222,7 @@ func (h *RoutingHandler) UpdateRoutingModel(c *gin.Context) {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	service.InvalidateAPIDetectionCache()
 	c.JSON(http.StatusOK, gin.H{"id": id, "message": "Routing model updated"})
 }
 
@@ -185,6 +237,7 @@ func (h *RoutingHandler) DeleteRoutingModel(c *gin.Context) {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	service.InvalidateAPIDetectionCache()
 	c.JSON(http.StatusOK, gin.H{"id": id, "message": "Routing model deleted"})
 }
 
@@ -195,7 +248,7 @@ func (h *RoutingHandler) GetLLMRoutingConfig(c *gin.Context) {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, cfg)
+	c.JSON(http.StatusOK, buildLLMRoutingConfigResponse(cfg))
 }
 
 // UpdateLLMRoutingConfig updates the LLM routing configuration.
@@ -212,15 +265,13 @@ func (h *RoutingHandler) UpdateLLMRoutingConfig(c *gin.Context) {
 		TimeoutSeconds:           req.TimeoutSeconds,
 		CacheEnabled:             req.CacheEnabled,
 		CacheTTLSeconds:          req.CacheTTLSeconds,
-		CacheTTLL3Seconds:        req.CacheTTLL3Seconds,
 		MaxTokens:                req.MaxTokens,
 		Temperature:              req.Temperature,
 		RetryCount:               req.RetryCount,
-		SemanticCacheEnabled:     req.SemanticCacheEnabled,
-		EmbeddingModelID:         req.EmbeddingModelID,
-		SimilarityThreshold:      req.SimilarityThreshold,
-		LocalEmbeddingModel:      req.LocalEmbeddingModel,
 		ForceSmartRouting:        req.ForceSmartRouting,
+		ShadowRoutingEnabled:     req.ShadowRoutingEnabled,
+		ShadowSampleRate:         req.ShadowSampleRate,
+		ShadowMaxQPS:             req.ShadowMaxQPS,
 		RuleBasedRoutingEnabled:  req.RuleBasedRoutingEnabled,
 		RuleFallbackStrategy:     req.RuleFallbackStrategy,
 		RuleFallbackTaskType:     req.RuleFallbackTaskType,

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/user/llm-proxy-go/internal/models"
@@ -16,6 +18,11 @@ import (
 type RoutingRuleRepo struct {
 	db     *sql.DB
 	logger *zap.Logger
+
+	cacheMu            sync.RWMutex
+	cachedRulesAll     []*models.RoutingRule
+	cachedRulesEnabled []*models.RoutingRule
+	version            atomic.Uint64
 }
 
 // RoutingRulePatch is a typed partial update for routing rules.
@@ -33,12 +40,24 @@ type RoutingRulePatch struct {
 
 // NewRoutingRuleRepository creates a new RoutingRuleRepo.
 func NewRoutingRuleRepository(db *sql.DB, logger *zap.Logger) *RoutingRuleRepo {
-	return &RoutingRuleRepo{db: db, logger: logger}
+	repo := &RoutingRuleRepo{db: db, logger: logger}
+	repo.version.Store(1)
+	return repo
+}
+
+// RulesVersion returns a monotonic version that changes when rule definitions
+// are mutated. Consumers can use it to refresh precomputed snapshots.
+func (r *RoutingRuleRepo) RulesVersion() uint64 {
+	return r.version.Load()
 }
 
 // ListRules retrieves routing rules, optionally filtered by enabled status.
 // Results are sorted by priority DESC.
 func (r *RoutingRuleRepo) ListRules(ctx context.Context, enabledOnly bool) ([]*models.RoutingRule, error) {
+	if cached := r.getCachedRules(enabledOnly); cached != nil {
+		return cached, nil
+	}
+
 	var query string
 	var args []any
 
@@ -66,7 +85,12 @@ func (r *RoutingRuleRepo) ListRules(ctx context.Context, enabledOnly bool) ([]*m
 		}
 		result = append(result, rule)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	r.storeCachedRules(enabledOnly, result)
+	return cloneRules(result), nil
 }
 
 // GetRule retrieves a single routing rule by ID.
@@ -105,6 +129,7 @@ func (r *RoutingRuleRepo) AddRule(ctx context.Context, rule *models.RoutingRule)
 	if err != nil {
 		return 0, fmt.Errorf("failed to add routing rule: %w", err)
 	}
+	r.clearCachedRules()
 	return result.LastInsertId()
 }
 
@@ -147,6 +172,7 @@ func (r *RoutingRuleRepo) updateWithMap(ctx context.Context, id int64, updates m
 	if err != nil {
 		return fmt.Errorf("failed to update routing rule: %w", err)
 	}
+	r.clearCachedRules()
 	return nil
 }
 
@@ -189,7 +215,52 @@ func (r *RoutingRuleRepo) DeleteRule(ctx context.Context, id int64) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete routing rule: %w", err)
 	}
+	r.clearCachedRules()
 	return nil
+}
+
+func (r *RoutingRuleRepo) getCachedRules(enabledOnly bool) []*models.RoutingRule {
+	r.cacheMu.RLock()
+	defer r.cacheMu.RUnlock()
+	if enabledOnly {
+		if r.cachedRulesEnabled == nil {
+			return nil
+		}
+		return cloneRules(r.cachedRulesEnabled)
+	}
+	if r.cachedRulesAll == nil {
+		return nil
+	}
+	return cloneRules(r.cachedRulesAll)
+}
+
+func (r *RoutingRuleRepo) storeCachedRules(enabledOnly bool, rules []*models.RoutingRule) {
+	cloned := cloneRules(rules)
+
+	r.cacheMu.Lock()
+	defer r.cacheMu.Unlock()
+	if enabledOnly {
+		r.cachedRulesEnabled = cloned
+		return
+	}
+	r.cachedRulesAll = cloned
+}
+
+func (r *RoutingRuleRepo) clearCachedRules() {
+	r.cacheMu.Lock()
+	r.cachedRulesAll = nil
+	r.cachedRulesEnabled = nil
+	r.cacheMu.Unlock()
+	r.version.Add(1)
+}
+
+func cloneRules(rules []*models.RoutingRule) []*models.RoutingRule {
+	if len(rules) == 0 {
+		return nil
+	}
+	cloned := make([]*models.RoutingRule, len(rules))
+	copy(cloned, rules)
+	return cloned
 }
 
 // IncrementHitCount atomically increments the hit count for a rule.

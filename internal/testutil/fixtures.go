@@ -208,6 +208,7 @@ func SampleRoutingConfig() *models.RoutingConfig {
 		SimilarityThreshold:  0.82,
 		LocalEmbeddingModel:  "paraphrase-multilingual-MiniLM-L12-v2",
 		ForceSmartRouting:    false,
+		ShadowRoutingEnabled: false,
 	}
 }
 

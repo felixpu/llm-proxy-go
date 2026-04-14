@@ -38,6 +38,7 @@ window.VuePages = window.VuePages || {};
       var config = reactive({
         enabled: false,
         force_smart_routing: false,
+        shadow_routing_enabled: false,
         primary_model_id: "",
         fallback_model_id: "",
         timeout_seconds: 5,
@@ -50,6 +51,15 @@ window.VuePages = window.VuePages || {};
         rule_fallback_strategy: "default",
         rule_fallback_task_type: "default",
         cross_role_fallback_enabled: false,
+      });
+
+      var llmRoutingNeeded = computed(function () {
+        return (
+          config.force_smart_routing ||
+          config.shadow_routing_enabled ||
+          (config.rule_based_routing_enabled &&
+            config.rule_fallback_strategy === "llm")
+        );
       });
 
       // 模型模态框
@@ -375,6 +385,7 @@ window.VuePages = window.VuePages || {};
         if (!cfg) return;
         config.enabled = cfg.enabled !== false;
         config.force_smart_routing = cfg.force_smart_routing || false;
+        config.shadow_routing_enabled = cfg.shadow_routing_enabled || false;
         config.primary_model_id = cfg.primary_model_id || "";
         config.fallback_model_id = cfg.fallback_model_id || "";
         config.timeout_seconds =
@@ -464,10 +475,7 @@ window.VuePages = window.VuePages || {};
       }
 
       function saveConfig() {
-        var needsLLM =
-          config.force_smart_routing ||
-          (config.rule_based_routing_enabled &&
-            config.rule_fallback_strategy === "llm");
+        var needsLLM = llmRoutingNeeded.value;
         config.enabled = needsLLM;
 
         if (needsLLM && !config.primary_model_id) {
@@ -1689,6 +1697,7 @@ window.VuePages = window.VuePages || {};
         providers: providers,
         models: models,
         llmConfigExpanded: llmConfigExpanded,
+        llmRoutingNeeded: llmRoutingNeeded,
         config: config,
         showModelForm: showModelForm,
         editingModel: editingModel,
@@ -1821,6 +1830,13 @@ window.VuePages = window.VuePages || {};
                     </div>\
                     <div class="form-group">\
                         <label class="checkbox-label">\
+                            <input type="checkbox" v-model="config.shadow_routing_enabled">\
+                            启用 Shadow Routing（仅观察，不改实际执行）\
+                        </label>\
+                        <p class="help-text">开启后，客户端仍按指定模型执行，但后台会额外记录一次智能路由建议，适合灰度验证路由准确性</p>\
+                    </div>\
+                    <div class="form-group">\
+                        <label class="checkbox-label">\
                             <input type="checkbox" v-model="config.cross_role_fallback_enabled">\
                             允许跨角色降级\
                         </label>\
@@ -1861,7 +1877,7 @@ window.VuePages = window.VuePages || {};
                             </div>\
                         </div>\
                     </div>\
-            <div class="collapsible-section" v-show="config.rule_based_routing_enabled && config.rule_fallback_strategy === \'llm\'" v-cloak>\
+            <div class="collapsible-section" v-show="llmRoutingNeeded" v-cloak>\
                 <button class="collapsible-header" @click="llmConfigExpanded = !llmConfigExpanded">\
                     <div class="collapsible-header-left">\
                         <h4>LLM 路由配置</h4>\

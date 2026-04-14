@@ -80,10 +80,10 @@ func TestDetermineAPIType(t *testing.T) {
 			expected:        APITypeAuto,
 		},
 		{
-			name:            "Auto when both are empty",
+			name:            "Conservative default when both are empty",
 			modelAPIType:    "",
 			providerAPIType: "",
-			expected:        APITypeAuto,
+			expected:        APITypeAnthropicMessages,
 		},
 	}
 
@@ -93,6 +93,82 @@ func TestDetermineAPIType(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestDetectAPITypeForModel_PrefersAnthropicMessages(t *testing.T) {
+	InvalidateAPIDetectionCache()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/messages":
+			w.WriteHeader(http.StatusOK)
+			_, err := w.Write([]byte(`{"content":[{"text":"ok"}]}`))
+			require.NoError(t, err)
+		case "/v1/responses":
+			http.NotFound(w, r)
+		case "/v1/chat/completions":
+			w.WriteHeader(http.StatusOK)
+			_, err := w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+			require.NoError(t, err)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	apiType, err := DetectAPITypeForModel(context.Background(), upstream.URL, "test-key", "claude-sonnet-4-6")
+	require.NoError(t, err)
+	assert.Equal(t, APITypeAnthropicMessages, apiType)
+}
+
+func TestDetectAPITypeForModel_FallsBackToOpenAIChat(t *testing.T) {
+	InvalidateAPIDetectionCache()
+
+	var requestBody map[string]interface{}
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/messages", "/v1/responses":
+			http.NotFound(w, r)
+		case "/v1/chat/completions":
+			err := json.NewDecoder(r.Body).Decode(&requestBody)
+			require.NoError(t, err)
+			w.WriteHeader(http.StatusOK)
+			_, err = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+			require.NoError(t, err)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	apiType, err := DetectAPITypeForModel(context.Background(), upstream.URL, "test-key", "gpt-4o-mini")
+	require.NoError(t, err)
+	assert.Equal(t, APITypeOpenAIChat, apiType)
+	assert.Equal(t, "gpt-4o-mini", requestBody["model"])
+}
+
+func TestDetectAPITypeForModel_UsesCache(t *testing.T) {
+	InvalidateAPIDetectionCache()
+
+	callCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		require.Equal(t, "/v1/messages", r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+		_, err := w.Write([]byte(`{"content":[{"text":"ok"}]}`))
+		require.NoError(t, err)
+	}))
+	defer upstream.Close()
+
+	apiType, err := DetectAPITypeForModel(context.Background(), upstream.URL, "test-key", "claude-sonnet-4-6")
+	require.NoError(t, err)
+	assert.Equal(t, APITypeAnthropicMessages, apiType)
+
+	apiType, err = DetectAPITypeForModel(context.Background(), upstream.URL, "test-key", "claude-sonnet-4-6")
+	require.NoError(t, err)
+	assert.Equal(t, APITypeAnthropicMessages, apiType)
+	assert.Equal(t, 1, callCount, "second detect should be served from cache")
 }
 
 func TestAnthropicMessagesAdapter(t *testing.T) {

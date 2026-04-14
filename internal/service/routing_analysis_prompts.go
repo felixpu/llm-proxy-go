@@ -25,17 +25,17 @@ const AnalysisSystemPrompt = `你是一个路由规则分析专家。分析请�
 4. 是否有规则过于宽泛（overly_broad）
 5. **直接指定模型的请求是否应该添加路由规则**（missing_rule）
 
-## 路由方式说明
+	## 路由方式说明
 
-日志中的 routing_method 字段表示路由方式：
-- **rule**: 通过规则匹配路由（有 matched_rule_name）
-- **llm**: 规则未匹配，LLM 语义路由回退
-- **空值**: 用户直接指定模型名称，未使用路由系统
+	日志中的 routing_method 字段表示路由方式：
+	- **rule**: 通过规则匹配路由（有 matched_rule_name）
+	- **llm**: 规则未匹配，LLM 路由回退
+	- **direct**: 用户直接指定模型名称，未使用路由系统
 
-**重要**：routing_method 为空的请求也需要分析！这些请求可能：
-- 存在明显的模式，应该添加路由规则
-- 频繁使用某个模型，提示需要优化默认路由
-- 绕过了路由系统，可能导致成本或性能问题
+	**重要**：routing_method 为 direct 的请求也需要分析！这些请求可能：
+	- 存在明显的模式，应该添加路由规则
+	- 频繁使用某个模型，提示需要优化默认路由
+	- 绕过了路由系统，可能导致成本或性能问题
 
 ## 规则匹配机制
 
@@ -169,11 +169,11 @@ func BuildAnalysisPrompt(
 	var ruleMatch, llmFallback, directModel, inaccurate int
 	for _, e := range entries {
 		switch e.RoutingMethod {
-		case "rule":
+		case models.RoutingMethodRule:
 			ruleMatch++
-		case "llm":
+		case models.RoutingMethodLLM:
 			llmFallback++
-		case "":
+		case models.RoutingMethodDirect, "":
 			directModel++
 		}
 		if e.IsInaccurate {
@@ -341,10 +341,10 @@ func ParseAnalysisResponse(text string) (*models.AnalysisReport, error) {
 
 	// Try parsing the expected format first
 	var raw struct {
-		Summary         *models.AnalysisSummary          `json:"summary"`
-		Issues          []models.AnalysisIssue           `json:"issues"`
-		Recommendations []models.AnalysisRecommendation  `json:"recommendations"`
-		Conclusion      string                           `json:"conclusion"`
+		Summary         *models.AnalysisSummary         `json:"summary"`
+		Issues          []models.AnalysisIssue          `json:"issues"`
+		Recommendations []models.AnalysisRecommendation `json:"recommendations"`
+		Conclusion      string                          `json:"conclusion"`
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
 		return nil, fmt.Errorf("parse analysis JSON: %w (JSON preview: %s)", err, truncateForLog(jsonStr, 200))
@@ -384,15 +384,15 @@ func truncateForLog(s string, maxLen int) string {
 
 // tryUnwrapNestedJSON attempts to find the expected fields inside a nested wrapper key.
 func tryUnwrapNestedJSON(jsonStr string, fallback struct {
-	Summary         *models.AnalysisSummary          `json:"summary"`
-	Issues          []models.AnalysisIssue           `json:"issues"`
-	Recommendations []models.AnalysisRecommendation  `json:"recommendations"`
-	Conclusion      string                           `json:"conclusion"`
+	Summary         *models.AnalysisSummary         `json:"summary"`
+	Issues          []models.AnalysisIssue          `json:"issues"`
+	Recommendations []models.AnalysisRecommendation `json:"recommendations"`
+	Conclusion      string                          `json:"conclusion"`
 }) struct {
-	Summary         *models.AnalysisSummary          `json:"summary"`
-	Issues          []models.AnalysisIssue           `json:"issues"`
-	Recommendations []models.AnalysisRecommendation  `json:"recommendations"`
-	Conclusion      string                           `json:"conclusion"`
+	Summary         *models.AnalysisSummary         `json:"summary"`
+	Issues          []models.AnalysisIssue          `json:"issues"`
+	Recommendations []models.AnalysisRecommendation `json:"recommendations"`
+	Conclusion      string                          `json:"conclusion"`
 } {
 	// Parse into a generic map to inspect top-level keys
 	var generic map[string]json.RawMessage
@@ -408,10 +408,10 @@ func tryUnwrapNestedJSON(jsonStr string, fallback struct {
 			continue
 		}
 		var unwrapped struct {
-			Summary         *models.AnalysisSummary          `json:"summary"`
-			Issues          []models.AnalysisIssue           `json:"issues"`
-			Recommendations []models.AnalysisRecommendation  `json:"recommendations"`
-			Conclusion      string                           `json:"conclusion"`
+			Summary         *models.AnalysisSummary         `json:"summary"`
+			Issues          []models.AnalysisIssue          `json:"issues"`
+			Recommendations []models.AnalysisRecommendation `json:"recommendations"`
+			Conclusion      string                          `json:"conclusion"`
 		}
 		if err := json.Unmarshal(inner, &unwrapped); err == nil {
 			if unwrapped.Summary != nil || len(unwrapped.Issues) > 0 || len(unwrapped.Recommendations) > 0 || unwrapped.Conclusion != "" {

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/user/llm-proxy-go/internal/models"
@@ -17,6 +19,8 @@ import (
 
 var jsonBlockRe = regexp.MustCompile("(?s)```(?:json)?\\s*\\n?(.*?)\\n?```")
 var jsonObjectRe = regexp.MustCompile(`\{[^{}]*"task_type"\s*:\s*"[^"]+?"[^{}]*\}`)
+
+const fallbackRuleClassifierCacheTTL = 2 * time.Second
 
 type routingConfigProvider interface {
 	GetConfig(ctx context.Context) (*models.RoutingConfig, error)
@@ -30,6 +34,10 @@ type routingEmbeddingCache interface {
 	GetExactMatch(ctx context.Context, contentHash string, ttlSeconds int) (*repository.EmbeddingCacheEntry, error)
 	UpdateHitCountByHash(ctx context.Context, contentHash string) error
 	SaveCache(ctx context.Context, contentHash, contentPreview string, embedding []float64, taskType, reason string) error
+}
+
+type routingRuleVersionProvider interface {
+	RulesVersion() uint64
 }
 
 // LLMRouterDeps defines dependencies for creating an LLMRouter.
@@ -56,6 +64,11 @@ type LLMRouter struct {
 	logger        *zap.Logger
 	client        *http.Client
 	asyncPool     *AsyncWorkerPool
+
+	classifierMu            sync.Mutex
+	cachedRuleClassifier    atomic.Pointer[RoutingClassifier]
+	cachedRuleVersion       atomic.Uint64
+	cachedRuleLoadedAtNanos atomic.Int64
 }
 
 // NewLLMRouter creates a new LLMRouter.
@@ -189,13 +202,7 @@ func (r *LLMRouter) persistDecisionCaches(
 // classifyWithRules runs rule-based classification.
 // Returns (taskType, decision, fallback) where fallback=true means no rule matched.
 func (r *LLMRouter) classifyWithRules(ctx context.Context, cfg *models.RoutingConfig, message string) (models.ModelRole, *models.RoutingDecision, bool) {
-	customRules, err := r.ruleRepo.ListRules(ctx, true)
-	if err != nil {
-		r.logger.Warn("failed to load custom rules, using builtins only", zap.Error(err))
-		customRules = nil
-	}
-
-	classifier := NewRoutingClassifier(customRules)
+	classifier := r.getRoutingClassifier(ctx)
 	result := classifier.Classify(message)
 
 	// Increment hit count for matched rule async with timeout
@@ -233,6 +240,59 @@ func (r *LLMRouter) classifyWithRules(ctx context.Context, cfg *models.RoutingCo
 	decision.MatchedRule = result.Rule
 
 	return taskType, decision, false
+}
+
+func (r *LLMRouter) getRoutingClassifier(ctx context.Context) *RoutingClassifier {
+	expectedVersion := uint64(0)
+	if versioned, ok := r.ruleRepo.(routingRuleVersionProvider); ok {
+		expectedVersion = versioned.RulesVersion()
+	}
+
+	if cached := r.cachedRuleClassifier.Load(); cached != nil && r.isRuleClassifierFresh(expectedVersion) {
+		return cached
+	}
+
+	r.classifierMu.Lock()
+	defer r.classifierMu.Unlock()
+
+	if cached := r.cachedRuleClassifier.Load(); cached != nil && r.isRuleClassifierFresh(expectedVersion) {
+		return cached
+	}
+
+	var customRules []*models.RoutingRule
+	if r.ruleRepo != nil {
+		rules, err := r.ruleRepo.ListRules(ctx, true)
+		if err != nil {
+			r.logger.Warn("failed to load custom rules, keeping previous classifier if present", zap.Error(err))
+			if cached := r.cachedRuleClassifier.Load(); cached != nil {
+				return cached
+			}
+		} else {
+			customRules = rules
+		}
+	}
+
+	classifier := NewRoutingClassifier(customRules)
+	r.cachedRuleClassifier.Store(classifier)
+	if expectedVersion > 0 {
+		r.cachedRuleVersion.Store(expectedVersion)
+	} else {
+		r.cachedRuleVersion.Store(r.cachedRuleVersion.Load() + 1)
+	}
+	r.cachedRuleLoadedAtNanos.Store(time.Now().UnixNano())
+
+	return classifier
+}
+
+func (r *LLMRouter) isRuleClassifierFresh(expectedVersion uint64) bool {
+	if expectedVersion > 0 {
+		return r.cachedRuleVersion.Load() == expectedVersion
+	}
+	loadedAtNanos := r.cachedRuleLoadedAtNanos.Load()
+	if loadedAtNanos == 0 {
+		return false
+	}
+	return time.Since(time.Unix(0, loadedAtNanos)) < fallbackRuleClassifierCacheTTL
 }
 
 // handleFallbackStrategy applies the configured fallback when no rule matches.
@@ -354,8 +414,11 @@ func parseRoutingDecision(text string) (*models.RoutingDecision, error) {
 	}
 
 	var result struct {
-		TaskType string `json:"task_type"`
-		Reason   string `json:"reason"`
+		TaskType    string `json:"task_type"`
+		Reason      string `json:"reason"`
+		Reasoning   string `json:"reasoning"`
+		Why         string `json:"why"`
+		Explanation string `json:"explanation"`
 	}
 
 	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
@@ -366,9 +429,18 @@ func parseRoutingDecision(text string) (*models.RoutingDecision, error) {
 
 	return &models.RoutingDecision{
 		TaskType:  taskType,
-		Reason:    result.Reason,
+		Reason:    normalizeLLMRoutingReason(taskType, result.Reason, result.Reasoning, result.Why, result.Explanation),
 		FromCache: false,
 	}, nil
+}
+
+func normalizeLLMRoutingReason(taskType models.ModelRole, candidates ...string) string {
+	for _, candidate := range candidates {
+		if trimmed := strings.TrimSpace(candidate); trimmed != "" {
+			return trimmed
+		}
+	}
+	return fmt.Sprintf("llm: inferred task type %s", taskType)
 }
 
 // extractJSON extracts JSON from text, supporting markdown code blocks.

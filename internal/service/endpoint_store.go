@@ -91,16 +91,15 @@ func (s *EndpointStore) ReloadAndNotify(ctx context.Context) {
 }
 
 // GetEndpoints returns the current endpoint snapshot.
-// It returns a copy of slice header to prevent external mutation of internal storage.
+// Returned slice must be treated as read-only.
+// The returned value has capped capacity to prevent append from aliasing store storage.
 func (s *EndpointStore) GetEndpoints() []*models.Endpoint {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if len(s.endpoints) == 0 {
 		return nil
 	}
-	snapshot := make([]*models.Endpoint, len(s.endpoints))
-	copy(snapshot, s.endpoints)
-	return snapshot
+	return s.endpoints[:len(s.endpoints):len(s.endpoints)]
 }
 
 func (s *EndpointStore) loadFromDB(ctx context.Context) ([]*models.Endpoint, error) {

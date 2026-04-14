@@ -393,6 +393,35 @@ func TestRoutingRuleRepository_ListCustomRules(t *testing.T) {
 	}
 }
 
+func TestRoutingRuleRepository_RulesVersion_ChangesOnMutation(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	repo := NewRoutingRuleRepository(db, zap.NewNop())
+	ctx := context.Background()
+
+	seedRoutingRules(t, db)
+	initialVersion := repo.RulesVersion()
+
+	_, err := repo.AddRule(ctx, &models.RoutingRule{
+		Name:     "version-test",
+		TaskType: "default",
+		Priority: 10,
+		Enabled:  true,
+	})
+	require.NoError(t, err)
+	assert.Greater(t, repo.RulesVersion(), initialVersion)
+
+	name := "version-test-updated"
+	require.NoError(t, repo.UpdateRulePatch(ctx, 4, RoutingRulePatch{Name: &name}))
+	afterUpdate := repo.RulesVersion()
+	assert.Greater(t, afterUpdate, initialVersion)
+
+	require.NoError(t, repo.IncrementHitCount(ctx, 4))
+	assert.Equal(t, afterUpdate, repo.RulesVersion(), "hit-count changes should not force classifier rebuild")
+
+	require.NoError(t, repo.DeleteRule(ctx, 4))
+	assert.Greater(t, repo.RulesVersion(), afterUpdate)
+}
+
 // seedRoutingRules inserts test routing rules.
 func seedRoutingRules(t *testing.T, db *sql.DB) {
 	t.Helper()

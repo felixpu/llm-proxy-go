@@ -21,9 +21,9 @@ type RoutingConfigRepository struct {
 	readDB *sql.DB
 	logger *zap.Logger
 
-	cacheMu    sync.RWMutex
-	cachedCfg  *models.RoutingConfig
-	cachedAt   time.Time
+	cacheMu   sync.RWMutex
+	cachedCfg *models.RoutingConfig
+	cachedAt  time.Time
 }
 
 // RoutingConfigPatch is a typed partial update payload for routing_llm_config.
@@ -43,6 +43,9 @@ type RoutingConfigPatch struct {
 	SimilarityThreshold      *float64
 	LocalEmbeddingModel      *string
 	ForceSmartRouting        *bool
+	ShadowRoutingEnabled     *bool
+	ShadowSampleRate         *float64
+	ShadowMaxQPS             *int
 	RuleBasedRoutingEnabled  *bool
 	RuleFallbackStrategy     *string
 	RuleFallbackTaskType     *string
@@ -66,6 +69,7 @@ var routingConfigBoolFields = map[string]bool{
 	"cache_enabled":               true,
 	"semantic_cache_enabled":      true,
 	"force_smart_routing":         true,
+	"shadow_routing_enabled":      true,
 	"rule_based_routing_enabled":  true,
 	"log_full_content":            true,
 	"cross_role_fallback_enabled": true,
@@ -89,6 +93,9 @@ var validRoutingConfigColumns = map[string]bool{
 	"similarity_threshold":        true,
 	"local_embedding_model":       true,
 	"force_smart_routing":         true,
+	"shadow_routing_enabled":      true,
+	"shadow_sample_rate":          true,
+	"shadow_max_qps":              true,
 	"rule_based_routing_enabled":  true,
 	"rule_fallback_strategy":      true,
 	"rule_fallback_task_type":     true,
@@ -111,6 +118,9 @@ func (r *RoutingConfigRepository) GetConfig(ctx context.Context) (*models.Routin
 	var similarityThreshold sql.NullFloat64
 	var localEmbeddingModel sql.NullString
 	var forceSmartRouting sql.NullInt64
+	var shadowRoutingEnabled sql.NullInt64
+	var shadowSampleRate sql.NullFloat64
+	var shadowMaxQPS sql.NullInt64
 	var enabled, cacheEnabled int
 
 	// Rule-based routing fields
@@ -126,19 +136,21 @@ func (r *RoutingConfigRepository) GetConfig(ctx context.Context) (*models.Routin
 	var logFullContent sql.NullInt64
 
 	err := r.readDB.QueryRowContext(ctx, `
-		SELECT enabled, primary_model_id, fallback_model_id, timeout_seconds,
-			cache_enabled, cache_ttl_seconds, cache_ttl_l3_seconds, max_tokens,
-			temperature, retry_count, semantic_cache_enabled, embedding_model_id,
-			similarity_threshold, local_embedding_model, force_smart_routing,
-			rule_based_routing_enabled, rule_fallback_strategy, rule_fallback_task_type,
-			rule_fallback_model_id, cross_role_fallback_enabled, log_full_content
-		FROM routing_llm_config
-		WHERE id = 1
-	`).Scan(
+			SELECT enabled, primary_model_id, fallback_model_id, timeout_seconds,
+				cache_enabled, cache_ttl_seconds, cache_ttl_l3_seconds, max_tokens,
+				temperature, retry_count, semantic_cache_enabled, embedding_model_id,
+				similarity_threshold, local_embedding_model, force_smart_routing, shadow_routing_enabled,
+				shadow_sample_rate, shadow_max_qps,
+				rule_based_routing_enabled, rule_fallback_strategy, rule_fallback_task_type,
+				rule_fallback_model_id, cross_role_fallback_enabled, log_full_content
+			FROM routing_llm_config
+			WHERE id = 1
+		`).Scan(
 		&enabled, &primaryModelID, &fallbackModelID, &cfg.TimeoutSeconds,
 		&cacheEnabled, &cfg.CacheTTLSeconds, &cacheTTLL3, &cfg.MaxTokens,
 		&cfg.Temperature, &cfg.RetryCount, &semanticEnabled, &embeddingModelID,
-		&similarityThreshold, &localEmbeddingModel, &forceSmartRouting,
+		&similarityThreshold, &localEmbeddingModel, &forceSmartRouting, &shadowRoutingEnabled,
+		&shadowSampleRate, &shadowMaxQPS,
 		&ruleBasedEnabled, &ruleFallbackStrategy, &ruleFallbackTaskType,
 		&ruleFallbackModelID, &crossRoleFallbackEnabled, &logFullContent,
 	)
@@ -198,6 +210,21 @@ func (r *RoutingConfigRepository) GetConfig(ctx context.Context) (*models.Routin
 		cfg.ForceSmartRouting = forceSmartRouting.Int64 == 1
 	} else {
 		cfg.ForceSmartRouting = defaults.ForceSmartRouting
+	}
+	if shadowRoutingEnabled.Valid {
+		cfg.ShadowRoutingEnabled = shadowRoutingEnabled.Int64 == 1
+	} else {
+		cfg.ShadowRoutingEnabled = defaults.ShadowRoutingEnabled
+	}
+	if shadowSampleRate.Valid {
+		cfg.ShadowSampleRate = shadowSampleRate.Float64
+	} else {
+		cfg.ShadowSampleRate = defaults.ShadowSampleRate
+	}
+	if shadowMaxQPS.Valid {
+		cfg.ShadowMaxQPS = int(shadowMaxQPS.Int64)
+	} else {
+		cfg.ShadowMaxQPS = defaults.ShadowMaxQPS
 	}
 
 	// Rule-based routing fields
@@ -388,6 +415,15 @@ func (r *RoutingConfigRepository) UpdateConfigPatch(ctx context.Context, patch R
 	}
 	if patch.ForceSmartRouting != nil {
 		updates["force_smart_routing"] = *patch.ForceSmartRouting
+	}
+	if patch.ShadowRoutingEnabled != nil {
+		updates["shadow_routing_enabled"] = *patch.ShadowRoutingEnabled
+	}
+	if patch.ShadowSampleRate != nil {
+		updates["shadow_sample_rate"] = *patch.ShadowSampleRate
+	}
+	if patch.ShadowMaxQPS != nil {
+		updates["shadow_max_qps"] = *patch.ShadowMaxQPS
 	}
 	if patch.RuleBasedRoutingEnabled != nil {
 		updates["rule_based_routing_enabled"] = *patch.RuleBasedRoutingEnabled

@@ -234,30 +234,47 @@ func TestExtractJSON(t *testing.T) {
 
 func TestParseRoutingDecision(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		wantType models.ModelRole
-		wantErr  bool
+		name       string
+		input      string
+		wantType   models.ModelRole
+		wantReason string
+		wantErr    bool
 	}{
 		{
-			name:     "valid simple",
-			input:    `{"task_type": "simple", "reason": "basic query"}`,
-			wantType: models.ModelRoleSimple,
+			name:       "valid simple",
+			input:      `{"task_type": "simple", "reason": "basic query"}`,
+			wantType:   models.ModelRoleSimple,
+			wantReason: "basic query",
 		},
 		{
-			name:     "valid complex",
-			input:    `{"task_type": "complex", "reason": "architecture design"}`,
-			wantType: models.ModelRoleComplex,
+			name:       "valid complex",
+			input:      `{"task_type": "complex", "reason": "architecture design"}`,
+			wantType:   models.ModelRoleComplex,
+			wantReason: "architecture design",
 		},
 		{
-			name:     "valid default",
-			input:    `{"task_type": "default", "reason": "general task"}`,
-			wantType: models.ModelRoleDefault,
+			name:       "valid default",
+			input:      `{"task_type": "default", "reason": "general task"}`,
+			wantType:   models.ModelRoleDefault,
+			wantReason: "general task",
 		},
 		{
-			name:     "markdown wrapped",
-			input:    "```json\n{\"task_type\": \"simple\", \"reason\": \"test\"}\n```",
-			wantType: models.ModelRoleSimple,
+			name:       "markdown wrapped",
+			input:      "```json\n{\"task_type\": \"simple\", \"reason\": \"test\"}\n```",
+			wantType:   models.ModelRoleSimple,
+			wantReason: "test",
+		},
+		{
+			name:       "accepts reasoning alias",
+			input:      `{"task_type": "default", "reasoning": "needs balanced model"}`,
+			wantType:   models.ModelRoleDefault,
+			wantReason: "needs balanced model",
+		},
+		{
+			name:       "fills fallback reason when missing",
+			input:      `{"task_type": "complex"}`,
+			wantType:   models.ModelRoleComplex,
+			wantReason: "llm: inferred task type complex",
 		},
 		{
 			name:    "no JSON",
@@ -281,6 +298,7 @@ func TestParseRoutingDecision(t *testing.T) {
 				assert.NoError(t, err)
 				assert.NotNil(t, decision)
 				assert.Equal(t, tt.wantType, decision.TaskType)
+				assert.Equal(t, tt.wantReason, decision.Reason)
 				assert.False(t, decision.FromCache)
 			}
 		})

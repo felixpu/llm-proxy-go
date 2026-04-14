@@ -94,9 +94,9 @@ func resolveProxyAPIType(ctx context.Context, ep *models.Endpoint) (APIType, err
 	apiType := APIType(strings.TrimSpace(ep.Provider.APIType))
 	switch apiType {
 	case "":
-		return APITypeAnthropicMessages, nil
+		return DefaultConfiguredAPIType, nil
 	case APITypeAuto:
-		detected, err := DetectAPIType(ctx, ep.Provider.BaseURL, ep.Provider.APIKey)
+		detected, err := DetectAPITypeForModel(ctx, ep.Provider.BaseURL, ep.Provider.APIKey, ep.Model.Name)
 		if err != nil {
 			return "", fmt.Errorf("detect api type for provider %s: %w", ep.Provider.Name, err)
 		}

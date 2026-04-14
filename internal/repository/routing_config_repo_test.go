@@ -32,6 +32,9 @@ func TestRoutingConfigRepository_GetConfig(t *testing.T) {
 	assert.True(t, config.SemanticCacheEnabled)
 	assert.Equal(t, 0.82, config.SimilarityThreshold)
 	assert.Equal(t, "paraphrase-multilingual-MiniLM-L12-v2", config.LocalEmbeddingModel)
+	assert.False(t, config.ShadowRoutingEnabled)
+	assert.Equal(t, 0.2, config.ShadowSampleRate)
+	assert.Equal(t, 20, config.ShadowMaxQPS)
 }
 
 func TestRoutingConfigRepository_GetConfig_NoRow(t *testing.T) {
@@ -184,6 +187,26 @@ func TestRoutingConfigRepository_UpdateConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "enable shadow routing",
+			updates: map[string]any{
+				"shadow_routing_enabled": true,
+			},
+			verify: func(t *testing.T, cfg *models.RoutingConfig) {
+				assert.True(t, cfg.ShadowRoutingEnabled)
+			},
+		},
+		{
+			name: "update shadow sampling controls",
+			updates: map[string]any{
+				"shadow_sample_rate": 0.35,
+				"shadow_max_qps":     12,
+			},
+			verify: func(t *testing.T, cfg *models.RoutingConfig) {
+				assert.Equal(t, 0.35, cfg.ShadowSampleRate)
+				assert.Equal(t, 12, cfg.ShadowMaxQPS)
+			},
+		},
+		{
 			name:    "empty updates",
 			updates: map[string]any{},
 			verify:  func(t *testing.T, cfg *models.RoutingConfig) {},
@@ -333,6 +356,15 @@ func routingConfigPatchFromMap(updates map[string]any) RoutingConfigPatch {
 	}
 	if v, ok := updates["force_smart_routing"].(bool); ok {
 		patch.ForceSmartRouting = &v
+	}
+	if v, ok := updates["shadow_routing_enabled"].(bool); ok {
+		patch.ShadowRoutingEnabled = &v
+	}
+	if v, ok := updates["shadow_sample_rate"].(float64); ok {
+		patch.ShadowSampleRate = &v
+	}
+	if v, ok := updates["shadow_max_qps"].(int); ok {
+		patch.ShadowMaxQPS = &v
 	}
 	if v, ok := updates["rule_based_routing_enabled"].(bool); ok {
 		patch.RuleBasedRoutingEnabled = &v

@@ -164,7 +164,7 @@ func NewServer(deps ServerDeps) *Server {
 	}
 
 	registerSystemLogRoutes(r, authService)
-	registerStatusRoutes(r, deps, authService)
+	registerStatusRoutes(r, deps, authService, endpointSelector)
 	registerConfigRoutes(r, deps, authService, logger)
 	registerCacheCompatibilityRoutes(r, deps, authService)
 	registerNoRouteHandler(r)
@@ -196,6 +196,7 @@ func registerPublicRoutes(r *gin.Engine, healthChecker *service.HealthChecker) {
 func newEndpointSelector(deps ServerDeps, logger *zap.Logger) *service.EndpointSelector {
 	modelSelector := service.NewModelSelector(deps.HealthChecker, logger)
 	loadBalancer := service.NewLoadBalancer(deps.SystemConfigRepo)
+	loadBalancer.SetStateReader(deps.HealthChecker)
 	return service.NewEndpointSelector(
 		modelSelector,
 		deps.HealthChecker,
@@ -305,8 +306,8 @@ func registerSystemLogRoutes(r *gin.Engine, authService *service.AuthService) {
 	}
 }
 
-func registerStatusRoutes(r *gin.Engine, deps ServerDeps, authService *service.AuthService) {
-	statusHandler := handler.NewStatusHandler(deps.HealthChecker, deps.ModelRepo, deps.LogAnalyticsRepo, deps.LLMRouter, deps.EndpointStore)
+func registerStatusRoutes(r *gin.Engine, deps ServerDeps, authService *service.AuthService, endpointSelector *service.EndpointSelector) {
+	statusHandler := handler.NewStatusHandler(deps.HealthChecker, deps.ModelRepo, deps.LogAnalyticsRepo, deps.LLMRouter, deps.EndpointStore, endpointSelector)
 	statusGroup := r.Group("/api")
 	statusGroup.Use(middleware.RequireAuth(authService))
 	{

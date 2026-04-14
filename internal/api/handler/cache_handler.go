@@ -63,17 +63,17 @@ func (h *CacheHandler) GetStats(c *gin.Context) {
 		}
 	}
 
+	cacheEnabled := h.routingCache != nil || h.embeddingCacheRepo != nil
+
 	c.JSON(http.StatusOK, gin.H{
 		"summary": gin.H{
-			"total_requests":         l2Hits,
-			"overall_hit_rate":       l2HitRate,
-			"cache_enabled":          h.routingCache != nil,
-			"semantic_cache_enabled": h.embeddingCacheRepo != nil,
+			"total_requests":   l2Hits,
+			"overall_hit_rate": l2HitRate,
+			"cache_enabled":    cacheEnabled,
 		},
 		"by_layer": gin.H{
 			"l1": gin.H{"size": l1Size, "max_size": 10000, "hit_rate": 0.0, "hits": 0, "misses": 0},
 			"l2": gin.H{"size": l2Size, "max_size": 0, "hit_rate": l2HitRate, "hits": l2Hits, "misses": 0},
-			"l3": gin.H{"size": l2Size, "max_size": 0, "hit_rate": 0.0, "hits": 0, "misses": 0},
 		},
 		"llm": gin.H{
 			"total": 0, "errors": 0, "avg_latency_ms": 0.0,

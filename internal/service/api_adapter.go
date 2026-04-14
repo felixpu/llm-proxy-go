@@ -3,11 +3,15 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/user/llm-proxy-go/internal/models"
@@ -22,6 +26,7 @@ const (
 	APITypeAnthropicMessages  APIType = "anthropic_messages"
 	APITypeAnthropicResponses APIType = "anthropic_responses"
 	APITypeOpenAIChat         APIType = "openai_chat"
+	DefaultConfiguredAPIType  APIType = APITypeAnthropicMessages
 )
 
 // DefaultAnthropicVersion is the default API version for Anthropic endpoints.
@@ -31,6 +36,8 @@ const DefaultAnthropicVersion = "2023-06-01"
 // maxDetectResponseBytes limits response body size during API type detection
 // to prevent unbounded reads from malicious or misconfigured servers.
 const maxDetectResponseBytes = 4096
+const detectCacheTTL = 10 * time.Minute
+const detectErrorCacheTTL = 30 * time.Second
 
 // APIAdapter handles different API formats
 type APIAdapter interface {
@@ -106,42 +113,94 @@ func determineAPIType(modelAPIType, providerAPIType string) APIType {
 		return APIType(providerAPIType)
 	}
 
-	// Priority 3: Auto-detect
+	// Missing configuration defaults to the Messages API because it is the
+	// least surprising path for Anthropic-compatible providers.
+	if modelAPIType == "" && providerAPIType == "" {
+		return DefaultConfiguredAPIType
+	}
+
+	// Priority 3: explicit auto-detect
 	return APITypeAuto
 }
 
 // DetectAPIType attempts to detect the API type by trying different endpoints
 func DetectAPIType(ctx context.Context, baseURL, apiKey string) (APIType, error) {
-	// Try Anthropic Responses API first (newest)
-	if tryEndpoint(ctx, baseURL, apiKey, APITypeAnthropicResponses) {
-		return APITypeAnthropicResponses, nil
+	return DetectAPITypeForModel(ctx, baseURL, apiKey, "")
+}
+
+// DetectAPITypeForModel attempts to detect the API type for a concrete model by
+// trying the most conservative endpoint order first.
+func DetectAPITypeForModel(ctx context.Context, baseURL, apiKey, modelName string) (APIType, error) {
+	cacheKey := buildDetectCacheKey(baseURL, apiKey, modelName)
+	if cachedType, cachedErr, hit := getDetectCache(cacheKey); hit {
+		return cachedType, cachedErr
 	}
 
-	// Try Anthropic Messages API
-	if tryEndpoint(ctx, baseURL, apiKey, APITypeAnthropicMessages) {
+	autoDetectCounter.Add(1)
+
+	// Prefer Messages first because most Anthropic-compatible providers expose it
+	// and it avoids extra request/response transformations on the proxy hot path.
+	if tryEndpoint(ctx, baseURL, apiKey, modelName, APITypeAnthropicMessages) {
+		setDetectCache(cacheKey, APITypeAnthropicMessages, nil, detectCacheTTL)
 		return APITypeAnthropicMessages, nil
 	}
 
-	// Try OpenAI Chat Completions API
-	if tryEndpoint(ctx, baseURL, apiKey, APITypeOpenAIChat) {
+	// Then try Anthropic Responses API.
+	if tryEndpoint(ctx, baseURL, apiKey, modelName, APITypeAnthropicResponses) {
+		setDetectCache(cacheKey, APITypeAnthropicResponses, nil, detectCacheTTL)
+		return APITypeAnthropicResponses, nil
+	}
+
+	// Finally try OpenAI Chat Completions API.
+	if tryEndpoint(ctx, baseURL, apiKey, modelName, APITypeOpenAIChat) {
+		setDetectCache(cacheKey, APITypeOpenAIChat, nil, detectCacheTTL)
 		return APITypeOpenAIChat, nil
 	}
 
-	return "", fmt.Errorf("unable to detect API type: all endpoints returned errors. Please manually set api_type in provider configuration")
+	err := fmt.Errorf("unable to detect API type: all endpoints returned errors. Please manually set api_type in provider configuration")
+	setDetectCache(cacheKey, "", err, detectErrorCacheTTL)
+	return "", err
 }
 
 // detectClient is a shared HTTP client for API type detection, reusing connections.
 var detectClient = &http.Client{Timeout: 5 * time.Second}
 
+type detectCacheEntry struct {
+	apiType    APIType
+	err        string
+	expireUnix int64
+}
+
+var apiDetectCache = struct {
+	mu      sync.RWMutex
+	entries map[string]detectCacheEntry
+}{
+	entries: make(map[string]detectCacheEntry),
+}
+
+var autoDetectCounter atomic.Uint64
+
+// InvalidateAPIDetectionCache clears cached API auto-detection results.
+func InvalidateAPIDetectionCache() {
+	apiDetectCache.mu.Lock()
+	apiDetectCache.entries = make(map[string]detectCacheEntry)
+	apiDetectCache.mu.Unlock()
+}
+
+// AutoDetectCount returns the number of online detect attempts (cache miss only).
+func AutoDetectCount() uint64 {
+	return autoDetectCounter.Load()
+}
+
 // tryEndpoint sends a minimal test request to check if the endpoint is supported
-func tryEndpoint(ctx context.Context, baseURL, apiKey string, apiType APIType) bool {
+func tryEndpoint(ctx context.Context, baseURL, apiKey, modelName string, apiType APIType) bool {
 	adapter := GetAdapter(apiType)
 	url := strings.TrimRight(baseURL, "/") + adapter.GetEndpoint()
 
 	// Build minimal test request
 	messages := []Message{{Role: "user", Content: "test"}}
 	options := RequestOptions{
-		Model:       "test",
+		Model:       detectionModelName(apiType, modelName),
 		MaxTokens:   1,
 		Temperature: 0.0,
 		Stream:      false,
@@ -184,6 +243,51 @@ func tryEndpoint(ctx context.Context, baseURL, apiKey string, apiType APIType) b
 		// For 5xx or other errors, assume endpoint is not supported
 		return false
 	}
+}
+
+func detectionModelName(apiType APIType, configuredModelName string) string {
+	if name := strings.TrimSpace(configuredModelName); name != "" {
+		return name
+	}
+
+	switch apiType {
+	case APITypeOpenAIChat:
+		return "gpt-4o-mini"
+	default:
+		return "claude-sonnet-4-6"
+	}
+}
+
+func buildDetectCacheKey(baseURL, apiKey, modelName string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(apiKey)))
+	return strings.TrimSpace(baseURL) + "|" + strings.TrimSpace(modelName) + "|" + hex.EncodeToString(sum[:8])
+}
+
+func getDetectCache(key string) (APIType, error, bool) {
+	nowUnix := time.Now().Unix()
+	apiDetectCache.mu.RLock()
+	entry, ok := apiDetectCache.entries[key]
+	apiDetectCache.mu.RUnlock()
+	if !ok || nowUnix >= entry.expireUnix {
+		return "", nil, false
+	}
+	if entry.err != "" {
+		return "", fmt.Errorf("%s", entry.err), true
+	}
+	return entry.apiType, nil, true
+}
+
+func setDetectCache(key string, apiType APIType, err error, ttl time.Duration) {
+	entry := detectCacheEntry{
+		apiType:    apiType,
+		expireUnix: time.Now().Add(ttl).Unix(),
+	}
+	if err != nil {
+		entry.err = err.Error()
+	}
+	apiDetectCache.mu.Lock()
+	apiDetectCache.entries[key] = entry
+	apiDetectCache.mu.Unlock()
 }
 
 // baseAnthropicAdapter contains shared logic for all Anthropic API adapters.
@@ -343,7 +447,7 @@ func CallLLMModel(ctx context.Context, params LLMCallParams) (string, error) {
 	// Determine API type
 	apiType := determineAPIType(modelCfg.APIType, modelCfg.ProviderAPIType)
 	if apiType == APITypeAuto {
-		detected, err := DetectAPIType(ctx, modelCfg.BaseURL, modelCfg.APIKey)
+		detected, err := DetectAPITypeForModel(ctx, modelCfg.BaseURL, modelCfg.APIKey, modelCfg.ModelName)
 		if err != nil {
 			return "", fmt.Errorf("无法自动检测 API 类型。请在 Provider 配置中手动设置 api_type 字段为以下值之一：\n"+
 				"  - anthropic_messages (Anthropic Messages API, /v1/messages)\n"+

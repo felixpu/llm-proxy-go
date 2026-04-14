@@ -54,7 +54,8 @@ RELEASE_TARGETS := $(foreach p,$(PLATFORMS),release-$(p))
 .PHONY: build build-all $(BUILD_TARGETS) \
         release release-all $(RELEASE_TARGETS) \
         clean docker docker-compose version \
-        test test-unit test-integration test-e2e test-all test-coverage help
+        test test-unit test-integration test-e2e test-all test-coverage \
+        bench-hotpath bench-ab help
 
 # ============ 构建目标 ============
 
@@ -122,6 +123,12 @@ test-coverage:
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
 
+bench-hotpath:
+	@./scripts/bench_hotpath.sh
+
+bench-ab:
+	@./scripts/bench_ab_report.sh
+
 # ============ 帮助 ============
 
 help:
@@ -144,5 +151,7 @@ help:
 	@echo "  make test-e2e             - Run E2E tests"
 	@echo "  make test-all             - Run all tests"
 	@echo "  make test-coverage        - Run tests with coverage report"
+	@echo "  make bench-hotpath        - Run hotpath benchmarks and save report"
+	@echo "  make bench-ab             - Run strict A/B benchmark comparison report"
 	@echo ""
 	@echo "Platforms: $(PLATFORMS)"

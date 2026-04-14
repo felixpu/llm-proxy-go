@@ -8,31 +8,31 @@ import (
 )
 
 // NewTestDB delegates to internal/testutil to avoid schema drift.
-func NewTestDB(t *testing.T) *sql.DB {
+func NewTestDB(t testing.TB) *sql.DB {
 	t.Helper()
 	return internaltestutil.NewTestDB(t)
 }
 
 // NewTestDBWithDefaults delegates to internal/testutil to avoid schema drift.
-func NewTestDBWithDefaults(t *testing.T) *sql.DB {
+func NewTestDBWithDefaults(t testing.TB) *sql.DB {
 	t.Helper()
 	return internaltestutil.NewTestDBWithDefaults(t)
 }
 
 // NewFileBackedTestDBPair delegates to internal/testutil to avoid schema drift.
-func NewFileBackedTestDBPair(t *testing.T) (*sql.DB, *sql.DB) {
+func NewFileBackedTestDBPair(t testing.TB) (*sql.DB, *sql.DB) {
 	t.Helper()
 	return internaltestutil.NewFileBackedTestDBPair(t)
 }
 
 // NewFileBackedTestDBPairWithDefaults delegates to internal/testutil to avoid schema drift.
-func NewFileBackedTestDBPairWithDefaults(t *testing.T) (*sql.DB, *sql.DB) {
+func NewFileBackedTestDBPairWithDefaults(t testing.TB) (*sql.DB, *sql.DB) {
 	t.Helper()
 	return internaltestutil.NewFileBackedTestDBPairWithDefaults(t)
 }
 
 // SeedTestData delegates to internal/testutil to avoid fixture drift.
-func SeedTestData(t *testing.T, db *sql.DB) {
+func SeedTestData(t testing.TB, db *sql.DB) {
 	t.Helper()
 	internaltestutil.SeedTestData(t, db)
 }

@@ -28,7 +28,7 @@ func (r *RequestLogRepositoryImpl) GetRoutingAggregation(ctx context.Context, st
 	}
 
 	methodQ := fmt.Sprintf(`
-		SELECT COALESCE(NULLIF(routing_method,''), 'unknown') AS method, COUNT(*) AS cnt
+		SELECT COALESCE(NULLIF(routing_method,''), 'direct') AS method, COUNT(*) AS cnt
 		FROM request_logs WHERE %s GROUP BY method
 	`, whereSQL)
 	methodRows, err := r.readDB.QueryContext(ctx, methodQ, params...)

@@ -20,9 +20,9 @@ type ClassifyResult struct {
 // RoutingClassifier performs rule-based request classification.
 // Rules are evaluated by priority (highest first); the first match wins.
 type RoutingClassifier struct {
-	rules           []*models.RoutingRule // sorted by priority desc
+	rules            []*models.RoutingRule // sorted by priority desc
 	compiledPatterns map[int64]*regexp.Regexp
-	condParser      *ConditionParser
+	condParser       *ConditionParser
 }
 
 // NewRoutingClassifier creates a classifier with builtin + custom rules.
@@ -49,15 +49,22 @@ func NewRoutingClassifier(customRules []*models.RoutingRule) *RoutingClassifier 
 		allRules = append(allRules, r)
 	}
 
-	// Filter enabled, sort by priority desc
+	// Filter enabled, sort by priority desc. Tie-breakers must stay deterministic
+	// because the winning rule is chosen by first match in this ordered slice.
 	enabled := make([]*models.RoutingRule, 0, len(allRules))
 	for _, r := range allRules {
 		if r.Enabled {
 			enabled = append(enabled, r)
 		}
 	}
-	sort.Slice(enabled, func(i, j int) bool {
-		return enabled[i].Priority > enabled[j].Priority
+	sort.SliceStable(enabled, func(i, j int) bool {
+		if enabled[i].Priority != enabled[j].Priority {
+			return enabled[i].Priority > enabled[j].Priority
+		}
+		if enabled[i].Name != enabled[j].Name {
+			return enabled[i].Name < enabled[j].Name
+		}
+		return enabled[i].ID < enabled[j].ID
 	})
 
 	// Pre-compile regex patterns

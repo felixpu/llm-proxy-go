@@ -241,6 +241,36 @@ func TestRoutingClassifier_PriorityOrdering(t *testing.T) {
 	assert.True(t, len(result.Matches) >= 2, "should have multiple matches")
 }
 
+func TestRoutingClassifier_SamePriorityTieBreakIsDeterministic(t *testing.T) {
+	customRules := []*models.RoutingRule{
+		{
+			ID:       410,
+			Name:     "z_simple_rule",
+			Keywords: []string{"测试"},
+			TaskType: "simple",
+			Priority: 120,
+			Enabled:  true,
+		},
+		{
+			ID:       411,
+			Name:     "a_complex_rule",
+			Keywords: []string{"测试"},
+			TaskType: "complex",
+			Priority: 120,
+			Enabled:  true,
+		},
+	}
+
+	for range 20 {
+		classifier := NewRoutingClassifier(customRules)
+		result := classifier.Classify("测试消息")
+
+		require.NotNil(t, result.Rule)
+		assert.Equal(t, int64(411), result.Rule.ID)
+		assert.Equal(t, string(models.ModelRoleComplex), result.TaskType)
+	}
+}
+
 func TestRoutingClassifier_PatternMatching(t *testing.T) {
 	customRules := []*models.RoutingRule{
 		{

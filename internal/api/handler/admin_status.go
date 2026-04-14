@@ -21,11 +21,12 @@ type HealthResponse struct {
 
 // StatusResponse represents the system status response.
 type StatusResponse struct {
-	UptimeSeconds int64               `json:"uptime_seconds"`
-	TotalRequests int64               `json:"total_requests"`
-	TotalErrors   int64               `json:"total_errors"`
-	Models        []ModelInfo         `json:"models"`
-	Endpoints     []EndpointStateInfo `json:"endpoints"`
+	UptimeSeconds   int64               `json:"uptime_seconds"`
+	TotalRequests   int64               `json:"total_requests"`
+	TotalErrors     int64               `json:"total_errors"`
+	AutoDetectCount uint64              `json:"auto_detect_count"`
+	Models          []ModelInfo         `json:"models"`
+	Endpoints       []EndpointStateInfo `json:"endpoints"`
 }
 
 // ModelInfo represents model information in status response.
@@ -81,6 +82,7 @@ type StatusHandler struct {
 	logRepo       repository.RequestLogAnalyticsRepository
 	llmRouter     *service.LLMRouter
 	endpointStore *service.EndpointStore
+	selector      *service.EndpointSelector
 }
 
 // NewStatusHandler creates a new StatusHandler.
@@ -90,6 +92,7 @@ func NewStatusHandler(
 	logRepo repository.RequestLogAnalyticsRepository,
 	llmRouter *service.LLMRouter,
 	endpointStore *service.EndpointStore,
+	selector *service.EndpointSelector,
 ) *StatusHandler {
 	return &StatusHandler{
 		healthChecker: hc,
@@ -97,6 +100,7 @@ func NewStatusHandler(
 		logRepo:       logRepo,
 		llmRouter:     llmRouter,
 		endpointStore: endpointStore,
+		selector:      selector,
 	}
 }
 
@@ -179,11 +183,12 @@ func (h *StatusHandler) GetSystemStatus(c *gin.Context) {
 	})
 
 	c.JSON(http.StatusOK, StatusResponse{
-		UptimeSeconds: int64(time.Since(startTime).Seconds()),
-		TotalRequests: totalReqs,
-		TotalErrors:   totalErrs,
-		Models:        modelInfos,
-		Endpoints:     epInfos,
+		UptimeSeconds:   int64(time.Since(startTime).Seconds()),
+		TotalRequests:   totalReqs,
+		TotalErrors:     totalErrs,
+		AutoDetectCount: service.AutoDetectCount(),
+		Models:          modelInfos,
+		Endpoints:       epInfos,
 	})
 }
 
@@ -207,7 +212,7 @@ func (h *StatusHandler) GetRoutingDebug(c *gin.Context) {
 	})
 	c.JSON(http.StatusOK, RoutingDebugResponse{
 		DefaultRole:   string(models.ModelRoleDefault),
-		RoutingMethod: "llm",
+		RoutingMethod: "hybrid",
 		Models:        infos,
 	})
 }
@@ -235,7 +240,46 @@ func (h *StatusHandler) TestRouting(c *gin.Context) {
 		Messages: messages,
 	}
 
-	// Call LLM router
+	if h.selector != nil {
+		selection, err := h.selector.SelectEndpoint(c.Request.Context(), anthropicReq, h.endpointStore.GetEndpoints())
+		if err != nil {
+			errorResponse(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		resp := RoutingTestResponse{
+			InferredTaskType: string(selection.TaskType),
+			SelectedRole:     string(selection.TaskType),
+			RoutingMethod:    selection.RoutingMethod,
+		}
+
+		if selection.Model != nil {
+			resp.SelectedModel = selection.Model.Name
+		}
+
+		if selection.RoutingDecision != nil {
+			resp.Reasoning = selection.RoutingDecision.Reason
+			resp.CacheHit = selection.RoutingDecision.FromCache
+			resp.CacheType = selection.RoutingDecision.CacheType
+			if resp.SelectedModel == "" {
+				resp.SelectedModel = selection.RoutingDecision.ModelUsed
+			}
+		} else {
+			switch selection.RoutingMethod {
+			case models.RoutingMethodDirect:
+				resp.Reasoning = fmt.Sprintf("direct: client requested concrete model %q", anthropicReq.Model)
+			case models.RoutingMethodFallback:
+				resp.Reasoning = "fallback: no routing decision returned"
+			default:
+				resp.Reasoning = "routing completed without explicit decision"
+			}
+		}
+
+		c.JSON(http.StatusOK, resp)
+		return
+	}
+
+	// Backward-compatible fallback when selector is unavailable.
 	taskType, decision, err := h.llmRouter.InferTaskType(c.Request.Context(), anthropicReq)
 	if err != nil {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
@@ -245,7 +289,7 @@ func (h *StatusHandler) TestRouting(c *gin.Context) {
 	resp := RoutingTestResponse{
 		InferredTaskType: string(taskType),
 		SelectedRole:     string(taskType),
-		RoutingMethod:    "llm",
+		RoutingMethod:    service.DeriveRoutingMethod(decision),
 	}
 
 	if decision != nil {
@@ -257,7 +301,6 @@ func (h *StatusHandler) TestRouting(c *gin.Context) {
 		resp.Reasoning = "default routing (no routing decision returned)"
 	}
 
-	// Find a matching model name for the inferred role
 	if resp.SelectedModel == "" {
 		for _, ep := range h.endpointStore.GetEndpoints() {
 			if ep.Model.Role == taskType {

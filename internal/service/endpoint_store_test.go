@@ -11,7 +11,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestEndpointStore_GetEndpoints_ReturnsSliceCopy(t *testing.T) {
+func TestEndpointStore_GetEndpoints_ReturnsAppendSafeSnapshot(t *testing.T) {
 	store := &EndpointStore{
 		endpoints: []*models.Endpoint{
 			{Model: &models.Model{Name: "m1"}},

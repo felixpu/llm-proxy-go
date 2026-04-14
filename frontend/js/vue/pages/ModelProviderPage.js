@@ -74,7 +74,7 @@ window.VuePages = window.VuePages || {};
         description: "",
         model_ids: [],
         custom_headers: "",
-        api_type: "auto",
+        api_type: "anthropic_messages",
       });
 
       // 角色选项
@@ -115,6 +115,16 @@ window.VuePages = window.VuePages || {};
         return models.value.filter(function (m) {
           return m.enabled;
         });
+      });
+
+      var enabledProviderCount = computed(function () {
+        return providers.value.filter(function (p) {
+          return p.enabled;
+        }).length;
+      });
+
+      var enabledModelCount = computed(function () {
+        return enabledModels.value.length;
       });
 
       var aliasTargetModels = computed(function () {
@@ -413,7 +423,7 @@ window.VuePages = window.VuePages || {};
         providerForm.description = "";
         providerForm.model_ids = [];
         providerForm.custom_headers = "";
-        providerForm.api_type = "auto";
+        providerForm.api_type = "anthropic_messages";
         showProviderModal.value = true;
       }
 
@@ -437,7 +447,7 @@ window.VuePages = window.VuePages || {};
         providerForm.custom_headers = provider.custom_headers && Object.keys(provider.custom_headers).length > 0
           ? JSON.stringify(provider.custom_headers, null, 2)
           : "";
-        providerForm.api_type = provider.api_type || "auto";
+        providerForm.api_type = provider.api_type || "anthropic_messages";
         showProviderModal.value = true;
       }
 
@@ -461,7 +471,7 @@ window.VuePages = window.VuePages || {};
             enabled: providerForm.enabled,
             description: providerForm.description || null,
             model_ids: providerForm.model_ids,
-            api_type: providerForm.api_type || "auto",
+            api_type: providerForm.api_type || "anthropic_messages",
           };
           if (providerForm.custom_headers) {
             try {
@@ -694,6 +704,8 @@ window.VuePages = window.VuePages || {};
         relationCount: relationCount,
         unassociatedModels: unassociatedModels,
         enabledModels: enabledModels,
+        enabledProviderCount: enabledProviderCount,
+        enabledModelCount: enabledModelCount,
         aliasTargetModels: aliasTargetModels,
         groupedDetectedModels: groupedDetectedModels,
         filteredModelCount: filteredModelCount,
@@ -740,7 +752,7 @@ window.VuePages = window.VuePages || {};
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>\
                     </div>\
                     <div class="stat-info">\
-                        <span class="stat-value">{{ providers.length }}</span>\
+                        <span class="stat-value stat-value-split"><span class="stat-value-active">{{ enabledProviderCount }}</span><span class="stat-value-separator">/</span><span class="stat-value-total">{{ providers.length }}</span></span>\
                         <span class="stat-label">服务商</span>\
                     </div>\
                 </div>\
@@ -749,7 +761,7 @@ window.VuePages = window.VuePages || {};
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>\
                     </div>\
                     <div class="stat-info">\
-                        <span class="stat-value">{{ models.length }}</span>\
+                        <span class="stat-value stat-value-split"><span class="stat-value-active">{{ enabledModelCount }}</span><span class="stat-value-separator">/</span><span class="stat-value-total">{{ models.length }}</span></span>\
                         <span class="stat-label">模型</span>\
                     </div>\
                 </div>\
@@ -1301,17 +1313,17 @@ window.VuePages = window.VuePages || {};
                     <div class="form-group">\
                         <label class="label-with-help">\
                             API 类型\
-                            <span class="help-icon" data-tooltip="指定服务商使用的 API 格式：&#10;&#10;• auto（自动检测）- 首次使用时自动探测 API 类型&#10;• anthropic_messages - Anthropic Messages API (/v1/messages)&#10;• anthropic_responses - Anthropic Responses API (/v1/responses)&#10;• openai_chat - OpenAI Chat Completions API (/v1/chat/completions)&#10;&#10;推荐使用 auto，系统会自动选择正确的 API 格式。" data-tooltip-pos="bottom">\
+                            <span class="help-icon" data-tooltip="指定服务商使用的 API 格式：&#10;&#10;• anthropic_messages - Anthropic Messages API (/v1/messages)，多数 Claude/兼容站推荐使用&#10;• anthropic_responses - Anthropic Responses API (/v1/responses)&#10;• openai_chat - OpenAI Chat Completions API (/v1/chat/completions)&#10;• auto（自动检测）- 仅在你无法确认服务商格式时使用，可能增加首请求探测成本与误判风险。" data-tooltip-pos="bottom">\
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>\
                             </span>\
                         </label>\
                         <select v-model="providerForm.api_type">\
-                            <option value="auto">auto（自动检测，推荐）</option>\
                             <option value="anthropic_messages">anthropic_messages（Anthropic Messages API）</option>\
                             <option value="anthropic_responses">anthropic_responses（Anthropic Responses API）</option>\
                             <option value="openai_chat">openai_chat（OpenAI Chat Completions API）</option>\
+                            <option value="auto">auto（自动检测，高级选项）</option>\
                         </select>\
-                        <small class="text-muted" style="display: block; margin-top: 4px;">选择 auto 让系统自动检测，或手动指定 API 类型以避免检测延迟</small>\
+                        <small class="text-muted" style="display: block; margin-top: 4px;">默认使用 anthropic_messages；只有在无法确认上游格式时再选 auto</small>\
                     </div>\
                     <div class="form-group">\
                         <label class="checkbox-label">\

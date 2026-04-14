@@ -100,6 +100,26 @@
     transform: translateY(-1px);
 }
 
+.overview-stats .stat-value-split {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 2px;
+}
+
+.overview-stats .stat-value-active {
+    color: var(--color-success);
+}
+
+.overview-stats .stat-value-separator {
+    color: var(--text-tertiary);
+    font-weight: var(--font-weight-semibold);
+}
+
+.overview-stats .stat-value-total {
+    color: var(--text-muted);
+    font-weight: var(--font-weight-semibold);
+}
+
 /* 关联视图网格 */
 .relation-grid {
     display: grid;
@@ -414,6 +434,10 @@
     .overview-stats .stat-value {
         font-size: var(--font-size-lg);
         line-height: 1.1;
+    }
+
+    .overview-stats .stat-value-split {
+        gap: 1px;
     }
 
     .overview-stats .stat-label {

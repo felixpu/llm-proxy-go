@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,6 +19,17 @@ func maskAPIKey(apiKey string) string {
 		return strings.Repeat("*", len(apiKey))
 	}
 	return apiKey[:4] + "****...****" + apiKey[len(apiKey)-4:]
+}
+
+func normalizeProviderAPIType(apiType string) (string, error) {
+	normalized := strings.TrimSpace(apiType)
+	if normalized == "" {
+		return string(service.DefaultConfiguredAPIType), nil
+	}
+	if !service.IsValidAPIType(normalized) {
+		return "", fmt.Errorf("invalid api_type: must be one of 'auto', 'anthropic_messages', 'anthropic_responses', 'openai_chat'")
+	}
+	return normalized, nil
 }
 
 // ProviderCreate represents a provider creation request.
@@ -149,15 +161,12 @@ func (h *ProviderHandler) CreateProvider(c *gin.Context) {
 		return
 	}
 
-	// Validate api_type if provided
-	if req.APIType != "" {
-		if !service.IsValidAPIType(req.APIType) {
-			errorResponse(c, http.StatusBadRequest, "invalid api_type: must be one of 'auto', 'anthropic_messages', 'anthropic_responses', 'openai_chat'")
-			return
-		}
-	} else {
-		req.APIType = "auto" // Default to auto
+	apiType, err := normalizeProviderAPIType(req.APIType)
+	if err != nil {
+		errorResponse(c, http.StatusBadRequest, err.Error())
+		return
 	}
+	req.APIType = apiType
 
 	p := &models.Provider{
 		Name:          req.Name,
@@ -175,6 +184,7 @@ func (h *ProviderHandler) CreateProvider(c *gin.Context) {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	service.InvalidateAPIDetectionCache()
 	c.JSON(http.StatusOK, gin.H{"id": id, "message": "Provider created"})
 	go h.endpointStore.ReloadAndNotify(context.Background())
 }
@@ -194,10 +204,12 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 
 	// Validate api_type if provided
 	if req.APIType != nil {
-		if !service.IsValidAPIType(*req.APIType) {
-			errorResponse(c, http.StatusBadRequest, "invalid api_type: must be one of 'auto', 'anthropic_messages', 'anthropic_responses', 'openai_chat'")
+		apiType, err := normalizeProviderAPIType(*req.APIType)
+		if err != nil {
+			errorResponse(c, http.StatusBadRequest, err.Error())
 			return
 		}
+		req.APIType = &apiType
 	}
 
 	patch := repository.ProviderPatch{
@@ -215,6 +227,7 @@ func (h *ProviderHandler) UpdateProvider(c *gin.Context) {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	service.InvalidateAPIDetectionCache()
 	c.JSON(http.StatusOK, gin.H{"id": id, "message": "Provider updated"})
 	go h.endpointStore.ReloadAndNotify(context.Background())
 }
@@ -230,6 +243,7 @@ func (h *ProviderHandler) DeleteProvider(c *gin.Context) {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	service.InvalidateAPIDetectionCache()
 	c.JSON(http.StatusOK, gin.H{"id": id, "message": "Provider deleted"})
 	go h.endpointStore.ReloadAndNotify(context.Background())
 }
