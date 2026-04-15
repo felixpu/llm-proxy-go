@@ -8,6 +8,7 @@ logs/
 
 # Build artifacts
 dist/
+.benchmarks/
 
 # Environment
 .env

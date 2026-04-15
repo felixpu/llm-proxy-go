@@ -24,9 +24,14 @@ type SystemLoadBalanceConfigPatch struct {
 }
 
 type SystemHealthCheckConfigPatch struct {
-	Enabled         *bool
-	IntervalSeconds *int
-	TimeoutSeconds  *int
+	Enabled                   *bool
+	IntervalSeconds           *int
+	TimeoutSeconds            *int
+	CBEnabled                 *bool
+	CBConsecutiveFailures     *int
+	CBPermanentErrorThreshold *int
+	CBCooldownSeconds         *int
+	CBHalfOpenMaxRequests     *int
 }
 
 type SystemUIConfigPatch struct {
@@ -87,6 +92,21 @@ func (r *SystemConfigRepository) UpdateHealthCheckConfigPatch(ctx context.Contex
 	}
 	if patch.TimeoutSeconds != nil {
 		updates["timeout_seconds"] = *patch.TimeoutSeconds
+	}
+	if patch.CBEnabled != nil {
+		updates["cb_enabled"] = *patch.CBEnabled
+	}
+	if patch.CBConsecutiveFailures != nil {
+		updates["cb_consecutive_failures"] = *patch.CBConsecutiveFailures
+	}
+	if patch.CBPermanentErrorThreshold != nil {
+		updates["cb_permanent_error_threshold"] = *patch.CBPermanentErrorThreshold
+	}
+	if patch.CBCooldownSeconds != nil {
+		updates["cb_cooldown_seconds"] = *patch.CBCooldownSeconds
+	}
+	if patch.CBHalfOpenMaxRequests != nil {
+		updates["cb_half_open_max_requests"] = *patch.CBHalfOpenMaxRequests
 	}
 	return r.updateConfig(ctx, "health_check_config", updates)
 }

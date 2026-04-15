@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/user/llm-proxy-go/internal/config"
@@ -90,6 +91,7 @@ func NewEndpointState(name string) *EndpointState {
 type EndpointStateSnapshot struct {
 	Name               string                `json:"name"`
 	Status             models.EndpointStatus `json:"status"`
+	CircuitState       CircuitState          `json:"circuit_state"`
 	CurrentConnections int                   `json:"current_connections"`
 	TotalRequests      int                   `json:"total_requests"`
 	TotalErrors        int                   `json:"total_errors"`
@@ -103,6 +105,7 @@ func (s *EndpointState) snapshot() EndpointStateSnapshot {
 	return EndpointStateSnapshot{
 		Name:               s.Name,
 		Status:             s.Status,
+		CircuitState:       s.CircuitState,
 		CurrentConnections: s.CurrentConnections,
 		TotalRequests:      s.TotalRequests,
 		TotalErrors:        s.TotalErrors,
@@ -124,10 +127,17 @@ type HealthChecker struct {
 
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	checking int32
 }
 
 // NewHealthChecker creates a new HealthChecker.
 func NewHealthChecker(cfg config.HealthCheckConfig, logger *zap.Logger) *HealthChecker {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	cfg = sanitizeHealthCheckConfig(cfg, logger)
+
 	return &HealthChecker{
 		cfg: cfg,
 		client: &http.Client{
@@ -136,6 +146,61 @@ func NewHealthChecker(cfg config.HealthCheckConfig, logger *zap.Logger) *HealthC
 		logger: logger,
 		states: make(map[string]*EndpointState),
 	}
+}
+
+func sanitizeHealthCheckConfig(cfg config.HealthCheckConfig, logger *zap.Logger) config.HealthCheckConfig {
+	if cfg.IntervalSeconds <= 0 {
+		logger.Warn("invalid health check interval, fallback to default",
+			zap.Int("configured", cfg.IntervalSeconds),
+			zap.Int("default", 60),
+		)
+		cfg.IntervalSeconds = 60
+	}
+	if cfg.TimeoutSeconds <= 0 {
+		logger.Warn("invalid health check timeout, fallback to default",
+			zap.Int("configured", cfg.TimeoutSeconds),
+			zap.Int("default", 10),
+		)
+		cfg.TimeoutSeconds = 10
+	}
+	if cfg.CircuitBreaker.ConsecutiveFailures <= 0 {
+		cfg.CircuitBreaker.ConsecutiveFailures = 5
+	}
+	if cfg.CircuitBreaker.PermanentErrorThreshold <= 0 {
+		cfg.CircuitBreaker.PermanentErrorThreshold = 3
+	}
+	if cfg.CircuitBreaker.CooldownSeconds <= 0 {
+		cfg.CircuitBreaker.CooldownSeconds = 60
+	}
+	if cfg.CircuitBreaker.HalfOpenMaxRequests <= 0 {
+		cfg.CircuitBreaker.HalfOpenMaxRequests = 3
+	}
+	if !cfg.Enabled && cfg.CircuitBreaker.Enabled {
+		logger.Info("health check disabled, circuit breaker disabled automatically")
+		cfg.CircuitBreaker.Enabled = false
+	}
+	return cfg
+}
+
+func endpointStateName(ep *models.Endpoint) (string, bool) {
+	if ep == nil || ep.Provider == nil || ep.Model == nil {
+		return "", false
+	}
+	if strings.TrimSpace(ep.Provider.Name) == "" || strings.TrimSpace(ep.Model.Name) == "" {
+		return "", false
+	}
+	return fmt.Sprintf("%s/%s", ep.Provider.Name, ep.Model.Name), true
+}
+
+func probeConcurrencyLimit(total int) int {
+	if total <= 0 {
+		return 1
+	}
+	const maxConcurrency = 16
+	if total < maxConcurrency {
+		return total
+	}
+	return maxConcurrency
 }
 
 // Start begins periodic health checking.
@@ -150,7 +215,11 @@ func (hc *HealthChecker) Start(endpoints []*models.Endpoint) {
 		// so they are usable by the proxy.
 		hc.mu.Lock()
 		for _, ep := range endpoints {
-			name := fmt.Sprintf("%s/%s", ep.Provider.Name, ep.Model.Name)
+			name, ok := endpointStateName(ep)
+			if !ok {
+				hc.logger.Warn("skip invalid endpoint during health checker initialization")
+				continue
+			}
 			state := NewEndpointState(name)
 			state.Status = models.EndpointHealthy
 			hc.states[name] = state
@@ -163,7 +232,11 @@ func (hc *HealthChecker) Start(endpoints []*models.Endpoint) {
 	// Initialize states for all endpoints.
 	hc.mu.Lock()
 	for _, ep := range endpoints {
-		name := fmt.Sprintf("%s/%s", ep.Provider.Name, ep.Model.Name)
+		name, ok := endpointStateName(ep)
+		if !ok {
+			hc.logger.Warn("skip invalid endpoint during health checker initialization")
+			continue
+		}
 		state := NewEndpointState(name)
 		state.Status = models.EndpointUnknown
 		hc.states[name] = state
@@ -233,11 +306,27 @@ func (hc *HealthChecker) loop(ctx context.Context, _ []*models.Endpoint, done ch
 }
 
 func (hc *HealthChecker) checkAll(ctx context.Context, endpoints []*models.Endpoint) {
+	if len(endpoints) == 0 {
+		return
+	}
+	if !atomic.CompareAndSwapInt32(&hc.checking, 0, 1) {
+		hc.logger.Debug("health check already in progress, skipping")
+		return
+	}
+	defer atomic.StoreInt32(&hc.checking, 0)
+
+	sem := make(chan struct{}, probeConcurrencyLimit(len(endpoints)))
 	var wg sync.WaitGroup
 	for _, ep := range endpoints {
 		wg.Add(1)
 		go func(ep *models.Endpoint) {
 			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
 			hc.checkEndpoint(ctx, ep)
 		}(ep)
 	}
@@ -245,7 +334,11 @@ func (hc *HealthChecker) checkAll(ctx context.Context, endpoints []*models.Endpo
 }
 
 func (hc *HealthChecker) checkEndpoint(ctx context.Context, ep *models.Endpoint) {
-	name := fmt.Sprintf("%s/%s", ep.Provider.Name, ep.Model.Name)
+	name, ok := endpointStateName(ep)
+	if !ok {
+		hc.logger.Warn("skip invalid endpoint during health probe")
+		return
+	}
 	status, errMsg := probeEndpointStatus(ctx, hc.client, ep)
 	hc.updateState(name, status, errMsg)
 }
@@ -438,7 +531,11 @@ func (hc *HealthChecker) UpdateEndpoints(endpoints []*models.Endpoint) {
 	// Build set of current endpoint names.
 	active := make(map[string]struct{}, len(endpoints))
 	for _, ep := range endpoints {
-		name := fmt.Sprintf("%s/%s", ep.Provider.Name, ep.Model.Name)
+		name, ok := endpointStateName(ep)
+		if !ok {
+			hc.logger.Warn("skip invalid endpoint during endpoint update")
+			continue
+		}
 		active[name] = struct{}{}
 		if _, exists := hc.states[name]; !exists {
 			// New endpoint — initialize state.
@@ -468,6 +565,39 @@ func (hc *HealthChecker) CheckNow() {
 	if endpoints != nil {
 		go hc.checkAll(context.Background(), endpoints)
 	}
+}
+
+// GetConfig returns a copy of the current health checker configuration.
+func (hc *HealthChecker) GetConfig() config.HealthCheckConfig {
+	hc.mu.RLock()
+	defer hc.mu.RUnlock()
+	return hc.cfg
+}
+
+// ApplyConfig applies a new health checker configuration at runtime.
+// It restarts the checker loop so interval/timeout changes take effect immediately.
+func (hc *HealthChecker) ApplyConfig(cfg config.HealthCheckConfig) {
+	cfg = sanitizeHealthCheckConfig(cfg, hc.logger)
+
+	// Stop existing loop first to avoid overlap and ensure ticker is recreated.
+	hc.Stop()
+
+	hc.mu.Lock()
+	hc.cfg = cfg
+	if hc.client == nil {
+		hc.client = &http.Client{}
+	}
+	hc.client.Timeout = time.Duration(cfg.TimeoutSeconds) * time.Second
+	endpoints := hc.endpoints
+	hc.mu.Unlock()
+
+	hc.Start(endpoints)
+	hc.logger.Info("health checker config applied",
+		zap.Bool("enabled", cfg.Enabled),
+		zap.Int("interval_seconds", cfg.IntervalSeconds),
+		zap.Int("timeout_seconds", cfg.TimeoutSeconds),
+		zap.Bool("circuit_breaker_enabled", cfg.CircuitBreaker.Enabled),
+	)
 }
 
 // classifyHTTPError classifies an HTTP error based on status code and response body.

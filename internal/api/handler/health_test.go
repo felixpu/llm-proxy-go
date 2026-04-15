@@ -58,6 +58,7 @@ func TestHealthHandler_Health_AllHealthy(t *testing.T) {
 	assert.Equal(t, "healthy", resp["status"])
 	assert.Equal(t, float64(2), resp["healthy"])
 	assert.Equal(t, float64(0), resp["unhealthy"])
+	assert.Equal(t, float64(0), resp["unknown"])
 }
 
 func TestHealthHandler_Health_AllUnhealthy(t *testing.T) {
@@ -94,6 +95,7 @@ func TestHealthHandler_Health_AllUnhealthy(t *testing.T) {
 	assert.Equal(t, "unhealthy", resp["status"])
 	assert.Equal(t, float64(0), resp["healthy"])
 	assert.Equal(t, float64(2), resp["unhealthy"])
+	assert.Equal(t, float64(0), resp["unknown"])
 }
 
 func TestHealthHandler_Health_Degraded(t *testing.T) {
@@ -135,6 +137,7 @@ func TestHealthHandler_Health_Degraded(t *testing.T) {
 	assert.Equal(t, "degraded", resp["status"])
 	assert.Equal(t, float64(1), resp["healthy"])
 	assert.Equal(t, float64(2), resp["unhealthy"])
+	assert.Equal(t, float64(0), resp["unknown"])
 }
 
 func TestHealthHandler_Health_Empty(t *testing.T) {
@@ -156,4 +159,37 @@ func TestHealthHandler_Health_Empty(t *testing.T) {
 	assert.Equal(t, "healthy", resp["status"])
 	assert.Equal(t, float64(0), resp["healthy"])
 	assert.Equal(t, float64(0), resp["unhealthy"])
+	assert.Equal(t, float64(0), resp["unknown"])
+}
+
+func TestHealthHandler_Health_UnknownIsDegraded(t *testing.T) {
+	cfg := config.HealthCheckConfig{Enabled: false}
+	hc := service.NewHealthChecker(cfg, testutil.NewTestLogger())
+
+	endpoints := []*models.Endpoint{
+		{
+			Provider: &models.Provider{Name: "provider1"},
+			Model:    &models.Model{Name: "model1"},
+		},
+	}
+	initializeHealthCheckerState(hc, endpoints)
+
+	hc.UpdateState("provider1/model1", models.EndpointUnknown, "")
+
+	handler := NewHealthHandler(hc)
+	c, w := testutil.NewTestContext()
+	c.Request = httptest.NewRequest("GET", "/health", nil)
+
+	handler.Health(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	assert.Equal(t, "degraded", resp["status"])
+	assert.Equal(t, float64(0), resp["healthy"])
+	assert.Equal(t, float64(0), resp["unhealthy"])
+	assert.Equal(t, float64(1), resp["unknown"])
 }

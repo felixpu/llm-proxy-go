@@ -55,6 +55,58 @@ window.VuePages = window.VuePages || {};
         return found ? found.label : "请选择";
       }
 
+      function toPositiveInt(value, fallback) {
+        var n = Number(value);
+        if (!isFinite(n) || n <= 0) return fallback;
+        return Math.floor(n);
+      }
+
+      async function parseErrorDetail(response, fallback) {
+        try {
+          var result = await response.json();
+          if (result && typeof result.detail === "string" && result.detail) {
+            return result.detail;
+          }
+          if (result && typeof result.message === "string" && result.message) {
+            return result.message;
+          }
+        } catch (_) {}
+        return fallback || "请求失败";
+      }
+
+      function validateHealthCheckConfig() {
+        var interval = Number(healthCheck.interval_seconds);
+        var timeout = Number(healthCheck.timeout_seconds);
+        var cbFailures = Number(healthCheck.cb_consecutive_failures);
+        var cbPermanent = Number(healthCheck.cb_permanent_error_threshold);
+        var cbCooldown = Number(healthCheck.cb_cooldown_seconds);
+        var cbHalfOpen = Number(healthCheck.cb_half_open_max_requests);
+
+        if (!isFinite(interval) || interval < 5) {
+          return "检查间隔必须 >= 5 秒";
+        }
+        if (!isFinite(timeout) || timeout <= 0) {
+          return "超时时间必须 > 0 秒";
+        }
+        if (timeout >= interval) {
+          return "超时时间必须小于检查间隔";
+        }
+        if (!isFinite(cbFailures) || cbFailures <= 0) {
+          return "连续失败次数阈值必须 > 0";
+        }
+        if (!isFinite(cbPermanent) || cbPermanent <= 0) {
+          return "连续永久性错误阈值必须 > 0";
+        }
+        if (!isFinite(cbCooldown) || cbCooldown <= 0) {
+          return "冷却时间必须 > 0 秒";
+        }
+        if (!isFinite(cbHalfOpen) || cbHalfOpen <= 0) {
+          return "半开状态最大测试请求数必须 > 0";
+        }
+
+        return "";
+      }
+
       async function loadSettings() {
         try {
           var results = await Promise.all([
@@ -67,14 +119,14 @@ window.VuePages = window.VuePages || {};
           var ui = await results[2].json();
           loadBalance.strategy = lb.strategy;
           healthCheck.enabled = !!hc.enabled;
-          healthCheck.interval_seconds = hc.interval_seconds;
-          healthCheck.timeout_seconds = hc.timeout_seconds;
+          healthCheck.interval_seconds = toPositiveInt(hc.interval_seconds, 60);
+          healthCheck.timeout_seconds = toPositiveInt(hc.timeout_seconds, 10);
           // Load circuit breaker configuration with defaults
           healthCheck.cb_enabled = hc.cb_enabled !== undefined ? !!hc.cb_enabled : true;
-          healthCheck.cb_consecutive_failures = hc.cb_consecutive_failures || 5;
-          healthCheck.cb_permanent_error_threshold = hc.cb_permanent_error_threshold || 3;
-          healthCheck.cb_cooldown_seconds = hc.cb_cooldown_seconds || 60;
-          healthCheck.cb_half_open_max_requests = hc.cb_half_open_max_requests || 3;
+          healthCheck.cb_consecutive_failures = toPositiveInt(hc.cb_consecutive_failures, 5);
+          healthCheck.cb_permanent_error_threshold = toPositiveInt(hc.cb_permanent_error_threshold, 3);
+          healthCheck.cb_cooldown_seconds = toPositiveInt(hc.cb_cooldown_seconds, 60);
+          healthCheck.cb_half_open_max_requests = toPositiveInt(hc.cb_half_open_max_requests, 3);
           uiConfig.dashboard_refresh_seconds = ui.dashboard_refresh_seconds;
           uiConfig.logs_refresh_seconds = ui.logs_refresh_seconds;
         } catch (error) {
@@ -95,6 +147,12 @@ window.VuePages = window.VuePages || {};
       }
 
       async function updateHealthCheck() {
+        var validationError = validateHealthCheckConfig();
+        if (validationError) {
+          toastStore.error(validationError);
+          return;
+        }
+
         savingHealthCheck.value = true;
         try {
           var response = await VueApi.put("/api/config/health-check", {
@@ -108,7 +166,9 @@ window.VuePages = window.VuePages || {};
             cb_cooldown_seconds: healthCheck.cb_cooldown_seconds,
             cb_half_open_max_requests: healthCheck.cb_half_open_max_requests,
           });
-          if (!response.ok) throw new Error("更新失败");
+          if (!response.ok) {
+            throw new Error(await parseErrorDetail(response, "更新失败"));
+          }
           toastStore.success("健康检查设置已更新");
           await loadSettings();
         } catch (error) {
@@ -257,11 +317,12 @@ window.VuePages = window.VuePages || {};
             <div class="form-row">\
                 <div class="form-group">\
                     <label>检查间隔（秒）</label>\
-                    <input type="number" v-model.number="healthCheck.interval_seconds" min="10" max="3600">\
+                    <input type="number" v-model.number="healthCheck.interval_seconds" min="5" max="3600">\
                 </div>\
                 <div class="form-group">\
                     <label>超时时间（秒）</label>\
-                    <input type="number" v-model.number="healthCheck.timeout_seconds" min="1" max="60">\
+                    <input type="number" v-model.number="healthCheck.timeout_seconds" min="1" :max="Math.max(1, (healthCheck.interval_seconds || 2) - 1)">\
+                    <span class="help-text">超时时间必须小于检查间隔</span>\
                 </div>\
             </div>\
             <h4 style="margin-top: 20px; margin-bottom: 10px;">熔断器配置</h4>\
@@ -275,24 +336,24 @@ window.VuePages = window.VuePages || {};
             <div class="form-row">\
                 <div class="form-group">\
                     <label>连续失败次数阈值</label>\
-                    <input type="number" v-model.number="healthCheck.cb_consecutive_failures" min="1" max="100">\
+                    <input type="number" v-model.number="healthCheck.cb_consecutive_failures" min="1" max="100" :disabled="!healthCheck.cb_enabled">\
                     <span class="help-text">达到此阈值后熔断器打开（默认: 5）</span>\
                 </div>\
                 <div class="form-group">\
                     <label>连续永久性错误阈值</label>\
-                    <input type="number" v-model.number="healthCheck.cb_permanent_error_threshold" min="1" max="100">\
+                    <input type="number" v-model.number="healthCheck.cb_permanent_error_threshold" min="1" max="100" :disabled="!healthCheck.cb_enabled">\
                     <span class="help-text">如 404、模型不存在等（默认: 3）</span>\
                 </div>\
             </div>\
             <div class="form-row">\
                 <div class="form-group">\
                     <label>冷却时间（秒）</label>\
-                    <input type="number" v-model.number="healthCheck.cb_cooldown_seconds" min="10" max="3600">\
+                    <input type="number" v-model.number="healthCheck.cb_cooldown_seconds" min="1" max="3600" :disabled="!healthCheck.cb_enabled">\
                     <span class="help-text">熔断器打开后等待此时间转为半开状态（默认: 60）</span>\
                 </div>\
                 <div class="form-group">\
                     <label>半开状态最大测试请求数</label>\
-                    <input type="number" v-model.number="healthCheck.cb_half_open_max_requests" min="1" max="20">\
+                    <input type="number" v-model.number="healthCheck.cb_half_open_max_requests" min="1" max="20" :disabled="!healthCheck.cb_enabled">\
                     <span class="help-text">半开状态下允许的测试请求数量（默认: 3）</span>\
                 </div>\
             </div>\

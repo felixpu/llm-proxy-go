@@ -89,7 +89,12 @@ CREATE TABLE IF NOT EXISTS health_check_config (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     enabled INTEGER DEFAULT 1,
     interval_seconds INTEGER DEFAULT 60,
-    timeout_seconds INTEGER DEFAULT 10
+    timeout_seconds INTEGER DEFAULT 10,
+    cb_enabled INTEGER DEFAULT 1,
+    cb_consecutive_failures INTEGER DEFAULT 5,
+    cb_permanent_error_threshold INTEGER DEFAULT 3,
+    cb_cooldown_seconds INTEGER DEFAULT 60,
+    cb_half_open_max_requests INTEGER DEFAULT 3
 );
 
 -- Load balance configuration (singleton)
@@ -379,7 +384,11 @@ CREATE INDEX IF NOT EXISTS idx_request_logs_created_at ON request_logs(created_a
 func insertDefaults(db *sql.DB) error {
 	defaults := `
 INSERT OR IGNORE INTO proxy_config (id, host, port) VALUES (1, '0.0.0.0', 8000);
-INSERT OR IGNORE INTO health_check_config (id, enabled, interval_seconds, timeout_seconds) VALUES (1, 1, 60, 10);
+INSERT OR IGNORE INTO health_check_config (
+    id, enabled, interval_seconds, timeout_seconds,
+    cb_enabled, cb_consecutive_failures, cb_permanent_error_threshold,
+    cb_cooldown_seconds, cb_half_open_max_requests
+) VALUES (1, 1, 60, 10, 1, 5, 3, 60, 3);
 INSERT OR IGNORE INTO load_balance_config (id, strategy) VALUES (1, 'conversation_hash');
 INSERT OR IGNORE INTO routing_config (id, default_role) VALUES (1, 'default');
 INSERT OR IGNORE INTO ui_config (id, dashboard_refresh_seconds, logs_refresh_seconds) VALUES (1, 30, 15);

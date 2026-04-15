@@ -94,6 +94,11 @@ func TestSystemConfigRepository_GetHealthCheckConfig(t *testing.T) {
 	assert.Equal(t, int64(1), config["enabled"])
 	assert.Equal(t, int64(60), config["interval_seconds"])
 	assert.Equal(t, int64(10), config["timeout_seconds"])
+	assert.Equal(t, int64(1), config["cb_enabled"])
+	assert.Equal(t, int64(5), config["cb_consecutive_failures"])
+	assert.Equal(t, int64(3), config["cb_permanent_error_threshold"])
+	assert.Equal(t, int64(60), config["cb_cooldown_seconds"])
+	assert.Equal(t, int64(3), config["cb_half_open_max_requests"])
 }
 
 func TestSystemConfigRepository_UpdateHealthCheckConfig(t *testing.T) {
@@ -104,10 +109,20 @@ func TestSystemConfigRepository_UpdateHealthCheckConfig(t *testing.T) {
 	enabled := false
 	interval := 120
 	timeout := 30
+	cbEnabled := false
+	cbConsecutiveFailures := 8
+	cbPermanentThreshold := 4
+	cbCooldown := 90
+	cbHalfOpen := 2
 	err := repo.UpdateHealthCheckConfigPatch(ctx, SystemHealthCheckConfigPatch{
-		Enabled:         &enabled,
-		IntervalSeconds: &interval,
-		TimeoutSeconds:  &timeout,
+		Enabled:                   &enabled,
+		IntervalSeconds:           &interval,
+		TimeoutSeconds:            &timeout,
+		CBEnabled:                 &cbEnabled,
+		CBConsecutiveFailures:     &cbConsecutiveFailures,
+		CBPermanentErrorThreshold: &cbPermanentThreshold,
+		CBCooldownSeconds:         &cbCooldown,
+		CBHalfOpenMaxRequests:     &cbHalfOpen,
 	})
 	require.NoError(t, err)
 
@@ -116,6 +131,11 @@ func TestSystemConfigRepository_UpdateHealthCheckConfig(t *testing.T) {
 	assert.Equal(t, int64(0), config["enabled"])
 	assert.Equal(t, int64(120), config["interval_seconds"])
 	assert.Equal(t, int64(30), config["timeout_seconds"])
+	assert.Equal(t, int64(0), config["cb_enabled"])
+	assert.Equal(t, int64(8), config["cb_consecutive_failures"])
+	assert.Equal(t, int64(4), config["cb_permanent_error_threshold"])
+	assert.Equal(t, int64(90), config["cb_cooldown_seconds"])
+	assert.Equal(t, int64(2), config["cb_half_open_max_requests"])
 }
 
 func TestSystemConfigRepository_GetUIConfig(t *testing.T) {

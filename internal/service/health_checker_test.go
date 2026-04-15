@@ -4,6 +4,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -21,11 +22,11 @@ import (
 // defaultCircuitBreakerConfig returns a default circuit breaker config for testing
 func defaultCircuitBreakerConfig() config.CircuitBreakerConfig {
 	return config.CircuitBreakerConfig{
-		Enabled:                  true,
-		ConsecutiveFailures:      5,
-		PermanentErrorThreshold:  3,
-		CooldownSeconds:          60,
-		HalfOpenMaxRequests:      3,
+		Enabled:                 true,
+		ConsecutiveFailures:     5,
+		PermanentErrorThreshold: 3,
+		CooldownSeconds:         60,
+		HalfOpenMaxRequests:     3,
 	}
 }
 
@@ -47,6 +48,123 @@ func TestNewHealthChecker(t *testing.T) {
 	assert.Equal(t, cfg.Enabled, hc.cfg.Enabled)
 	assert.NotNil(t, hc.client)
 	assert.NotNil(t, hc.states)
+}
+
+func TestNewHealthChecker_SanitizesInvalidConfig(t *testing.T) {
+	cfg := config.HealthCheckConfig{
+		Enabled:         true,
+		IntervalSeconds: 0,
+		TimeoutSeconds:  -5,
+		CircuitBreaker: config.CircuitBreakerConfig{
+			Enabled:                 true,
+			ConsecutiveFailures:     0,
+			PermanentErrorThreshold: 0,
+			CooldownSeconds:         0,
+			HalfOpenMaxRequests:     0,
+		},
+	}
+
+	hc := NewHealthChecker(cfg, zap.NewNop())
+	require.NotNil(t, hc)
+	assert.Equal(t, 60, hc.cfg.IntervalSeconds)
+	assert.Equal(t, 10, hc.cfg.TimeoutSeconds)
+	assert.Equal(t, 5, hc.cfg.CircuitBreaker.ConsecutiveFailures)
+	assert.Equal(t, 3, hc.cfg.CircuitBreaker.PermanentErrorThreshold)
+	assert.Equal(t, 60, hc.cfg.CircuitBreaker.CooldownSeconds)
+	assert.Equal(t, 3, hc.cfg.CircuitBreaker.HalfOpenMaxRequests)
+	assert.Equal(t, 10*time.Second, hc.client.Timeout)
+}
+
+func TestNewHealthChecker_DisablesCircuitBreakerWhenHealthCheckDisabled(t *testing.T) {
+	cfg := config.HealthCheckConfig{
+		Enabled:         false,
+		IntervalSeconds: 60,
+		TimeoutSeconds:  10,
+		CircuitBreaker: config.CircuitBreakerConfig{
+			Enabled:                 true,
+			ConsecutiveFailures:     5,
+			PermanentErrorThreshold: 3,
+			CooldownSeconds:         60,
+			HalfOpenMaxRequests:     3,
+		},
+	}
+
+	hc := NewHealthChecker(cfg, zap.NewNop())
+	require.NotNil(t, hc)
+	assert.False(t, hc.cfg.CircuitBreaker.Enabled)
+}
+
+func TestHealthChecker_CheckAll_NoOverlappingRuns(t *testing.T) {
+	var calls int32
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	hc := NewHealthChecker(config.HealthCheckConfig{
+		Enabled:         true,
+		IntervalSeconds: 1,
+		TimeoutSeconds:  2,
+	}, zap.NewNop())
+
+	ep := &models.Endpoint{
+		Provider: &models.Provider{
+			Name:    "provider1",
+			BaseURL: server.URL,
+			APIKey:  "test-key",
+		},
+		Model: &models.Model{Name: "model1"},
+	}
+	endpoints := []*models.Endpoint{ep}
+
+	done := make(chan struct{})
+	go func() {
+		hc.checkAll(context.Background(), endpoints)
+		close(done)
+	}()
+
+	<-started // Ensure first checkAll is in-flight.
+
+	hc.checkAll(context.Background(), endpoints) // Should be skipped while first run is active.
+	close(release)
+	<-done
+
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
+}
+
+func TestHealthChecker_ApplyConfig_Runtime(t *testing.T) {
+	hc := NewHealthChecker(config.HealthCheckConfig{
+		Enabled:         true,
+		IntervalSeconds: 30,
+		TimeoutSeconds:  5,
+		CircuitBreaker: config.CircuitBreakerConfig{
+			Enabled:                 true,
+			ConsecutiveFailures:     5,
+			PermanentErrorThreshold: 3,
+			CooldownSeconds:         60,
+			HalfOpenMaxRequests:     3,
+		},
+	}, zap.NewNop())
+
+	cfg := hc.GetConfig()
+	cfg.Enabled = false
+	cfg.TimeoutSeconds = 2
+	hc.ApplyConfig(cfg)
+
+	got := hc.GetConfig()
+	assert.False(t, got.Enabled)
+	assert.Equal(t, 2, got.TimeoutSeconds)
+	assert.False(t, got.CircuitBreaker.Enabled, "circuit breaker should be disabled when health check is disabled")
+	assert.Equal(t, 2*time.Second, hc.client.Timeout)
 }
 
 func TestHealthChecker_IsHealthy_Unknown(t *testing.T) {
@@ -806,10 +924,10 @@ func TestExtractErrorMessage(t *testing.T) {
 // TestShouldTransitionToOpen tests circuit breaker open transition logic
 func TestShouldTransitionToOpen(t *testing.T) {
 	tests := []struct {
-		name                 string
-		state                *EndpointState
-		expected             bool
-		expectedReason       string
+		name           string
+		state          *EndpointState
+		expected       bool
+		expectedReason string
 	}{
 		{
 			name: "5 consecutive failures",

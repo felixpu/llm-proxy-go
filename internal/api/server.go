@@ -323,7 +323,7 @@ func registerStatusRoutes(r *gin.Engine, deps ServerDeps, authService *service.A
 }
 
 func registerConfigRoutes(r *gin.Engine, deps ServerDeps, authService *service.AuthService, logger *zap.Logger) {
-	configHandler := handler.NewConfigHandler(deps.SystemConfigRepo)
+	configHandler := handler.NewConfigHandler(deps.SystemConfigRepo, deps.HealthChecker)
 	routingHandler := handler.NewRoutingHandler(deps.RoutingModelRepo, deps.RoutingConfigRepo)
 	modelHandler := handler.NewModelHandler(deps.ModelRepo, deps.EndpointStore)
 	modelAliasHandler := handler.NewModelAliasHandler(deps.ModelAliasRepo, deps.ModelRepo)

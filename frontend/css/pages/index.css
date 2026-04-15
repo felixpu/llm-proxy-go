@@ -165,6 +165,58 @@
     border-color: var(--gray-400);
 }
 
+/* 端点状态图标 */
+.endpoint-status-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 1px solid transparent;
+    font-size: 12px;
+    font-weight: var(--font-weight-bold);
+    line-height: 1;
+    cursor: help;
+    user-select: none;
+    transition: transform var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast);
+}
+
+.endpoint-status-icon:hover {
+    transform: translateY(-1px);
+}
+
+.endpoint-status-icon:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+}
+
+.endpoint-status-symbol {
+    display: inline-block;
+    pointer-events: none;
+}
+
+.endpoint-status-icon--healthy {
+    background: var(--color-success-bg);
+    color: var(--color-success);
+    border-color: var(--color-success-border);
+    box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.15);
+}
+
+.endpoint-status-icon--unhealthy {
+    background: var(--color-error-bg);
+    color: var(--color-error);
+    border-color: var(--color-error-border);
+    box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.15);
+}
+
+.endpoint-status-icon--unknown {
+    background: rgba(156, 163, 175, 0.14);
+    color: var(--gray-600);
+    border-color: var(--gray-300);
+    box-shadow: 0 0 0 2px rgba(113, 113, 122, 0.12);
+}
+
 /* 移动端适配 */
 @media (max-width: 768px) {
     .models-grid {
@@ -193,6 +245,12 @@
         width: 5px;
         height: 5px;
         left: 5px;
+    }
+
+    .endpoint-status-icon {
+        width: 22px;
+        height: 22px;
+        font-size: 11px;
     }
 
     /* 移动端隐藏表格,显示卡片 */

@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/user/llm-proxy-go/internal/repository"
+	"github.com/user/llm-proxy-go/internal/service"
 )
 
 // RoutingUpdate represents a routing configuration update.
@@ -20,9 +21,14 @@ type LoadBalanceUpdate struct {
 
 // HealthCheckConfigUpdate represents a health check configuration update.
 type HealthCheckConfigUpdate struct {
-	Enabled         *bool `json:"enabled"`
-	IntervalSeconds *int  `json:"interval_seconds"`
-	TimeoutSeconds  *int  `json:"timeout_seconds"`
+	Enabled                   *bool `json:"enabled"`
+	IntervalSeconds           *int  `json:"interval_seconds"`
+	TimeoutSeconds            *int  `json:"timeout_seconds"`
+	CBEnabled                 *bool `json:"cb_enabled"`
+	CBConsecutiveFailures     *int  `json:"cb_consecutive_failures"`
+	CBPermanentErrorThreshold *int  `json:"cb_permanent_error_threshold"`
+	CBCooldownSeconds         *int  `json:"cb_cooldown_seconds"`
+	CBHalfOpenMaxRequests     *int  `json:"cb_half_open_max_requests"`
 }
 
 // UIConfigUpdate represents a UI configuration update.
@@ -33,7 +39,8 @@ type UIConfigUpdate struct {
 
 // ConfigHandler handles system configuration API endpoints.
 type ConfigHandler struct {
-	repo systemConfigWriterReader
+	repo          systemConfigWriterReader
+	healthChecker *service.HealthChecker
 }
 
 type systemConfigWriterReader interface {
@@ -48,8 +55,15 @@ type systemConfigWriterReader interface {
 }
 
 // NewConfigHandler creates a new ConfigHandler.
-func NewConfigHandler(repo systemConfigWriterReader) *ConfigHandler {
-	return &ConfigHandler{repo: repo}
+func NewConfigHandler(repo systemConfigWriterReader, healthChecker ...*service.HealthChecker) *ConfigHandler {
+	var hc *service.HealthChecker
+	if len(healthChecker) > 0 {
+		hc = healthChecker[0]
+	}
+	return &ConfigHandler{
+		repo:          repo,
+		healthChecker: hc,
+	}
 }
 
 // GetRoutingConfig returns the current routing configuration.
@@ -131,15 +145,96 @@ func (h *ConfigHandler) UpdateHealthCheckConfig(c *gin.Context) {
 		errorResponse(c, http.StatusBadRequest, err.Error())
 		return
 	}
+
+	if req.IntervalSeconds != nil && *req.IntervalSeconds < 5 {
+		errorResponse(c, http.StatusBadRequest, "interval_seconds must be >= 5")
+		return
+	}
+	if req.TimeoutSeconds != nil && *req.TimeoutSeconds <= 0 {
+		errorResponse(c, http.StatusBadRequest, "timeout_seconds must be > 0")
+		return
+	}
+	if req.CBConsecutiveFailures != nil && *req.CBConsecutiveFailures <= 0 {
+		errorResponse(c, http.StatusBadRequest, "cb_consecutive_failures must be > 0")
+		return
+	}
+	if req.CBPermanentErrorThreshold != nil && *req.CBPermanentErrorThreshold <= 0 {
+		errorResponse(c, http.StatusBadRequest, "cb_permanent_error_threshold must be > 0")
+		return
+	}
+	if req.CBCooldownSeconds != nil && *req.CBCooldownSeconds <= 0 {
+		errorResponse(c, http.StatusBadRequest, "cb_cooldown_seconds must be > 0")
+		return
+	}
+	if req.CBHalfOpenMaxRequests != nil && *req.CBHalfOpenMaxRequests <= 0 {
+		errorResponse(c, http.StatusBadRequest, "cb_half_open_max_requests must be > 0")
+		return
+	}
+
+	effectiveInterval := 0
+	effectiveTimeout := 0
+	if h.healthChecker != nil {
+		runtimeCfg := h.healthChecker.GetConfig()
+		effectiveInterval = runtimeCfg.IntervalSeconds
+		effectiveTimeout = runtimeCfg.TimeoutSeconds
+	}
+	if req.IntervalSeconds != nil {
+		effectiveInterval = *req.IntervalSeconds
+	}
+	if req.TimeoutSeconds != nil {
+		effectiveTimeout = *req.TimeoutSeconds
+	}
+	if effectiveInterval > 0 && effectiveTimeout > 0 && effectiveTimeout >= effectiveInterval {
+		errorResponse(c, http.StatusBadRequest, "timeout_seconds must be less than interval_seconds")
+		return
+	}
+
 	if err := h.repo.UpdateHealthCheckConfigPatch(c.Request.Context(), repository.SystemHealthCheckConfigPatch{
-		Enabled:         req.Enabled,
-		IntervalSeconds: req.IntervalSeconds,
-		TimeoutSeconds:  req.TimeoutSeconds,
+		Enabled:                   req.Enabled,
+		IntervalSeconds:           req.IntervalSeconds,
+		TimeoutSeconds:            req.TimeoutSeconds,
+		CBEnabled:                 req.CBEnabled,
+		CBConsecutiveFailures:     req.CBConsecutiveFailures,
+		CBPermanentErrorThreshold: req.CBPermanentErrorThreshold,
+		CBCooldownSeconds:         req.CBCooldownSeconds,
+		CBHalfOpenMaxRequests:     req.CBHalfOpenMaxRequests,
 	}); err != nil {
 		errorResponse(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "Health check config updated"})
+	if h.healthChecker != nil {
+		runtimeCfg := h.healthChecker.GetConfig()
+		if req.Enabled != nil {
+			runtimeCfg.Enabled = *req.Enabled
+		}
+		if req.IntervalSeconds != nil {
+			runtimeCfg.IntervalSeconds = *req.IntervalSeconds
+		}
+		if req.TimeoutSeconds != nil {
+			runtimeCfg.TimeoutSeconds = *req.TimeoutSeconds
+		}
+		if req.CBEnabled != nil {
+			runtimeCfg.CircuitBreaker.Enabled = *req.CBEnabled
+		}
+		if req.CBConsecutiveFailures != nil {
+			runtimeCfg.CircuitBreaker.ConsecutiveFailures = *req.CBConsecutiveFailures
+		}
+		if req.CBPermanentErrorThreshold != nil {
+			runtimeCfg.CircuitBreaker.PermanentErrorThreshold = *req.CBPermanentErrorThreshold
+		}
+		if req.CBCooldownSeconds != nil {
+			runtimeCfg.CircuitBreaker.CooldownSeconds = *req.CBCooldownSeconds
+		}
+		if req.CBHalfOpenMaxRequests != nil {
+			runtimeCfg.CircuitBreaker.HalfOpenMaxRequests = *req.CBHalfOpenMaxRequests
+		}
+		h.healthChecker.ApplyConfig(runtimeCfg)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Health check config updated",
+		"applied": h.healthChecker != nil,
+	})
 }
 
 // GetUIConfig returns the UI configuration.

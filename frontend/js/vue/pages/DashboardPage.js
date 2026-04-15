@@ -123,6 +123,63 @@ window.VuePages = window.VuePages || {};
         return (ms || 0).toFixed(0) + " ms";
       }
 
+      function normalizeEndpointStatus(status) {
+        var normalized = (status || "").toLowerCase();
+        if (
+          normalized === "healthy" ||
+          normalized === "unhealthy" ||
+          normalized === "unknown"
+        ) {
+          return normalized;
+        }
+        return "unknown";
+      }
+
+      function getEndpointStatusMeta(status) {
+        var statusMap = {
+          healthy: {
+            icon: "✓",
+            label: "健康",
+            description: "端点健康，可正常接收请求",
+          },
+          unhealthy: {
+            icon: "✕",
+            label: "异常",
+            description: "端点异常，可能不可用或会被降级",
+          },
+          unknown: {
+            icon: "?",
+            label: "未知",
+            description: "状态未知，等待下一次健康检查",
+          },
+        };
+
+        var normalized = normalizeEndpointStatus(status);
+        var meta = statusMap[normalized];
+        var rawStatus = (status || "").toLowerCase();
+        if (normalized === "unknown" && rawStatus && rawStatus !== "unknown") {
+          return {
+            icon: meta.icon,
+            label: meta.label,
+            description: "状态未映射（原始状态: " + status + "）",
+          };
+        }
+        return meta;
+      }
+
+      function getEndpointStatusIcon(status) {
+        return getEndpointStatusMeta(status).icon;
+      }
+
+      function getEndpointStatusDescription(status) {
+        return getEndpointStatusMeta(status).description;
+      }
+
+      function getEndpointStatusAriaLabel(status) {
+        var meta = getEndpointStatusMeta(status);
+        return "端点状态：" + meta.label + "。" + meta.description;
+      }
+
       // header 操作按钮组件（通过 store 注入 AppHeader，替代 Teleport）
       var DashboardHeaderActions = {
         name: "DashboardHeaderActions",
@@ -175,6 +232,10 @@ window.VuePages = window.VuePages || {};
         checkHealthNow: checkHealthNow,
         formatLastCheck: formatLastCheck,
         formatResponseTime: formatResponseTime,
+        normalizeEndpointStatus: normalizeEndpointStatus,
+        getEndpointStatusIcon: getEndpointStatusIcon,
+        getEndpointStatusDescription: getEndpointStatusDescription,
+        getEndpointStatusAriaLabel: getEndpointStatusAriaLabel,
       };
     },
     template:
@@ -253,7 +314,11 @@ window.VuePages = window.VuePages || {};
                     <tr v-show="!loading && endpoints.length === 0" v-cloak><td colspan="7" class="empty">暂无端点</td></tr>\
                     <tr v-for="endpoint in endpoints" :key="endpoint.name">\
                         <td><strong>{{ endpoint.name }}</strong></td>\
-                        <td><span :class="\'status-badge status-\' + endpoint.status">{{ endpoint.status }}</span></td>\
+                        <td><span :class="[\'endpoint-status-icon\', \'endpoint-status-icon--\' + normalizeEndpointStatus(endpoint.status)]"\
+                                  :title="getEndpointStatusDescription(endpoint.status)"\
+                                  :aria-label="getEndpointStatusAriaLabel(endpoint.status)"\
+                                  tabindex="0"\
+                                  role="img"><span class="endpoint-status-symbol" aria-hidden="true">{{ getEndpointStatusIcon(endpoint.status) }}</span></span></td>\
                         <td>{{ endpoint.current_connections }}</td>\
                         <td>{{ endpoint.total_requests.toLocaleString() }}</td>\
                         <td>{{ endpoint.total_errors }}</td>\
@@ -270,7 +335,11 @@ window.VuePages = window.VuePages || {};
             <div v-for="endpoint in endpoints" :key="endpoint.name" class="endpoint-card">\
                 <div class="endpoint-card-header">\
                     <div class="endpoint-card-title">{{ endpoint.name }}</div>\
-                    <span :class="\'status-badge status-\' + endpoint.status">{{ endpoint.status }}</span>\
+                    <span :class="[\'endpoint-status-icon\', \'endpoint-status-icon--\' + normalizeEndpointStatus(endpoint.status)]"\
+                          :title="getEndpointStatusDescription(endpoint.status)"\
+                          :aria-label="getEndpointStatusAriaLabel(endpoint.status)"\
+                          tabindex="0"\
+                          role="img"><span class="endpoint-status-symbol" aria-hidden="true">{{ getEndpointStatusIcon(endpoint.status) }}</span></span>\
                 </div>\
                 <div class="endpoint-card-body">\
                     <div class="endpoint-stat"><span class="endpoint-stat-label">总请求</span><span class="endpoint-stat-value">{{ endpoint.total_requests.toLocaleString() }}</span></div>\
