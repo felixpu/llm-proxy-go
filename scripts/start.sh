@@ -3,7 +3,7 @@
 # LLM Proxy Go 启动脚本
 # 用法: ./start.sh [command] [options]
 #   command: start(默认), stop, restart, status, build
-#   options: -f 前台运行, -d 后台运行(默认), --build 强制重新编译
+#   options: -f 前台运行, -d 后台运行(默认), --build 强制重新编译, --run-mode 指定运行模式
 
 set -e
 
@@ -21,6 +21,7 @@ PID_FILE="/tmp/llm-proxy-go.pid"
 # 后台模式下的 stdout/stderr 重定向文件（避免与应用 JSON 文件日志混写）
 CONSOLE_LOG_FILE="logs/llm-proxy-console.log"
 BINARY_NAME="llm-proxy"
+RUN_MODE_OVERRIDE=""
 
 # 颜色输出
 RED='\033[0;31m'
@@ -54,7 +55,7 @@ check_go_env() {
 
 # 检测运行模式
 # 返回: binary, source, none
-detect_mode() {
+detect_mode_auto() {
     if [ -f "$SCRIPT_DIR/$BINARY_NAME" ]; then
         echo "binary"
     elif [ -f "$SCRIPT_DIR/cmd/llm-proxy/main.go" ]; then
@@ -62,6 +63,38 @@ detect_mode() {
     else
         echo "none"
     fi
+}
+
+# 检测运行模式（支持 --run-mode 覆盖）
+# 返回: binary, source, none
+detect_mode() {
+    local auto_mode
+    auto_mode=$(detect_mode_auto)
+
+    if [ -z "$RUN_MODE_OVERRIDE" ]; then
+        echo "$auto_mode"
+        return
+    fi
+
+    case "$RUN_MODE_OVERRIDE" in
+        source)
+            if [ -f "$SCRIPT_DIR/cmd/llm-proxy/main.go" ]; then
+                echo "source"
+            else
+                echo "none"
+            fi
+            ;;
+        binary)
+            if [ -f "$SCRIPT_DIR/$BINARY_NAME" ] || [ -f "$SCRIPT_DIR/cmd/llm-proxy/main.go" ]; then
+                echo "binary"
+            else
+                echo "none"
+            fi
+            ;;
+        *)
+            echo "$auto_mode"
+            ;;
+    esac
 }
 
 # 编译项目
@@ -127,18 +160,11 @@ EOF
 
 # 获取启动命令
 get_start_command() {
-    local mode=$(detect_mode)
-    case $mode in
-        binary)
-            echo "$SCRIPT_DIR/$BINARY_NAME"
-            ;;
-        source)
-            echo "echo '请先编译项目: ./start.sh build' >&2"
-            ;;
-        *)
-            echo ""
-            ;;
-    esac
+    if [ -f "$SCRIPT_DIR/$BINARY_NAME" ]; then
+        echo "$SCRIPT_DIR/$BINARY_NAME"
+    else
+        echo ""
+    fi
 }
 
 # 获取运行中的 PID
@@ -306,6 +332,7 @@ show_help() {
     echo "  -f, --foreground    前台运行（可查看实时日志）"
     echo "  -d, --daemon        后台运行（默认）"
     echo "  --build             启动前强制重新编译"
+    echo "  --run-mode MODE     指定运行模式: binary 或 source（默认自动检测）"
     echo "  --init-only         仅初始化环境，不启动服务"
     echo "  -h, --help         显示帮助"
     echo ""
@@ -313,6 +340,8 @@ show_help() {
     echo "  $0                  # 后台启动（自动初始化）"
     echo "  $0 -f               # 前台启动"
     echo "  $0 --build          # 重新编译并启动"
+    echo "  $0 --run-mode source -f   # 强制源码模式启动（会自动编译）"
+    echo "  $0 --run-mode binary      # 强制二进制模式启动"
     echo "  $0 build            # 仅编译"
     echo "  $0 stop             # 停止服务"
     echo "  $0 restart          # 重启服务"
@@ -365,6 +394,18 @@ main() {
                 force_build=true
                 shift
                 ;;
+            --run-mode)
+                if [ -z "${2:-}" ]; then
+                    echo -e "${RED}错误: --run-mode 需要参数 (binary|source)${NC}"
+                    exit 1
+                fi
+                RUN_MODE_OVERRIDE="$2"
+                shift 2
+                ;;
+            --run-mode=*)
+                RUN_MODE_OVERRIDE="${1#*=}"
+                shift
+                ;;
             --init-only)
                 init_only=true
                 shift
@@ -381,11 +422,30 @@ main() {
         esac
     done
 
+    # 验证运行模式参数
+    if [ -n "$RUN_MODE_OVERRIDE" ]; then
+        case "$RUN_MODE_OVERRIDE" in
+            binary|source)
+                ;;
+            *)
+                echo -e "${RED}错误: 无效的运行模式 '$RUN_MODE_OVERRIDE'，仅支持 binary|source${NC}"
+                exit 1
+                ;;
+        esac
+    fi
+
     # 检查是否需要初始化
     local current_mode=$(detect_mode)
     if [ "$current_mode" = "none" ]; then
-        echo -e "${RED}错误: 找不到项目文件${NC}"
-        echo "请确保在 Go 项目目录中运行"
+        if [ "$RUN_MODE_OVERRIDE" = "source" ]; then
+            echo -e "${RED}错误: 指定为 source 模式，但未找到源码入口 cmd/llm-proxy/main.go${NC}"
+        elif [ "$RUN_MODE_OVERRIDE" = "binary" ]; then
+            echo -e "${RED}错误: 指定为 binary 模式，但未找到可用二进制或源码${NC}"
+            echo "可先执行: $0 build"
+        else
+            echo -e "${RED}错误: 找不到项目文件${NC}"
+            echo "请确保在 Go 项目目录中运行"
+        fi
         exit 1
     fi
 
@@ -400,20 +460,28 @@ main() {
         exit 0
     fi
 
-    # 强制重新编译
-    if [ "$force_build" = true ]; then
-        build
-    elif [ "$current_mode" = "source" ]; then
-        # 源码模式下始终自动编译（确保代码改动生效）
-        echo -e "${YELLOW}检测到源码模式，自动编译项目...${NC}"
-        build
-    elif [ "$current_mode" = "binary" ] && [ "$command" = "start" ]; then
-        # 二进制模式下检查是否需要重新编译
-        if [ -f "cmd/llm-proxy/main.go" ]; then
-            # 检查源码是否比二进制新
-            if [ "cmd/llm-proxy/main.go" -nt "$BINARY_NAME" ]; then
-                echo -e "${YELLOW}检测到源码更新，自动重新编译...${NC}"
+    # 启动前编译策略（仅在 start/restart 前执行）
+    if [ "$command" = "start" ] || [ "$command" = "restart" ]; then
+        if [ "$force_build" = true ]; then
+            build
+        elif [ "$current_mode" = "source" ]; then
+            # 源码模式下始终自动编译（确保代码改动生效）
+            echo -e "${YELLOW}检测到源码模式，自动编译项目...${NC}"
+            build
+        elif [ "$current_mode" = "binary" ]; then
+            # binary 模式但二进制不存在时，若有源码则自动编译
+            if [ ! -f "$BINARY_NAME" ] && [ -f "cmd/llm-proxy/main.go" ]; then
+                echo -e "${YELLOW}未找到二进制，自动编译项目...${NC}"
                 build
+            fi
+
+            # 二进制模式下检查是否需要重新编译
+            if [ -f "cmd/llm-proxy/main.go" ] && [ -f "$BINARY_NAME" ]; then
+                # 检查源码是否比二进制新
+                if [ "cmd/llm-proxy/main.go" -nt "$BINARY_NAME" ]; then
+                    echo -e "${YELLOW}检测到源码更新，自动重新编译...${NC}"
+                    build
+                fi
             fi
         fi
     fi
