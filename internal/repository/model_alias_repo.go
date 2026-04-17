@@ -14,6 +14,8 @@ import (
 type ModelAliasPatch struct {
 	AliasName     *string
 	TargetModelID *int64
+	ProviderID    *int64
+	ProviderIDSet bool
 	Enabled       *bool
 }
 
@@ -34,30 +36,36 @@ func NewModelAliasRepository(db *sql.DB, readDB ...*sql.DB) *SQLModelAliasReposi
 
 func (r *SQLModelAliasRepository) FindByID(ctx context.Context, id int64) (*models.ModelAlias, error) {
 	row := r.readDB.QueryRowContext(ctx,
-		`SELECT id, alias_name, target_model_id, enabled, created_at, updated_at
+		`SELECT id, alias_name, target_model_id, provider_id, enabled, created_at, updated_at
 		 FROM model_aliases WHERE id = ?`, id)
 	return scanModelAlias(row)
 }
 
-func (r *SQLModelAliasRepository) FindByAliasName(ctx context.Context, aliasName string) (*models.ModelAlias, error) {
-	row := r.readDB.QueryRowContext(ctx,
-		`SELECT id, alias_name, target_model_id, enabled, created_at, updated_at
+func (r *SQLModelAliasRepository) FindByAliasName(ctx context.Context, aliasName string) ([]*models.ModelAlias, error) {
+	rows, err := r.readDB.QueryContext(ctx,
+		`SELECT id, alias_name, target_model_id, provider_id, enabled, created_at, updated_at
 		 FROM model_aliases
-		 WHERE alias_name = ? COLLATE NOCASE AND enabled = 1`,
+		 WHERE alias_name = ? COLLATE NOCASE AND enabled = 1
+		 ORDER BY id ASC`,
 		aliasName)
-	alias, err := scanModelAlias(row)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
 	if err != nil {
 		return nil, err
 	}
-	return alias, nil
+	defer rows.Close()
+
+	aliases, err := scanModelAliases(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(aliases) == 0 {
+		return nil, nil
+	}
+	return aliases, nil
 }
 
 func (r *SQLModelAliasRepository) FindAll(ctx context.Context) ([]*models.ModelAlias, error) {
 	rows, err := r.readDB.QueryContext(ctx,
-		`SELECT id, alias_name, target_model_id, enabled, created_at, updated_at
+		`SELECT id, alias_name, target_model_id, provider_id, enabled, created_at, updated_at
 		 FROM model_aliases
 		 ORDER BY alias_name COLLATE NOCASE ASC, id ASC`)
 	if err != nil {
@@ -70,9 +78,9 @@ func (r *SQLModelAliasRepository) FindAll(ctx context.Context) ([]*models.ModelA
 func (r *SQLModelAliasRepository) Insert(ctx context.Context, alias *models.ModelAlias) (int64, error) {
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 	result, err := r.db.ExecContext(ctx,
-		`INSERT INTO model_aliases (alias_name, target_model_id, enabled, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?)`,
-		alias.AliasName, alias.TargetModelID, boolToInt(alias.Enabled), now, now)
+		`INSERT INTO model_aliases (alias_name, target_model_id, provider_id, enabled, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		alias.AliasName, alias.TargetModelID, nullableInt64(alias.ProviderID), boolToInt(alias.Enabled), now, now)
 	if err != nil {
 		return 0, fmt.Errorf("failed to insert model alias: %w", err)
 	}
@@ -114,6 +122,9 @@ func (r *SQLModelAliasRepository) UpdatePatch(ctx context.Context, id int64, pat
 	if patch.TargetModelID != nil {
 		updates["target_model_id"] = *patch.TargetModelID
 	}
+	if patch.ProviderIDSet {
+		updates["provider_id"] = nullableInt64(patch.ProviderID)
+	}
 	if patch.Enabled != nil {
 		updates["enabled"] = *patch.Enabled
 	}
@@ -130,11 +141,12 @@ func (r *SQLModelAliasRepository) Delete(ctx context.Context, id int64) error {
 
 func scanModelAlias(s scanner) (*models.ModelAlias, error) {
 	var alias models.ModelAlias
+	var providerID sql.NullInt64
 	var enabled int
 	var createdAt, updatedAt sql.NullTime
 
 	err := s.Scan(
-		&alias.ID, &alias.AliasName, &alias.TargetModelID,
+		&alias.ID, &alias.AliasName, &alias.TargetModelID, &providerID,
 		&enabled, &createdAt, &updatedAt,
 	)
 	if err != nil {
@@ -142,6 +154,10 @@ func scanModelAlias(s scanner) (*models.ModelAlias, error) {
 	}
 
 	alias.Enabled = enabled == 1
+	if providerID.Valid {
+		v := providerID.Int64
+		alias.ProviderID = &v
+	}
 	if createdAt.Valid {
 		alias.CreatedAt = createdAt.Time
 	} else {
@@ -153,6 +169,13 @@ func scanModelAlias(s scanner) (*models.ModelAlias, error) {
 		alias.UpdatedAt = alias.CreatedAt
 	}
 	return &alias, nil
+}
+
+func nullableInt64(v *int64) interface{} {
+	if v == nil {
+		return nil
+	}
+	return *v
 }
 
 func scanModelAliases(rows *sql.Rows) ([]*models.ModelAlias, error) {

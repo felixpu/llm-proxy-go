@@ -69,7 +69,7 @@ type EndpointSelector struct {
 }
 
 type modelAliasResolver interface {
-	FindByAliasName(ctx context.Context, aliasName string) (*models.ModelAlias, error)
+	FindByAliasName(ctx context.Context, aliasName string) ([]*models.ModelAlias, error)
 }
 
 // NewEndpointSelector creates an EndpointSelector.
@@ -135,11 +135,7 @@ func (s *EndpointSelector) SelectEndpoint(
 
 	// 3. User specified a concrete model
 	if req.Model != "" {
-		model, resolveErr := s.resolveRequestedModel(ctx, req.Model, endpoints)
-		if resolveErr != nil {
-			return nil, resolveErr
-		}
-		if model != nil {
+		if model := s.findModelByName(req.Model, endpoints); model != nil {
 			if model.Enabled && s.modelSelector.HasHealthyEndpoints(model, endpoints) {
 				ep := s.selectEndpointForModel(model, endpoints, req)
 				if ep != nil {
@@ -169,6 +165,21 @@ func (s *EndpointSelector) SelectEndpoint(
 				TaskType:      fallbackModel.Role,
 				RoutingMethod: models.RoutingMethodDirect,
 				FallbackInfo:  fallbackInfo,
+			}
+			s.attachShadowRouting(ctx, cfg, req, endpoints, crossRoleFallback, result)
+			return result, nil
+		}
+
+		aliasEndpoint, resolveErr := s.resolveAliasEndpoint(ctx, req.Model, endpoints, req)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if aliasEndpoint != nil {
+			result := &EndpointSelectionResult{
+				Endpoint:      aliasEndpoint,
+				Model:         aliasEndpoint.Model,
+				TaskType:      aliasEndpoint.Model.Role,
+				RoutingMethod: models.RoutingMethodDirect,
 			}
 			s.attachShadowRouting(ctx, cfg, req, endpoints, crossRoleFallback, result)
 			return result, nil
@@ -341,35 +352,81 @@ func (s *EndpointSelector) selectEndpointForModel(
 	return s.loadBalancer.Select(candidates, req)
 }
 
-func (s *EndpointSelector) resolveRequestedModel(
+func (s *EndpointSelector) resolveAliasEndpoint(
 	ctx context.Context,
 	requestedName string,
 	endpoints []*models.Endpoint,
-) (*models.Model, error) {
-	if model := s.findModelByName(requestedName, endpoints); model != nil {
-		return model, nil
-	}
+	req *models.AnthropicRequest,
+) (*models.Endpoint, error) {
 	if s.modelAliasRepo == nil {
 		return nil, nil
 	}
 
-	alias, err := s.modelAliasRepo.FindByAliasName(ctx, requestedName)
+	aliases, err := s.modelAliasRepo.FindByAliasName(ctx, requestedName)
 	if err != nil {
 		return nil, fmt.Errorf("resolve model alias for %q: %w", requestedName, err)
 	}
-	if alias == nil {
+	if len(aliases) == 0 {
 		return nil, nil
 	}
 
-	target := s.findModelByID(alias.TargetModelID, endpoints)
-	if target == nil {
-		return nil, fmt.Errorf("model alias %q points to unavailable target model", requestedName)
+	candidateEndpoints := make([]*models.Endpoint, 0, len(aliases))
+	endpointSeen := make(map[string]bool)
+	for _, alias := range aliases {
+		for _, ep := range endpoints {
+			if ep.Model == nil || ep.Provider == nil {
+				continue
+			}
+			if ep.Model.ID != alias.TargetModelID {
+				continue
+			}
+			if alias.ProviderID != nil && ep.Provider.ID != *alias.ProviderID {
+				continue
+			}
+			if !ep.Model.Enabled || !s.healthChecker.IsHealthy(EndpointName(ep)) {
+				continue
+			}
+			key := fmt.Sprintf("%d/%d", ep.Provider.ID, ep.Model.ID)
+			if endpointSeen[key] {
+				continue
+			}
+			endpointSeen[key] = true
+			candidateEndpoints = append(candidateEndpoints, ep)
+		}
+	}
+	if len(candidateEndpoints) == 0 {
+		return nil, fmt.Errorf("model alias %q has no healthy mapped endpoints", requestedName)
+	}
+
+	seenModel := make(map[int64]bool, len(candidateEndpoints))
+	candidateModels := make([]*models.Model, 0, len(candidateEndpoints))
+	for _, ep := range candidateEndpoints {
+		if !seenModel[ep.Model.ID] {
+			seenModel[ep.Model.ID] = true
+			candidateModels = append(candidateModels, ep.Model)
+		}
+	}
+	selectedModel := s.modelSelector.SelectModelByWeight(candidateModels)
+	if selectedModel == nil {
+		return nil, fmt.Errorf("model alias %q has no selectable target model", requestedName)
+	}
+
+	modelEndpoints := make([]*models.Endpoint, 0, len(candidateEndpoints))
+	for _, ep := range candidateEndpoints {
+		if ep.Model.ID == selectedModel.ID {
+			modelEndpoints = append(modelEndpoints, ep)
+		}
+	}
+	selectedEndpoint := s.loadBalancer.Select(modelEndpoints, req)
+	if selectedEndpoint == nil {
+		return nil, fmt.Errorf("model alias %q selected target model %q but no endpoint available", requestedName, selectedModel.Name)
 	}
 
 	s.logger.Debug("resolved model alias",
 		zap.String("requested_model", requestedName),
-		zap.String("resolved_model", target.Name))
-	return target, nil
+		zap.String("resolved_model", selectedModel.Name),
+		zap.String("resolved_provider", selectedEndpoint.Provider.Name))
+	return selectedEndpoint, nil
 }
 
 // findModelByName finds a model by exact name (case-insensitive) from the endpoint list.

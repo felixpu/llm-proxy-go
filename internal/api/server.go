@@ -58,7 +58,7 @@ type providerRepository interface {
 
 type modelAliasRepository interface {
 	FindByID(ctx context.Context, id int64) (*models.ModelAlias, error)
-	FindByAliasName(ctx context.Context, aliasName string) (*models.ModelAlias, error)
+	FindByAliasName(ctx context.Context, aliasName string) ([]*models.ModelAlias, error)
 	FindAll(ctx context.Context) ([]*models.ModelAlias, error)
 	Insert(ctx context.Context, alias *models.ModelAlias) (int64, error)
 	UpdatePatch(ctx context.Context, id int64, patch repository.ModelAliasPatch) error
@@ -326,7 +326,7 @@ func registerConfigRoutes(r *gin.Engine, deps ServerDeps, authService *service.A
 	configHandler := handler.NewConfigHandler(deps.SystemConfigRepo, deps.HealthChecker)
 	routingHandler := handler.NewRoutingHandler(deps.RoutingModelRepo, deps.RoutingConfigRepo)
 	modelHandler := handler.NewModelHandler(deps.ModelRepo, deps.EndpointStore)
-	modelAliasHandler := handler.NewModelAliasHandler(deps.ModelAliasRepo, deps.ModelRepo)
+	modelAliasHandler := handler.NewModelAliasHandler(deps.ModelAliasRepo, deps.ModelRepo, deps.ProviderRepo)
 	providerHandler := handler.NewProviderHandler(deps.ProviderRepo, deps.ModelRepo, service.NewModelDetector(logger), deps.EndpointStore)
 	configGroup := r.Group("/api/config")
 	configGroup.Use(middleware.RequireAuth(authService))

@@ -19,10 +19,10 @@ import (
 )
 
 type stubModelAliasRepo struct {
-	aliases map[string]*models.ModelAlias
+	aliases map[string][]*models.ModelAlias
 }
 
-func (r *stubModelAliasRepo) FindByAliasName(_ context.Context, aliasName string) (*models.ModelAlias, error) {
+func (r *stubModelAliasRepo) FindByAliasName(_ context.Context, aliasName string) ([]*models.ModelAlias, error) {
 	for key, alias := range r.aliases {
 		if strings.EqualFold(key, aliasName) {
 			return alias, nil
@@ -213,12 +213,14 @@ func TestSelectEndpoint_ResolvesAliasToTargetModel(t *testing.T) {
 	ms := NewModelSelector(hc, logger)
 
 	aliasRepo := &stubModelAliasRepo{
-		aliases: map[string]*models.ModelAlias{
+		aliases: map[string][]*models.ModelAlias{
 			"claude-sonnet-4-6": {
-				ID:            1,
-				AliasName:     "claude-sonnet-4-6",
-				TargetModelID: 2,
-				Enabled:       true,
+				{
+					ID:            1,
+					AliasName:     "claude-sonnet-4-6",
+					TargetModelID: 2,
+					Enabled:       true,
+				},
 			},
 		},
 	}
@@ -243,6 +245,151 @@ func TestSelectEndpoint_ResolvesAliasToTargetModel(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.Equal(t, "claude-sonnet-4-5-20250929", result.Model.Name)
+}
+
+func TestSelectEndpoint_ResolvesAliasToBestHealthyTargetAmongMultiple(t *testing.T) {
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ms := NewModelSelector(hc, logger)
+
+	aliasRepo := &stubModelAliasRepo{
+		aliases: map[string][]*models.ModelAlias{
+			"claude-sonnet-4-6": {
+				{
+					ID:            1,
+					AliasName:     "claude-sonnet-4-6",
+					TargetModelID: 2,
+					Enabled:       true,
+				},
+				{
+					ID:            2,
+					AliasName:     "claude-sonnet-4-6",
+					TargetModelID: 3,
+					Enabled:       true,
+				},
+			},
+		},
+	}
+	es := NewEndpointSelector(ms, hc, lb, nil, nil, aliasRepo, logger)
+
+	endpoints := []*models.Endpoint{
+		{
+			Model:    &models.Model{ID: 2, Name: "zai-org/GLM-4.6", Role: models.ModelRoleDefault, Enabled: true, Weight: 100},
+			Provider: &models.Provider{ID: 1, Name: "provider-1", BaseURL: "http://test", APIKey: "key"},
+		},
+		{
+			Model:    &models.Model{ID: 3, Name: "zai-org/GLM-4.7", Role: models.ModelRoleDefault, Enabled: true, Weight: 120},
+			Provider: &models.Provider{ID: 1, Name: "provider-1", BaseURL: "http://test", APIKey: "key"},
+		},
+	}
+	hc.UpdateState("provider-1/zai-org/GLM-4.6", models.EndpointHealthy, "")
+	hc.UpdateState("provider-1/zai-org/GLM-4.7", models.EndpointHealthy, "")
+
+	req := &models.AnthropicRequest{
+		Model: "claude-sonnet-4-6",
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "test"}},
+		},
+	}
+
+	result, err := es.SelectEndpoint(t.Context(), req, endpoints)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, "zai-org/GLM-4.7", result.Model.Name)
+}
+
+func TestSelectEndpoint_ResolvesAliasWithProviderScope(t *testing.T) {
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ms := NewModelSelector(hc, logger)
+
+	providerID := int64(2)
+	aliasRepo := &stubModelAliasRepo{
+		aliases: map[string][]*models.ModelAlias{
+			"claude-sonnet-4-6": {
+				{
+					ID:            1,
+					AliasName:     "claude-sonnet-4-6",
+					TargetModelID: 2,
+					ProviderID:    &providerID,
+					Enabled:       true,
+				},
+			},
+		},
+	}
+	es := NewEndpointSelector(ms, hc, lb, nil, nil, aliasRepo, logger)
+
+	targetModel := &models.Model{ID: 2, Name: "zai-org/GLM-4.6", Role: models.ModelRoleDefault, Enabled: true, Weight: 100}
+	endpoints := []*models.Endpoint{
+		{
+			Model:    targetModel,
+			Provider: &models.Provider{ID: 1, Name: "provider-1", BaseURL: "http://test", APIKey: "key"},
+		},
+		{
+			Model:    targetModel,
+			Provider: &models.Provider{ID: 2, Name: "provider-2", BaseURL: "http://test", APIKey: "key"},
+		},
+	}
+	hc.UpdateState("provider-1/zai-org/GLM-4.6", models.EndpointHealthy, "")
+	hc.UpdateState("provider-2/zai-org/GLM-4.6", models.EndpointHealthy, "")
+
+	req := &models.AnthropicRequest{
+		Model: "claude-sonnet-4-6",
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "test"}},
+		},
+	}
+
+	result, err := es.SelectEndpoint(t.Context(), req, endpoints)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, int64(2), result.Endpoint.Provider.ID)
+	assert.Equal(t, "provider-2", result.Endpoint.Provider.Name)
+}
+
+func TestSelectEndpoint_AliasProviderScopeNoHealthyEndpoint_ReturnsError(t *testing.T) {
+	logger := zap.NewNop()
+	hc := NewHealthChecker(config.HealthCheckConfig{}, logger)
+	lb := NewLoadBalancerWithStrategy(models.StrategyRoundRobin)
+	ms := NewModelSelector(hc, logger)
+
+	providerID := int64(2)
+	aliasRepo := &stubModelAliasRepo{
+		aliases: map[string][]*models.ModelAlias{
+			"claude-sonnet-4-6": {
+				{
+					ID:            1,
+					AliasName:     "claude-sonnet-4-6",
+					TargetModelID: 2,
+					ProviderID:    &providerID,
+					Enabled:       true,
+				},
+			},
+		},
+	}
+	es := NewEndpointSelector(ms, hc, lb, nil, nil, aliasRepo, logger)
+
+	endpoints := []*models.Endpoint{
+		{
+			Model:    &models.Model{ID: 2, Name: "zai-org/GLM-4.6", Role: models.ModelRoleDefault, Enabled: true, Weight: 100},
+			Provider: &models.Provider{ID: 1, Name: "provider-1", BaseURL: "http://test", APIKey: "key"},
+		},
+	}
+	hc.UpdateState("provider-1/zai-org/GLM-4.6", models.EndpointHealthy, "")
+
+	req := &models.AnthropicRequest{
+		Model: "claude-sonnet-4-6",
+		Messages: []models.Message{
+			{Role: "user", Content: models.MessageContent{Text: "test"}},
+		},
+	}
+
+	result, err := es.SelectEndpoint(t.Context(), req, endpoints)
+	require.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "no healthy mapped endpoints")
 }
 
 func TestSelectEndpoint_DirectRequestCapturesShadowRoutingAsync(t *testing.T) {

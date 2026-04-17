@@ -126,12 +126,14 @@ CREATE TABLE IF NOT EXISTS models (
 -- Model aliases table
 CREATE TABLE IF NOT EXISTS model_aliases (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    alias_name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    alias_name TEXT NOT NULL COLLATE NOCASE,
     target_model_id INTEGER NOT NULL,
+    provider_id INTEGER,
     enabled INTEGER DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (target_model_id) REFERENCES models(id) ON DELETE CASCADE
+    FOREIGN KEY (target_model_id) REFERENCES models(id) ON DELETE CASCADE,
+    FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE CASCADE
 );
 
 -- Providers table
@@ -368,6 +370,13 @@ CREATE TABLE IF NOT EXISTS routing_rules (
 CREATE INDEX IF NOT EXISTS idx_provider_models_provider_id ON provider_models(provider_id);
 CREATE INDEX IF NOT EXISTS idx_provider_models_model_id ON provider_models(model_id);
 CREATE INDEX IF NOT EXISTS idx_model_aliases_target_model_id ON model_aliases(target_model_id);
+CREATE INDEX IF NOT EXISTS idx_model_aliases_alias_name_enabled ON model_aliases(alias_name COLLATE NOCASE, enabled);
+CREATE INDEX IF NOT EXISTS idx_model_aliases_provider_id ON model_aliases(provider_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_model_aliases_alias_target_provider ON model_aliases(
+    alias_name COLLATE NOCASE,
+    target_model_id,
+    IFNULL(provider_id, 0)
+);
 CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash);

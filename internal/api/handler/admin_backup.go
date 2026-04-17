@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,10 +58,13 @@ type backupModel struct {
 type backupModelAlias struct {
 	AliasName       string `json:"alias_name"`
 	TargetModelName string `json:"target_model_name"`
+	ProviderRef     string `json:"provider_ref,omitempty"`
+	ProviderName    string `json:"provider_name,omitempty"`
 	Enabled         bool   `json:"enabled"`
 }
 
 type backupProvider struct {
+	ProviderRef   string   `json:"provider_ref,omitempty"`
 	Name          string   `json:"name"`
 	BaseURL       string   `json:"base_url"`
 	APIKey        string   `json:"api_key"`
@@ -203,9 +207,10 @@ func (h *BackupHandler) exportModels(ctx context.Context) ([]backupModel, error)
 
 func (h *BackupHandler) exportModelAliases(ctx context.Context) ([]backupModelAlias, error) {
 	rows, err := h.db.QueryContext(ctx, `
-		SELECT ma.alias_name, m.name, ma.enabled
+		SELECT ma.alias_name, m.name, ma.provider_id, p.name, ma.enabled
 		FROM model_aliases ma
 		JOIN models m ON m.id = ma.target_model_id
+		LEFT JOIN providers p ON p.id = ma.provider_id
 		ORDER BY ma.alias_name COLLATE NOCASE ASC, ma.id ASC`)
 	if err != nil {
 		return nil, err
@@ -215,9 +220,17 @@ func (h *BackupHandler) exportModelAliases(ctx context.Context) ([]backupModelAl
 	var result []backupModelAlias
 	for rows.Next() {
 		var alias backupModelAlias
+		var providerID sql.NullInt64
+		var providerName sql.NullString
 		var enabled int
-		if err := rows.Scan(&alias.AliasName, &alias.TargetModelName, &enabled); err != nil {
+		if err := rows.Scan(&alias.AliasName, &alias.TargetModelName, &providerID, &providerName, &enabled); err != nil {
 			return nil, err
+		}
+		if providerID.Valid {
+			alias.ProviderRef = backupProviderRef(providerID.Int64)
+		}
+		if providerName.Valid {
+			alias.ProviderName = providerName.String
 		}
 		alias.Enabled = enabled == 1
 		result = append(result, alias)
@@ -244,6 +257,7 @@ func (h *BackupHandler) exportProviders(ctx context.Context) ([]backupProvider, 
 		if err := rows.Scan(&id, &p.Name, &p.BaseURL, &p.APIKey, &p.Weight, &p.MaxConcurrent, &en, &p.Description); err != nil {
 			return nil, err
 		}
+		p.ProviderRef = backupProviderRef(id)
 		p.Enabled = en == 1
 		p.ModelNames = providerModels[id]
 		result = append(result, p)
@@ -465,16 +479,18 @@ func (h *BackupHandler) Import(c *gin.Context) {
 		modelIDs[m.Name] = id
 	}
 
-	// 3. Import model aliases (resolve target_model_name -> model_id)
-	if err := h.importModelAliases(ctx, tx, data.ModelAliases, modelIDs); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	// 3. Import providers → build ref/name lookup maps, then insert provider_models
+	providerIDsByRef := make(map[string]int64)
+	providerIDsByName := make(map[string]int64)
+	duplicateProviderNames := make(map[string]struct{})
+	if err := h.importProviders(ctx, tx, data.Providers, modelIDs, providerIDsByRef, providerIDsByName, duplicateProviderNames); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	// 4. Import providers → build name→ID map, then insert provider_models
-	providerIDs := make(map[string]int64)
-	if err := h.importProviders(ctx, tx, data.Providers, modelIDs, providerIDs); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	// 4. Import model aliases (resolve target_model_name -> model_id and provider_ref/provider_name -> provider_id)
+	if err := h.importModelAliases(ctx, tx, data.ModelAliases, modelIDs, providerIDsByRef, providerIDsByName, duplicateProviderNames); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -513,9 +529,9 @@ func (h *BackupHandler) Import(c *gin.Context) {
 
 	// 7. Import routing models (resolve provider_name → provider_id)
 	for _, rm := range data.RoutingModels {
-		pid, ok := providerIDs[rm.ProviderName]
-		if !ok {
-			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("routing_model %s references unknown provider %s", rm.ModelName, rm.ProviderName)})
+		pid, err := resolveProviderIDByName(rm.ProviderName, providerIDsByName, duplicateProviderNames)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("routing_model %s: %v", rm.ModelName, err)})
 			return
 		}
 		if _, err := tx.ExecContext(ctx,
@@ -583,7 +599,15 @@ func (h *BackupHandler) Import(c *gin.Context) {
 }
 
 // importProviders inserts providers and their provider_models associations.
-func (h *BackupHandler) importProviders(ctx context.Context, tx *sql.Tx, providers []backupProvider, modelIDs map[string]int64, providerIDs map[string]int64) error {
+func (h *BackupHandler) importProviders(
+	ctx context.Context,
+	tx *sql.Tx,
+	providers []backupProvider,
+	modelIDs map[string]int64,
+	providerIDsByRef map[string]int64,
+	providerIDsByName map[string]int64,
+	duplicateProviderNames map[string]struct{},
+) error {
 	for _, p := range providers {
 		res, err := tx.ExecContext(ctx,
 			`INSERT INTO providers (name, base_url, api_key, weight, max_concurrent, enabled, description) VALUES (?,?,?,?,?,?,?)`,
@@ -592,7 +616,21 @@ func (h *BackupHandler) importProviders(ctx context.Context, tx *sql.Tx, provide
 			return fmt.Errorf("insert provider %s: %v", p.Name, err)
 		}
 		pid, _ := res.LastInsertId()
-		providerIDs[p.Name] = pid
+		ref := strings.TrimSpace(p.ProviderRef)
+		if ref != "" {
+			if _, exists := providerIDsByRef[ref]; exists {
+				return fmt.Errorf("duplicate provider_ref %s in backup", ref)
+			}
+			providerIDsByRef[ref] = pid
+		}
+		if _, duplicated := duplicateProviderNames[p.Name]; duplicated {
+			// keep marked as duplicate
+		} else if _, exists := providerIDsByName[p.Name]; exists {
+			delete(providerIDsByName, p.Name)
+			duplicateProviderNames[p.Name] = struct{}{}
+		} else {
+			providerIDsByName[p.Name] = pid
+		}
 
 		// Insert provider_models associations
 		for _, mn := range p.ModelNames {
@@ -609,19 +647,66 @@ func (h *BackupHandler) importProviders(ctx context.Context, tx *sql.Tx, provide
 	return nil
 }
 
-func (h *BackupHandler) importModelAliases(ctx context.Context, tx *sql.Tx, aliases []backupModelAlias, modelIDs map[string]int64) error {
+func (h *BackupHandler) importModelAliases(
+	ctx context.Context,
+	tx *sql.Tx,
+	aliases []backupModelAlias,
+	modelIDs map[string]int64,
+	providerIDsByRef map[string]int64,
+	providerIDsByName map[string]int64,
+	duplicateProviderNames map[string]struct{},
+) error {
 	for _, alias := range aliases {
 		targetModelID, ok := modelIDs[alias.TargetModelName]
 		if !ok {
 			return fmt.Errorf("model_alias %s references unknown target model %s", alias.AliasName, alias.TargetModelName)
 		}
+
+		var providerID any
+		if ref := strings.TrimSpace(alias.ProviderRef); ref != "" {
+			pid, exists := providerIDsByRef[ref]
+			if !exists {
+				return fmt.Errorf("model_alias %s references unknown provider_ref %s", alias.AliasName, alias.ProviderRef)
+			}
+			providerID = pid
+		} else if strings.TrimSpace(alias.ProviderName) != "" {
+			pid, err := resolveProviderIDByName(alias.ProviderName, providerIDsByName, duplicateProviderNames)
+			if err != nil {
+				return fmt.Errorf("model_alias %s: %w", alias.AliasName, err)
+			}
+			providerID = pid
+		}
+
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO model_aliases (alias_name, target_model_id, enabled) VALUES (?, ?, ?)`,
-			alias.AliasName, targetModelID, boolInt(alias.Enabled)); err != nil {
+			`INSERT INTO model_aliases (alias_name, target_model_id, provider_id, enabled) VALUES (?, ?, ?, ?)`,
+			alias.AliasName, targetModelID, providerID, boolInt(alias.Enabled)); err != nil {
 			return fmt.Errorf("insert model_alias %s: %v", alias.AliasName, err)
 		}
 	}
 	return nil
+}
+
+func resolveProviderIDByName(
+	providerName string,
+	providerIDsByName map[string]int64,
+	duplicateProviderNames map[string]struct{},
+) (int64, error) {
+	name := strings.TrimSpace(providerName)
+	if name == "" {
+		return 0, fmt.Errorf("provider name is empty")
+	}
+	if _, duplicated := duplicateProviderNames[name]; duplicated {
+		return 0, fmt.Errorf("provider name %q is ambiguous, please use provider_ref backup data", name)
+	}
+	pid, ok := providerIDsByName[name]
+	if !ok {
+		return 0, fmt.Errorf("references unknown provider %s", name)
+	}
+	return pid, nil
+}
+
+func backupProviderRef(providerID int64) string {
+	return "provider:" + strconv.FormatInt(providerID, 10)
 }
 
 // safeColumnName matches safe SQL column identifiers (letters, digits, underscores).

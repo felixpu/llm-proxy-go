@@ -197,17 +197,10 @@ func tryEndpoint(ctx context.Context, baseURL, apiKey, modelName string, apiType
 	adapter := GetAdapter(apiType)
 	url := strings.TrimRight(baseURL, "/") + adapter.GetEndpoint()
 
-	// Build minimal test request
-	messages := []Message{{Role: "user", Content: "test"}}
-	options := RequestOptions{
-		Model:       detectionModelName(apiType, modelName),
-		MaxTokens:   1,
-		Temperature: 0.0,
-		Stream:      false,
-	}
-
-	bodyBytes, err := adapter.BuildRequestBody(messages, options)
-	if err != nil {
+	// Use an intentionally invalid payload to trigger fast validation errors
+	// (typically 400/422) and avoid slow/billable generation during detection.
+	bodyBytes := buildDetectionProbeBody(apiType, modelName)
+	if len(bodyBytes) == 0 {
 		return false
 	}
 
@@ -232,6 +225,9 @@ func tryEndpoint(ctx context.Context, baseURL, apiKey, modelName string, apiType
 	case 200, 401, 403:
 		// 200: Success, 401/403: Auth failed but endpoint exists
 		return true
+	case 422:
+		// Validation failed but endpoint exists
+		return true
 	case 404:
 		// Endpoint does not exist
 		return false
@@ -243,6 +239,17 @@ func tryEndpoint(ctx context.Context, baseURL, apiKey, modelName string, apiType
 		// For 5xx or other errors, assume endpoint is not supported
 		return false
 	}
+}
+
+func buildDetectionProbeBody(apiType APIType, modelName string) []byte {
+	payload := map[string]interface{}{
+		"model": detectionModelName(apiType, modelName),
+	}
+	bodyBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	return bodyBytes
 }
 
 func detectionModelName(apiType APIType, configuredModelName string) string {

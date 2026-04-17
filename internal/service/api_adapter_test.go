@@ -148,6 +148,54 @@ func TestDetectAPITypeForModel_FallsBackToOpenAIChat(t *testing.T) {
 	assert.Equal(t, "gpt-4o-mini", requestBody["model"])
 }
 
+func TestDetectAPITypeForModel_ValidationErrorMeansEndpointSupported(t *testing.T) {
+	InvalidateAPIDetectionCache()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/messages":
+			w.WriteHeader(http.StatusBadRequest)
+			_, err := w.Write([]byte(`{"error":{"message":"messages is required"}}`))
+			require.NoError(t, err)
+		case "/v1/responses", "/v1/chat/completions":
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	apiType, err := DetectAPITypeForModel(context.Background(), upstream.URL, "test-key", "claude-sonnet-4-6")
+	require.NoError(t, err)
+	assert.Equal(t, APITypeAnthropicMessages, apiType)
+}
+
+func TestDetectAPITypeForModel_Unsupported400FallsBackToOpenAI(t *testing.T) {
+	InvalidateAPIDetectionCache()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/messages":
+			w.WriteHeader(http.StatusBadRequest)
+			_, err := w.Write([]byte(`{"error":{"message":"Unsupported endpoint"}}`))
+			require.NoError(t, err)
+		case "/v1/responses":
+			http.NotFound(w, r)
+		case "/v1/chat/completions":
+			w.WriteHeader(http.StatusBadRequest)
+			_, err := w.Write([]byte(`{"error":{"message":"messages is required"}}`))
+			require.NoError(t, err)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	apiType, err := DetectAPITypeForModel(context.Background(), upstream.URL, "test-key", "zai-org/GLM-4.6")
+	require.NoError(t, err)
+	assert.Equal(t, APITypeOpenAIChat, apiType)
+}
+
 func TestDetectAPITypeForModel_UsesCache(t *testing.T) {
 	InvalidateAPIDetectionCache()
 

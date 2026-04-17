@@ -62,6 +62,7 @@ window.VuePages = window.VuePages || {};
       var modelAliasForm = reactive({
         alias_name: "",
         target_model_id: null,
+        provider_id: null,
         enabled: true,
       });
       var providerForm = reactive({
@@ -129,6 +130,12 @@ window.VuePages = window.VuePages || {};
 
       var aliasTargetModels = computed(function () {
         return models.value.slice().sort(function (a, b) {
+          return a.name.localeCompare(b.name);
+        });
+      });
+
+      var aliasProviderOptions = computed(function () {
+        return providers.value.slice().sort(function (a, b) {
           return a.name.localeCompare(b.name);
         });
       });
@@ -319,6 +326,7 @@ window.VuePages = window.VuePages || {};
         editingAlias.value = null;
         modelAliasForm.alias_name = "";
         modelAliasForm.target_model_id = null;
+        modelAliasForm.provider_id = null;
         modelAliasForm.enabled = true;
         showAliasModal.value = true;
       }
@@ -327,6 +335,8 @@ window.VuePages = window.VuePages || {};
         editingAlias.value = alias;
         modelAliasForm.alias_name = alias.alias_name;
         modelAliasForm.target_model_id = alias.target_model_id;
+        modelAliasForm.provider_id =
+          alias.provider_id != null ? alias.provider_id : null;
         modelAliasForm.enabled = !!alias.enabled;
         showAliasModal.value = true;
       }
@@ -337,6 +347,7 @@ window.VuePages = window.VuePages || {};
           var data = {
             alias_name: modelAliasForm.alias_name,
             target_model_id: modelAliasForm.target_model_id,
+            provider_id: modelAliasForm.provider_id,
             enabled: modelAliasForm.enabled,
           };
           var url = editingAlias.value
@@ -403,6 +414,16 @@ window.VuePages = window.VuePages || {};
           return m.id === modelId;
         });
         return model ? model.name : "模型 #" + modelId;
+      }
+
+      function getProviderNameById(providerId) {
+        if (providerId == null) {
+          return "全部服务商";
+        }
+        var provider = providers.value.find(function (p) {
+          return p.id === providerId;
+        });
+        return provider ? provider.name : "服务商 #" + providerId;
       }
 
       // ========== 服务商操作 ==========
@@ -707,11 +728,13 @@ window.VuePages = window.VuePages || {};
         enabledProviderCount: enabledProviderCount,
         enabledModelCount: enabledModelCount,
         aliasTargetModels: aliasTargetModels,
+        aliasProviderOptions: aliasProviderOptions,
         groupedDetectedModels: groupedDetectedModels,
         filteredModelCount: filteredModelCount,
         roleLabel: roleLabel,
         shortenModelName: shortenModelName,
         getModelNameById: getModelNameById,
+        getProviderNameById: getProviderNameById,
         switchTab: switchTab,
         showAddModelModal: showAddModelModal,
         showEditModelModal: showEditModelModal,
@@ -1030,6 +1053,7 @@ window.VuePages = window.VuePages || {};
                             <tr>\
                                 <th>客户端模型名</th>\
                                 <th>目标模型</th>\
+                                <th>服务商范围</th>\
                                 <th>状态</th>\
                                 <th>操作</th>\
                             </tr>\
@@ -1038,6 +1062,7 @@ window.VuePages = window.VuePages || {};
                             <tr v-for="alias in modelAliases" :key="alias.id">\
                                 <td><strong>{{ alias.alias_name }}</strong></td>\
                                 <td>{{ getModelNameById(alias.target_model_id) }}</td>\
+                                <td>{{ getProviderNameById(alias.provider_id) }}</td>\
                                 <td><label class="toggle-switch" @click.stop><input type="checkbox" :checked="alias.enabled" @change="toggleModelAliasEnabled(alias)"><span class="toggle-slider"></span></label></td>\
                                 <td>\
                                     <div class="dropdown">\
@@ -1067,6 +1092,7 @@ window.VuePages = window.VuePages || {};
                             <div>\
                                 <div class="model-mobile-name">{{ alias.alias_name }}</div>\
                                 <div class="text-muted">\\u2192 {{ getModelNameById(alias.target_model_id) }}</div>\
+                                <div class="text-muted">服务商: {{ getProviderNameById(alias.provider_id) }}</div>\
                                 <label class="toggle-switch" style="margin-left: 6px; vertical-align: middle;" @click.stop><input type="checkbox" :checked="alias.enabled" @change="toggleModelAliasEnabled(alias)"><span class="toggle-slider"></span></label>\
                             </div>\
                         </div>\
@@ -1173,6 +1199,13 @@ window.VuePages = window.VuePages || {};
                         <select v-model.number="modelAliasForm.target_model_id" required>\
                             <option :value="null" disabled>请选择目标模型</option>\
                             <option v-for="model in aliasTargetModels" :key="model.id" :value="model.id">{{ model.name }}</option>\
+                        </select>\
+                    </div>\
+                    <div class="form-group">\
+                        <label>服务商范围</label>\
+                        <select v-model="modelAliasForm.provider_id">\
+                            <option :value="null">全部服务商（默认）</option>\
+                            <option v-for="provider in aliasProviderOptions" :key="provider.id" :value="provider.id">{{ provider.name }}</option>\
                         </select>\
                     </div>\
                     <div class="form-group">\

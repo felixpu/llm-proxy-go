@@ -23,7 +23,7 @@ type ModelRepository interface {
 // ModelAliasRepository provides access to model alias data.
 type ModelAliasRepository interface {
 	FindByID(ctx context.Context, id int64) (*models.ModelAlias, error)
-	FindByAliasName(ctx context.Context, aliasName string) (*models.ModelAlias, error)
+	FindByAliasName(ctx context.Context, aliasName string) ([]*models.ModelAlias, error)
 	FindAll(ctx context.Context) ([]*models.ModelAlias, error)
 	Insert(ctx context.Context, alias *models.ModelAlias) (int64, error)
 	UpdatePatch(ctx context.Context, id int64, patch ModelAliasPatch) error

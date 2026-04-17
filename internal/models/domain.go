@@ -58,6 +58,7 @@ type ModelAlias struct {
 	ID            int64     `json:"id"`
 	AliasName     string    `json:"alias_name"`
 	TargetModelID int64     `json:"target_model_id"`
+	ProviderID    *int64    `json:"provider_id,omitempty"`
 	Enabled       bool      `json:"enabled"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
