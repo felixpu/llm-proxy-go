@@ -791,6 +791,16 @@ func TestContainsModelError(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "model_not_allowed type",
+			body:     []byte(`{"error":{"type":"model_not_allowed","message":"forbidden"}}`),
+			expected: true,
+		},
+		{
+			name:     "model not allowed message",
+			body:     []byte(`{"error":{"message":"Model is not allowed for this virtual key"}}`),
+			expected: true,
+		},
+		{
 			name:     "case insensitive - MODEL NOT FOUND",
 			body:     []byte(`{"error": "MODEL NOT FOUND"}`),
 			expected: true,

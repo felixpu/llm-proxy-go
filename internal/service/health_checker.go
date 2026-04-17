@@ -663,6 +663,10 @@ func containsModelError(body []byte) bool {
 		"invalid model",
 		"unsupported model",
 		"model is not available",
+		"model_not_allowed",
+		"not allowed for this virtual key",
+		"is not allowed for this key",
+		"insufficient permissions for model",
 	}
 
 	for _, keyword := range keywords {
@@ -707,8 +711,17 @@ func extractErrorField(body []byte) string {
 			Type    string `json:"type"`
 		} `json:"error"`
 	}
-	if err := json.Unmarshal(body, &structured); err == nil && structured.Error.Message != "" {
-		return strings.ToLower(structured.Error.Message)
+	if err := json.Unmarshal(body, &structured); err == nil {
+		msg := strings.TrimSpace(structured.Error.Message)
+		typ := strings.TrimSpace(structured.Error.Type)
+		switch {
+		case msg != "" && typ != "":
+			return strings.ToLower(msg + " " + typ)
+		case msg != "":
+			return strings.ToLower(msg)
+		case typ != "":
+			return strings.ToLower(typ)
+		}
 	}
 
 	// Fallback: try flat error string

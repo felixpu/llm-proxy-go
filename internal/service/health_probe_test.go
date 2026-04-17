@@ -66,7 +66,7 @@ func TestProbeEndpointStatus_FallbackToMessagesProbeWhenModelsUnsupported(t *tes
 			atomic.AddInt32(&messagesCalls, 1)
 			assert.Equal(t, http.MethodPost, r.Method)
 			body, _ := io.ReadAll(r.Body)
-			assert.Contains(t, string(body), healthProbeInvalidModel)
+			assert.Contains(t, string(body), `claude-sonnet-4-6`)
 			w.WriteHeader(http.StatusBadRequest) // validation error should be treated as healthy
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -150,7 +150,7 @@ func TestProbeEndpointStatus_OpenAIChatFallbackValidationErrorHealthy(t *testing
 			atomic.AddInt32(&chatCalls, 1)
 			assert.Equal(t, http.MethodPost, r.Method)
 			body, _ := io.ReadAll(r.Body)
-			assert.Contains(t, string(body), healthProbeInvalidModel)
+			assert.Contains(t, string(body), `gpt-4o-mini`)
 			w.WriteHeader(http.StatusBadRequest)
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -176,7 +176,7 @@ func TestProbeEndpointStatus_OpenAIChatFallbackValidationErrorHealthy(t *testing
 	assert.Equal(t, int32(1), atomic.LoadInt32(&chatCalls))
 }
 
-func TestProbeEndpointStatus_MessagesFallbackModelNotFound404Healthy(t *testing.T) {
+func TestProbeEndpointStatus_MessagesFallbackModelNotFound404Unhealthy(t *testing.T) {
 	var modelsCalls int32
 	var messagesCalls int32
 
@@ -209,8 +209,47 @@ func TestProbeEndpointStatus_MessagesFallbackModelNotFound404Healthy(t *testing.
 	}
 
 	status, errMsg := probeEndpointStatus(context.Background(), client, ep)
-	assert.Equal(t, models.EndpointHealthy, status)
-	assert.Empty(t, errMsg)
+	assert.Equal(t, models.EndpointUnhealthy, status)
+	assert.Contains(t, errMsg, "model unavailable")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&modelsCalls))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&messagesCalls))
+}
+
+func TestProbeEndpointStatus_MessagesFallbackModelNotAllowed403Unhealthy(t *testing.T) {
+	var modelsCalls int32
+	var messagesCalls int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			atomic.AddInt32(&modelsCalls, 1)
+			w.WriteHeader(http.StatusNotFound)
+		case "/v1/messages":
+			atomic.AddInt32(&messagesCalls, 1)
+			assert.Equal(t, http.MethodPost, r.Method)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"type":"model_not_allowed","message":"Model is not allowed for this virtual key"}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	ep := &models.Endpoint{
+		Provider: &models.Provider{
+			Name:    "p1",
+			BaseURL: server.URL,
+			APIKey:  "test-key",
+			APIType: string(APITypeAnthropicMessages),
+		},
+		Model: &models.Model{Name: "claude-sonnet-4-6"},
+	}
+
+	status, errMsg := probeEndpointStatus(context.Background(), client, ep)
+	assert.Equal(t, models.EndpointUnhealthy, status)
+	assert.Contains(t, errMsg, "model unavailable")
 	assert.Equal(t, int32(1), atomic.LoadInt32(&modelsCalls))
 	assert.Equal(t, int32(1), atomic.LoadInt32(&messagesCalls))
 }

@@ -12,17 +12,17 @@ import (
 )
 
 type healthProbeRequest struct {
-	method                 string
-	url                    string
-	body                   []byte
+	method                  string
+	url                     string
+	body                    []byte
 	treatValidationAsHealth bool
 }
 
 const healthProbeInvalidModel = "__llm_proxy_health_probe_invalid_model__"
 
 func probeEndpointStatus(ctx context.Context, client *http.Client, ep *models.Endpoint) (models.EndpointStatus, string) {
-	if ep == nil || ep.Provider == nil {
-		return models.EndpointUnhealthy, "endpoint provider is nil"
+	if ep == nil || ep.Provider == nil || ep.Model == nil {
+		return models.EndpointUnhealthy, "endpoint/provider/model is nil"
 	}
 
 	// Prefer probing /v1/models to validate API surface and auth with low cost.
@@ -37,7 +37,7 @@ func probeEndpointStatus(ctx context.Context, client *http.Client, ep *models.En
 	}
 
 	if statusCode == http.StatusNotFound || statusCode == http.StatusMethodNotAllowed {
-		for _, fallback := range buildFallbackProbes(ep.Provider) {
+		for _, fallback := range buildFallbackProbes(ep.Provider, ep.Model.Name) {
 			statusCode, bodySnippet, err = executeHealthProbe(ctx, client, ep, fallback)
 			if err != nil {
 				return models.EndpointUnhealthy, err.Error()
@@ -50,7 +50,11 @@ func probeEndpointStatus(ctx context.Context, client *http.Client, ep *models.En
 
 			// Try the next fallback probe only when endpoint path/method is unsupported.
 			// For auth/rate-limit/5xx and other errors, return immediately.
+			// If body indicates a model error, stop fallback chaining and return immediately.
 			if statusCode != http.StatusNotFound && statusCode != http.StatusMethodNotAllowed {
+				return status, errMsg
+			}
+			if containsModelError([]byte(bodySnippet)) {
 				return status, errMsg
 			}
 		}
@@ -59,53 +63,59 @@ func probeEndpointStatus(ctx context.Context, client *http.Client, ep *models.En
 	return classifyProbeStatus(statusCode, bodySnippet, false)
 }
 
-func buildFallbackProbes(provider *models.Provider) []healthProbeRequest {
+func buildFallbackProbes(provider *models.Provider, modelName string) []healthProbeRequest {
 	baseURL := normalizeBaseURL(provider.BaseURL)
-	messagesProbeBody := []byte(`{"model":"` + healthProbeInvalidModel + `","max_tokens":1,"messages":[{"role":"user","content":"health-check"}]}`)
-	responsesProbeBody := []byte(`{"model":"` + healthProbeInvalidModel + `","max_tokens":1,"input":"health-check"}`)
-	openAIChatProbeBody := []byte(`{"model":"` + healthProbeInvalidModel + `","max_tokens":1,"messages":[{"role":"user","content":"health-check"}]}`)
+	probeModel := strings.TrimSpace(modelName)
+	if probeModel == "" {
+		probeModel = healthProbeInvalidModel
+	}
+	// Use deliberately invalid payloads to force validation errors (400/422)
+	// and avoid generating billable tokens during health checks.
+	messagesProbeBody := []byte(`{"model":"` + probeModel + `","max_tokens":0,"messages":[]}`)
+	responsesProbeBody := []byte(`{"model":"` + probeModel + `","max_output_tokens":0,"input":[]}`)
+	openAIChatProbeBody := []byte(`{"model":"` + probeModel + `","max_tokens":0,"messages":[]}`)
 
 	switch strings.TrimSpace(provider.APIType) {
 	case string(APITypeAnthropicMessages), "":
 		return []healthProbeRequest{{
-			method:                 http.MethodPost,
-			url:                    baseURL + "/v1/messages",
-			body:                   messagesProbeBody,
+			method:                  http.MethodPost,
+			url:                     baseURL + "/v1/messages",
+			body:                    messagesProbeBody,
 			treatValidationAsHealth: true,
 		}}
 	case string(APITypeAnthropicResponses):
 		return []healthProbeRequest{{
-			method:                 http.MethodPost,
-			url:                    baseURL + "/v1/responses",
-			body:                   responsesProbeBody,
+			method:                  http.MethodPost,
+			url:                     baseURL + "/v1/responses",
+			body:                    responsesProbeBody,
 			treatValidationAsHealth: true,
 		}}
 	case string(APITypeOpenAIChat):
 		return []healthProbeRequest{{
-			method:                 http.MethodPost,
-			url:                    baseURL + "/v1/chat/completions",
-			body:                   openAIChatProbeBody,
+			method:                  http.MethodPost,
+			url:                     baseURL + "/v1/chat/completions",
+			body:                    openAIChatProbeBody,
 			treatValidationAsHealth: true,
 		}}
 	default:
 		// Unknown/auto fallback: try all known endpoints in conservative order.
 		return []healthProbeRequest{
 			{
-				method:                 http.MethodPost,
-				url:                    baseURL + "/v1/messages",
-				body:                   messagesProbeBody,
+				method:                  http.MethodPost,
+				url:                     baseURL + "/v1/messages",
+				body:                    messagesProbeBody,
 				treatValidationAsHealth: true,
 			},
 			{
-				method:                 http.MethodPost,
-				url:                    baseURL + "/v1/responses",
-				body:                   responsesProbeBody,
+				method:                  http.MethodPost,
+				url:                     baseURL + "/v1/responses",
+				body:                    responsesProbeBody,
 				treatValidationAsHealth: true,
 			},
 			{
-				method:                 http.MethodPost,
-				url:                    baseURL + "/v1/chat/completions",
-				body:                   openAIChatProbeBody,
+				method:                  http.MethodPost,
+				url:                     baseURL + "/v1/chat/completions",
+				body:                    openAIChatProbeBody,
 				treatValidationAsHealth: true,
 			},
 		}
@@ -154,9 +164,14 @@ func classifyProbeStatus(statusCode int, bodySnippet string, treatValidationAsHe
 	case statusCode >= http.StatusOK && statusCode < http.StatusBadRequest:
 		return models.EndpointHealthy, ""
 	case treatValidationAsHealth && (statusCode == http.StatusBadRequest || statusCode == http.StatusUnprocessableEntity):
+		if containsModelError([]byte(bodySnippet)) {
+			return models.EndpointUnhealthy, formatErr(fmt.Sprintf("health probe model unavailable (status %d)", statusCode))
+		}
 		return models.EndpointHealthy, ""
-	case treatValidationAsHealth && statusCode == http.StatusNotFound && containsModelError([]byte(bodySnippet)):
-		return models.EndpointHealthy, ""
+	case statusCode == http.StatusForbidden && containsModelError([]byte(bodySnippet)):
+		return models.EndpointUnhealthy, formatErr("health probe model unavailable (status 403)")
+	case statusCode == http.StatusNotFound && containsModelError([]byte(bodySnippet)):
+		return models.EndpointUnhealthy, formatErr("health probe model unavailable (status 404)")
 	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
 		return models.EndpointUnhealthy, formatErr(fmt.Sprintf("health probe auth failed (status %d)", statusCode))
 	case statusCode == http.StatusNotFound:
