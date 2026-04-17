@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -52,18 +53,21 @@ func TestProbeEndpointStatus_UsesModelsProbeWithAuthHeaders(t *testing.T) {
 	assert.Equal(t, "gw-header", gotCustom)
 }
 
-func TestProbeEndpointStatus_FallbackToBaseURLWhenModelsUnsupported(t *testing.T) {
+func TestProbeEndpointStatus_FallbackToMessagesProbeWhenModelsUnsupported(t *testing.T) {
 	var modelsCalls int32
-	var baseCalls int32
+	var messagesCalls int32
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/models":
 			atomic.AddInt32(&modelsCalls, 1)
 			w.WriteHeader(http.StatusNotFound)
-		case "/v1":
-			atomic.AddInt32(&baseCalls, 1)
-			w.WriteHeader(http.StatusOK)
+		case "/v1/messages":
+			atomic.AddInt32(&messagesCalls, 1)
+			assert.Equal(t, http.MethodPost, r.Method)
+			body, _ := io.ReadAll(r.Body)
+			assert.Contains(t, string(body), healthProbeInvalidModel)
+			w.WriteHeader(http.StatusBadRequest) // validation error should be treated as healthy
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -84,7 +88,7 @@ func TestProbeEndpointStatus_FallbackToBaseURLWhenModelsUnsupported(t *testing.T
 	assert.Equal(t, models.EndpointHealthy, status)
 	assert.Empty(t, errMsg)
 	assert.Equal(t, int32(1), atomic.LoadInt32(&modelsCalls))
-	assert.Equal(t, int32(1), atomic.LoadInt32(&baseCalls))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&messagesCalls))
 }
 
 func TestProbeEndpointStatus_401IsUnhealthy(t *testing.T) {
@@ -131,6 +135,84 @@ func TestProbeEndpointStatus_404AfterFallbackIsUnhealthy(t *testing.T) {
 	status, errMsg := probeEndpointStatus(context.Background(), client, ep)
 	assert.Equal(t, models.EndpointUnhealthy, status)
 	assert.Contains(t, errMsg, "endpoint not found")
+}
+
+func TestProbeEndpointStatus_OpenAIChatFallbackValidationErrorHealthy(t *testing.T) {
+	var modelsCalls int32
+	var chatCalls int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			atomic.AddInt32(&modelsCalls, 1)
+			w.WriteHeader(http.StatusNotFound)
+		case "/v1/chat/completions":
+			atomic.AddInt32(&chatCalls, 1)
+			assert.Equal(t, http.MethodPost, r.Method)
+			body, _ := io.ReadAll(r.Body)
+			assert.Contains(t, string(body), healthProbeInvalidModel)
+			w.WriteHeader(http.StatusBadRequest)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	ep := &models.Endpoint{
+		Provider: &models.Provider{
+			Name:    "p1",
+			BaseURL: server.URL,
+			APIKey:  "test-key",
+			APIType: string(APITypeOpenAIChat),
+		},
+		Model: &models.Model{Name: "gpt-4o-mini"},
+	}
+
+	status, errMsg := probeEndpointStatus(context.Background(), client, ep)
+	assert.Equal(t, models.EndpointHealthy, status)
+	assert.Empty(t, errMsg)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&modelsCalls))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&chatCalls))
+}
+
+func TestProbeEndpointStatus_MessagesFallbackModelNotFound404Healthy(t *testing.T) {
+	var modelsCalls int32
+	var messagesCalls int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/models":
+			atomic.AddInt32(&modelsCalls, 1)
+			w.WriteHeader(http.StatusNotFound)
+		case "/v1/messages":
+			atomic.AddInt32(&messagesCalls, 1)
+			assert.Equal(t, http.MethodPost, r.Method)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"message":"model not found"}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	ep := &models.Endpoint{
+		Provider: &models.Provider{
+			Name:    "p1",
+			BaseURL: server.URL,
+			APIKey:  "test-key",
+			APIType: string(APITypeAnthropicMessages),
+		},
+		Model: &models.Model{Name: "claude-opus-4-6"},
+	}
+
+	status, errMsg := probeEndpointStatus(context.Background(), client, ep)
+	assert.Equal(t, models.EndpointHealthy, status)
+	assert.Empty(t, errMsg)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&modelsCalls))
+	assert.Equal(t, int32(1), atomic.LoadInt32(&messagesCalls))
 }
 
 func TestProbeEndpointStatus_5xxIsUnhealthy(t *testing.T) {
